@@ -1,0 +1,29 @@
+module web.jwt.model
+
+export {
+	SignOptions,
+	JwtVerifyPolicy,
+	JwtVerifyPolicyBuilder,
+	VerifiedJwt
+};
+
+pub struct SignOptions {
+	pub enforce_typ_jwt: Bool
+}
+
+pub struct JwtVerifyPolicy {
+	pub skew_sec: Int,
+	pub max_future_iat_sec: Int,
+	pub require_typ_jwt: Bool
+}
+
+pub struct JwtVerifyPolicyBuilder {
+	pub skew_sec: Int,
+	pub max_future_iat_sec: Int,
+	pub require_typ_jwt: Bool
+}
+
+pub struct VerifiedJwt {
+	pub header_json: String,
+	pub payload_json: String
+}

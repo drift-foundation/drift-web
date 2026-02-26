@@ -1,0 +1,70 @@
+module web.jwt.errors
+
+import std.core as core;
+
+export {
+	JwtConfigError,
+	JwtError,
+	TAG_CONFIG_INVALID,
+	TAG_CONFIG_MISSING_REQUIRED,
+	TAG_INVALID_FORMAT,
+	TAG_INVALID_SEGMENT,
+	TAG_INVALID_HEADER_JSON,
+	TAG_INVALID_PAYLOAD_JSON,
+	TAG_UNSUPPORTED_ALG,
+	TAG_MISSING_ALG,
+	TAG_SIGNATURE_MISMATCH,
+	TAG_CLAIM_INVALID_TYPE,
+	TAG_EXPIRED,
+	TAG_NOT_BEFORE,
+	TAG_ISSUED_AT_FUTURE,
+	TAG_HEADER_TYP_MISMATCH,
+	jwt_error,
+	jwt_config_error
+};
+
+pub struct JwtConfigError {
+	pub tag: String,
+	pub field: String,
+	pub message: String
+}
+
+pub struct JwtError {
+	pub tag: String,
+	pub message: String
+}
+
+implement core.Diagnostic for JwtConfigError {
+	pub fn to_diag(self: &JwtConfigError) nothrow -> DiagnosticValue {
+		return DiagnosticValue::String(self.tag + ":" + self.field);
+	}
+}
+
+implement core.Diagnostic for JwtError {
+	pub fn to_diag(self: &JwtError) nothrow -> DiagnosticValue {
+		return DiagnosticValue::String(self.tag);
+	}
+}
+
+pub const TAG_CONFIG_INVALID: String = "jwt-config-invalid";
+pub const TAG_CONFIG_MISSING_REQUIRED: String = "jwt-config-missing-required";
+pub const TAG_INVALID_FORMAT: String = "jwt-invalid-format";
+pub const TAG_INVALID_SEGMENT: String = "jwt-invalid-segment";
+pub const TAG_INVALID_HEADER_JSON: String = "jwt-invalid-header-json";
+pub const TAG_INVALID_PAYLOAD_JSON: String = "jwt-invalid-payload-json";
+pub const TAG_UNSUPPORTED_ALG: String = "jwt-unsupported-alg";
+pub const TAG_MISSING_ALG: String = "jwt-missing-alg";
+pub const TAG_SIGNATURE_MISMATCH: String = "jwt-signature-mismatch";
+pub const TAG_CLAIM_INVALID_TYPE: String = "jwt-claim-invalid-type";
+pub const TAG_EXPIRED: String = "jwt-expired";
+pub const TAG_NOT_BEFORE: String = "jwt-not-before";
+pub const TAG_ISSUED_AT_FUTURE: String = "jwt-issued-at-future";
+pub const TAG_HEADER_TYP_MISMATCH: String = "jwt-header-typ-mismatch";
+
+pub fn jwt_error(tag: String, message: String) nothrow -> JwtError {
+	return JwtError(tag = tag, message = message);
+}
+
+pub fn jwt_config_error(tag: String, field: String, message: String) nothrow -> JwtConfigError {
+	return JwtConfigError(tag = tag, field = field, message = message);
+}

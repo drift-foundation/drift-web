@@ -1,0 +1,28 @@
+module web.jwt.tests.unit.error_tags_test
+
+import std.core as core;
+import web.jwt as jwt;
+
+fn expect_tag_constants() nothrow -> Int {
+	if jwt.TAG_CONFIG_INVALID != "jwt-config-invalid" { return 1; }
+	if jwt.TAG_CONFIG_MISSING_REQUIRED != "jwt-config-missing-required" { return 2; }
+	if jwt.TAG_INVALID_FORMAT != "jwt-invalid-format" { return 3; }
+	if jwt.TAG_INVALID_SEGMENT != "jwt-invalid-segment" { return 4; }
+	if jwt.TAG_INVALID_HEADER_JSON != "jwt-invalid-header-json" { return 5; }
+	if jwt.TAG_INVALID_PAYLOAD_JSON != "jwt-invalid-payload-json" { return 6; }
+	if jwt.TAG_UNSUPPORTED_ALG != "jwt-unsupported-alg" { return 7; }
+	if jwt.TAG_MISSING_ALG != "jwt-missing-alg" { return 8; }
+	if jwt.TAG_SIGNATURE_MISMATCH != "jwt-signature-mismatch" { return 9; }
+	if jwt.TAG_CLAIM_INVALID_TYPE != "jwt-claim-invalid-type" { return 10; }
+	if jwt.TAG_EXPIRED != "jwt-expired" { return 11; }
+	if jwt.TAG_NOT_BEFORE != "jwt-not-before" { return 12; }
+	if jwt.TAG_ISSUED_AT_FUTURE != "jwt-issued-at-future" { return 13; }
+	if jwt.TAG_HEADER_TYP_MISMATCH != "jwt-header-typ-mismatch" { return 14; }
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	val a = expect_tag_constants();
+	if a != 0 { return a; }
+	return 0;
+}

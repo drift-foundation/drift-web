@@ -1,0 +1,79 @@
+module web.jwt.tests.unit.policy_validation_test
+
+import std.core as core;
+import web.jwt as jwt;
+
+fn scenario_valid_default_policy() nothrow -> Int {
+	var pb = jwt.new_verify_policy_builder();
+	match jwt.build_verify_policy(move pb) {
+		core.Result::Ok(v) => {
+			if v.skew_sec != 0 { return 101; }
+			if v.max_future_iat_sec != 0 { return 102; }
+			if not v.require_typ_jwt { return 103; }
+			return 0;
+		},
+		core.Result::Err(_) => { return 104; }
+	}
+}
+
+fn scenario_valid_custom_policy() nothrow -> Int {
+	var pb = jwt.new_verify_policy_builder();
+	pb.skew_sec = 30;
+	pb.max_future_iat_sec = 300;
+	pb.require_typ_jwt = false;
+	match jwt.build_verify_policy(move pb) {
+		core.Result::Ok(v) => {
+			if v.skew_sec != 30 { return 201; }
+			if v.max_future_iat_sec != 300 { return 202; }
+			if v.require_typ_jwt { return 203; }
+			return 0;
+		},
+		core.Result::Err(_) => { return 204; }
+	}
+}
+
+fn scenario_negative_skew_rejected() nothrow -> Int {
+	var pb = jwt.new_verify_policy_builder();
+	pb.skew_sec = -1;
+	match jwt.build_verify_policy(move pb) {
+		core.Result::Ok(_) => { return 301; },
+		core.Result::Err(e) => {
+			if e.tag != "jwt-config-invalid" { return 302; }
+			if e.field != "skew_sec" { return 303; }
+			return 0;
+		}
+	}
+}
+
+fn scenario_negative_max_future_iat_rejected() nothrow -> Int {
+	var pb = jwt.new_verify_policy_builder();
+	pb.max_future_iat_sec = -10;
+	match jwt.build_verify_policy(move pb) {
+		core.Result::Ok(_) => { return 401; },
+		core.Result::Err(e) => {
+			if e.tag != "jwt-config-invalid" { return 402; }
+			if e.field != "max_future_iat_sec" { return 403; }
+			return 0;
+		}
+	}
+}
+
+fn scenario_sign_options_defaults() nothrow -> Int {
+	val opts = jwt.new_sign_options();
+	if not opts.enforce_typ_jwt { return 501; }
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	val a = scenario_valid_default_policy();
+	if a != 0 { return a; }
+	val b = scenario_valid_custom_policy();
+	if b != 0 { return b; }
+	val c = scenario_negative_skew_rejected();
+	if c != 0 { return c; }
+	val d = scenario_negative_max_future_iat_rejected();
+	if d != 0 { return d; }
+	val e = scenario_sign_options_defaults();
+	if e != 0 { return e; }
+	return 0;
+}

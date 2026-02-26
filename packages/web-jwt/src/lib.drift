@@ -1,0 +1,83 @@
+module web.jwt
+
+import std.core as core;
+import web.jwt.errors as errors;
+import web.jwt.model as model;
+import web.jwt.signing as signing;
+import web.jwt.verify as verify;
+
+export {
+	SignOptions,
+	JwtVerifyPolicy,
+	JwtVerifyPolicyBuilder,
+	JwtConfigError,
+	JwtError,
+	VerifiedJwt,
+	new_sign_options,
+	new_verify_policy_builder,
+	build_verify_policy,
+	sign_hs256,
+	verify_hs256,
+	TAG_CONFIG_INVALID,
+	TAG_CONFIG_MISSING_REQUIRED,
+	TAG_INVALID_FORMAT,
+	TAG_INVALID_SEGMENT,
+	TAG_INVALID_HEADER_JSON,
+	TAG_INVALID_PAYLOAD_JSON,
+	TAG_UNSUPPORTED_ALG,
+	TAG_MISSING_ALG,
+	TAG_SIGNATURE_MISMATCH,
+	TAG_CLAIM_INVALID_TYPE,
+	TAG_EXPIRED,
+	TAG_NOT_BEFORE,
+	TAG_ISSUED_AT_FUTURE,
+	TAG_HEADER_TYP_MISMATCH
+};
+
+pub type SignOptions = model.SignOptions;
+pub type JwtVerifyPolicy = model.JwtVerifyPolicy;
+pub type JwtVerifyPolicyBuilder = model.JwtVerifyPolicyBuilder;
+pub type JwtConfigError = errors.JwtConfigError;
+pub type JwtError = errors.JwtError;
+pub type VerifiedJwt = model.VerifiedJwt;
+
+pub const TAG_CONFIG_INVALID: String = errors.TAG_CONFIG_INVALID;
+pub const TAG_CONFIG_MISSING_REQUIRED: String = errors.TAG_CONFIG_MISSING_REQUIRED;
+pub const TAG_INVALID_FORMAT: String = errors.TAG_INVALID_FORMAT;
+pub const TAG_INVALID_SEGMENT: String = errors.TAG_INVALID_SEGMENT;
+pub const TAG_INVALID_HEADER_JSON: String = errors.TAG_INVALID_HEADER_JSON;
+pub const TAG_INVALID_PAYLOAD_JSON: String = errors.TAG_INVALID_PAYLOAD_JSON;
+pub const TAG_UNSUPPORTED_ALG: String = errors.TAG_UNSUPPORTED_ALG;
+pub const TAG_MISSING_ALG: String = errors.TAG_MISSING_ALG;
+pub const TAG_SIGNATURE_MISMATCH: String = errors.TAG_SIGNATURE_MISMATCH;
+pub const TAG_CLAIM_INVALID_TYPE: String = errors.TAG_CLAIM_INVALID_TYPE;
+pub const TAG_EXPIRED: String = errors.TAG_EXPIRED;
+pub const TAG_NOT_BEFORE: String = errors.TAG_NOT_BEFORE;
+pub const TAG_ISSUED_AT_FUTURE: String = errors.TAG_ISSUED_AT_FUTURE;
+pub const TAG_HEADER_TYP_MISMATCH: String = errors.TAG_HEADER_TYP_MISMATCH;
+
+pub fn new_sign_options() nothrow -> SignOptions {
+	return model.SignOptions(enforce_typ_jwt = true);
+}
+
+pub fn new_verify_policy_builder() nothrow -> JwtVerifyPolicyBuilder {
+	return model.JwtVerifyPolicyBuilder(skew_sec = 0, max_future_iat_sec = 0, require_typ_jwt = true);
+}
+
+pub fn build_verify_policy(builder: JwtVerifyPolicyBuilder) nothrow -> core.Result<JwtVerifyPolicy, JwtConfigError> {
+	if builder.skew_sec < 0 {
+		return core.Result::Err(errors.jwt_config_error(errors.TAG_CONFIG_INVALID, "skew_sec", "skew_sec must be >= 0"));
+	}
+	if builder.max_future_iat_sec < 0 {
+		return core.Result::Err(errors.jwt_config_error(errors.TAG_CONFIG_INVALID, "max_future_iat_sec", "max_future_iat_sec must be >= 0"));
+	}
+	return core.Result::Ok(model.JwtVerifyPolicy(skew_sec = builder.skew_sec, max_future_iat_sec = builder.max_future_iat_sec, require_typ_jwt = builder.require_typ_jwt));
+}
+
+pub fn sign_hs256(header_json: &String, payload_json: &String, secret: &Array<Byte>, opts: &SignOptions) nothrow -> core.Result<String, JwtError> {
+	return signing.sign_hs256_impl(header_json, payload_json, secret, opts);
+}
+
+pub fn verify_hs256(token: &String, secret: &Array<Byte>, now_unix: Int, policy: &JwtVerifyPolicy) nothrow -> core.Result<VerifiedJwt, JwtError> {
+	return verify.verify_hs256_impl(token, secret, now_unix, policy);
+}

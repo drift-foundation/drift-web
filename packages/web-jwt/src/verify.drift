@@ -1,0 +1,169 @@
+module web.jwt.verify
+
+import std.core as core;
+import std.io as io;
+import std.codec as codec;
+import std.crypto as crypto;
+import std.json as json;
+import web.jwt.errors as errors;
+import web.jwt.model as model;
+import web.jwt.claims as claims;
+
+export {
+	verify_hs256_impl
+};
+
+fn _dup_string(s: &String) nothrow -> String {
+	val n = s.byte_length();
+	var b = io.buffer(n);
+	var i = 0;
+	while i < n {
+		io.buffer_write(&mut b, i, core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&b), n);
+}
+
+fn _string_bytes(s: &String) nothrow -> Array<Byte> {
+	var out: Array<Byte> = [];
+	var i = 0;
+	val n = s.byte_length();
+	while i < n {
+		out.push(core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return move out;
+}
+
+fn _bytes_to_string(bytes: &Array<Byte>) nothrow -> String {
+	val n = bytes.len;
+	var b = io.buffer(n);
+	var i = 0;
+	while i < n {
+		io.buffer_write(&mut b, i, bytes[i]);
+		i = i + 1;
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&b), n);
+}
+
+fn _substring(s: &String, start: Int, end: Int) nothrow -> String {
+	val n = end - start;
+	var b = io.buffer(n);
+	var i = 0;
+	while i < n {
+		io.buffer_write(&mut b, i, core.string_byte_at(s, start + i));
+		i = i + 1;
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&b), n);
+}
+
+// Split token into exactly 3 segments by '.'. Returns error if not exactly 3 segments.
+fn _split_token(token: &String) nothrow -> core.Result<Array<String>, errors.JwtError> {
+	val n = token.byte_length();
+	var segments: Array<String> = [];
+	var seg_start = 0;
+	var i = 0;
+	while i < n {
+		if core.string_byte_at(token, i) == cast<Byte>(46) {
+			segments.push(_substring(token, seg_start, i));
+			seg_start = i + 1;
+		}
+		i = i + 1;
+	}
+	segments.push(_substring(token, seg_start, n));
+	if segments.len != 3 {
+		return core.Result::Err(errors.jwt_error(errors.TAG_INVALID_FORMAT, "token must have exactly 3 segments"));
+	}
+	return core.Result::Ok(move segments);
+}
+
+fn _validate_header(header_node: &json.JsonNode, policy: &model.JwtVerifyPolicy) nothrow -> core.Result<Void, errors.JwtError> {
+	val alg_key = "alg";
+	match header_node.get(&alg_key) {
+		Optional::None => { return core.Result::Err(errors.jwt_error(errors.TAG_MISSING_ALG, "header missing alg field")); },
+		Optional::Some(alg_node) => {
+			match alg_node.as_string() {
+				Optional::None => { return core.Result::Err(errors.jwt_error(errors.TAG_UNSUPPORTED_ALG, "alg is not a string")); },
+				Optional::Some(alg_str) => {
+					if alg_str != "HS256" {
+						return core.Result::Err(errors.jwt_error(errors.TAG_UNSUPPORTED_ALG, "unsupported alg: " + _dup_string(&alg_str)));
+					}
+				}
+			}
+		}
+	}
+	if policy.require_typ_jwt {
+		val typ_key = "typ";
+		match header_node.get(&typ_key) {
+			Optional::None => {},
+			Optional::Some(typ_node) => {
+				match typ_node.as_string() {
+					Optional::None => { return core.Result::Err(errors.jwt_error(errors.TAG_HEADER_TYP_MISMATCH, "typ is not a string")); },
+					Optional::Some(typ_str) => {
+						if typ_str != "JWT" {
+							return core.Result::Err(errors.jwt_error(errors.TAG_HEADER_TYP_MISMATCH, "typ must be JWT"));
+						}
+					}
+				}
+			}
+		}
+	}
+	return core.Result::Ok(core.void_value());
+}
+
+pub fn verify_hs256_impl(token: &String, secret: &Array<Byte>, now_unix: Int, policy: &model.JwtVerifyPolicy) nothrow -> core.Result<model.VerifiedJwt, errors.JwtError> {
+	// 1. Split into exactly 3 segments.
+	var segments: Array<String> = [];
+	match _split_token(token) {
+		core.Result::Ok(v) => { segments = move v; },
+		core.Result::Err(e) => { return core.Result::Err(e); }
+	}
+	// 2. Strict base64url decode each segment.
+	var header_bytes: Array<Byte> = [];
+	match codec.base64url_decode(&segments[0]) {
+		core.Result::Ok(v) => { header_bytes = move v; },
+		core.Result::Err(_) => { return core.Result::Err(errors.jwt_error(errors.TAG_INVALID_SEGMENT, "header segment base64url decode failed")); }
+	}
+	var payload_bytes: Array<Byte> = [];
+	match codec.base64url_decode(&segments[1]) {
+		core.Result::Ok(v) => { payload_bytes = move v; },
+		core.Result::Err(_) => { return core.Result::Err(errors.jwt_error(errors.TAG_INVALID_SEGMENT, "payload segment base64url decode failed")); }
+	}
+	var signature_bytes: Array<Byte> = [];
+	match codec.base64url_decode(&segments[2]) {
+		core.Result::Ok(v) => { signature_bytes = move v; },
+		core.Result::Err(_) => { return core.Result::Err(errors.jwt_error(errors.TAG_INVALID_SEGMENT, "signature segment base64url decode failed")); }
+	}
+	// 3. Parse header JSON and validate alg.
+	val header_json = _bytes_to_string(&header_bytes);
+	var header_node = json.JsonNode::Null();
+	match json.parse(&header_json) {
+		core.Result::Ok(v) => { header_node = move v; },
+		core.Result::Err(_) => { return core.Result::Err(errors.jwt_error(errors.TAG_INVALID_HEADER_JSON, "header is not valid JSON")); }
+	}
+	match _validate_header(&header_node, policy) {
+		core.Result::Ok(_) => {},
+		core.Result::Err(e) => { return core.Result::Err(e); }
+	}
+	// 4. Recompute signature over original signing input (segment0 + "." + segment1).
+	val signing_input = _dup_string(&segments[0]) + "." + _dup_string(&segments[1]);
+	val signing_input_bytes = _string_bytes(&signing_input);
+	val expected_signature = crypto.hmac_sha256(secret, &signing_input_bytes);
+	// 5. Constant-time signature comparison.
+	if not crypto.constant_time_eq(&expected_signature, &signature_bytes) {
+		return core.Result::Err(errors.jwt_error(errors.TAG_SIGNATURE_MISMATCH, "signature verification failed"));
+	}
+	// 6. Parse payload JSON and validate temporal claims.
+	val payload_json = _bytes_to_string(&payload_bytes);
+	var payload_node = json.JsonNode::Null();
+	match json.parse(&payload_json) {
+		core.Result::Ok(v) => { payload_node = move v; },
+		core.Result::Err(_) => { return core.Result::Err(errors.jwt_error(errors.TAG_INVALID_PAYLOAD_JSON, "payload is not valid JSON")); }
+	}
+	match claims.validate_temporal_claims(&payload_node, now_unix, policy) {
+		core.Result::Ok(_) => {},
+		core.Result::Err(e) => { return core.Result::Err(e); }
+	}
+	// 7. Return verified JWT with decoded JSON strings.
+	return core.Result::Ok(model.VerifiedJwt(header_json = header_json, payload_json = payload_json));
+}

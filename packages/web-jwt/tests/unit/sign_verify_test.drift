@@ -1,0 +1,291 @@
+module web.jwt.tests.unit.sign_verify_test
+
+import std.core as core;
+import std.io as io;
+import web.jwt as jwt;
+
+fn _test_secret() nothrow -> Array<Byte> {
+	var s: Array<Byte> = [];
+	s.push(cast<Byte>(115)); // s
+	s.push(cast<Byte>(51));  // 3
+	s.push(cast<Byte>(99));  // c
+	s.push(cast<Byte>(114)); // r
+	s.push(cast<Byte>(51));  // 3
+	s.push(cast<Byte>(116)); // t
+	return move s;
+}
+
+fn _wrong_secret() nothrow -> Array<Byte> {
+	var s: Array<Byte> = [];
+	s.push(cast<Byte>(119)); // w
+	s.push(cast<Byte>(114)); // r
+	s.push(cast<Byte>(111)); // o
+	s.push(cast<Byte>(110)); // n
+	s.push(cast<Byte>(103)); // g
+	return move s;
+}
+
+fn _default_policy() nothrow -> jwt.JwtVerifyPolicy {
+	var pb = jwt.new_verify_policy_builder();
+	pb.skew_sec = 0;
+	pb.max_future_iat_sec = 300;
+	match jwt.build_verify_policy(move pb) {
+		core.Result::Ok(v) => { return v; },
+		core.Result::Err(_) => {
+			return jwt.JwtVerifyPolicy(skew_sec = 0, max_future_iat_sec = 300, require_typ_jwt = true);
+		}
+	}
+}
+
+fn _bytes_to_string(bytes: &Array<Byte>) nothrow -> String {
+	val n = bytes.len;
+	var b = io.buffer(n);
+	var i = 0;
+	while i < n {
+		io.buffer_write(&mut b, i, bytes[i]);
+		i = i + 1;
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&b), n);
+}
+
+fn scenario_sign_verify_happy_path() nothrow -> Int {
+	val header = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}";
+	val payload = "{\"sub\":\"u123\",\"iat\":1700000000,\"exp\":1700003600}";
+	var secret = _test_secret();
+	var opts = jwt.new_sign_options();
+	var token = "";
+	match jwt.sign_hs256(&header, &payload, &secret, &opts) {
+		core.Result::Ok(v) => { token = move v; },
+		core.Result::Err(_) => { return 101; }
+	}
+	if token.byte_length() <= 0 { return 102; }
+	val policy = _default_policy();
+	val now_unix = 1700001000;
+	match jwt.verify_hs256(&token, &secret, now_unix, &policy) {
+		core.Result::Ok(v) => {
+			if v.header_json != header { return 103; }
+			if v.payload_json != payload { return 104; }
+			return 0;
+		},
+		core.Result::Err(_) => { return 105; }
+	}
+}
+
+fn scenario_wrong_secret_rejected() nothrow -> Int {
+	val header = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}";
+	val payload = "{\"sub\":\"u123\",\"iat\":1700000000,\"exp\":1700003600}";
+	var secret = _test_secret();
+	var opts = jwt.new_sign_options();
+	var token = "";
+	match jwt.sign_hs256(&header, &payload, &secret, &opts) {
+		core.Result::Ok(v) => { token = move v; },
+		core.Result::Err(_) => { return 201; }
+	}
+	var wrong = _wrong_secret();
+	val policy = _default_policy();
+	val now_unix = 1700001000;
+	match jwt.verify_hs256(&token, &wrong, now_unix, &policy) {
+		core.Result::Ok(_) => { return 202; },
+		core.Result::Err(e) => {
+			if e.tag != "jwt-signature-mismatch" { return 203; }
+			return 0;
+		}
+	}
+}
+
+fn scenario_tampered_payload_rejected() nothrow -> Int {
+	val header = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}";
+	val payload = "{\"sub\":\"u123\",\"iat\":1700000000,\"exp\":1700003600}";
+	var secret = _test_secret();
+	var opts = jwt.new_sign_options();
+	var token = "";
+	match jwt.sign_hs256(&header, &payload, &secret, &opts) {
+		core.Result::Ok(v) => { token = move v; },
+		core.Result::Err(_) => { return 301; }
+	}
+	// Tamper: flip a byte in the payload segment of the serialized token.
+	val tlen = token.byte_length();
+	var first_dot = -1;
+	var ti = 0;
+	while ti < tlen {
+		if core.string_byte_at(&token, ti) == cast<Byte>(46) {
+			if first_dot < 0 { first_dot = ti; }
+		}
+		ti = ti + 1;
+	}
+	if first_dot < 0 { return 302; }
+	var tampered_bytes: Array<Byte> = [];
+	var bi = 0;
+	while bi < tlen {
+		if bi == first_dot + 1 {
+			val orig = core.string_byte_at(&token, bi);
+			if orig == cast<Byte>(65) {
+				tampered_bytes.push(cast<Byte>(66));
+			} else {
+				tampered_bytes.push(cast<Byte>(65));
+			}
+		} else {
+			tampered_bytes.push(core.string_byte_at(&token, bi));
+		}
+		bi = bi + 1;
+	}
+	val tampered = _bytes_to_string(&tampered_bytes);
+	val policy = _default_policy();
+	val now_unix = 1700001000;
+	match jwt.verify_hs256(&tampered, &secret, now_unix, &policy) {
+		core.Result::Ok(_) => { return 303; },
+		core.Result::Err(e) => {
+			if e.tag != "jwt-signature-mismatch" and e.tag != "jwt-invalid-segment" and e.tag != "jwt-invalid-payload-json" {
+				return 304;
+			}
+			return 0;
+		}
+	}
+}
+
+fn scenario_tampered_header_rejected() nothrow -> Int {
+	val header = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}";
+	val payload = "{\"sub\":\"u123\"}";
+	var secret = _test_secret();
+	var opts = jwt.new_sign_options();
+	var token = "";
+	match jwt.sign_hs256(&header, &payload, &secret, &opts) {
+		core.Result::Ok(v) => { token = move v; },
+		core.Result::Err(_) => { return 401; }
+	}
+	// Flip the first byte of the header segment.
+	val tlen = token.byte_length();
+	var tampered_bytes: Array<Byte> = [];
+	var bi = 0;
+	while bi < tlen {
+		if bi == 0 {
+			val orig = core.string_byte_at(&token, 0);
+			if orig == cast<Byte>(65) {
+				tampered_bytes.push(cast<Byte>(66));
+			} else {
+				tampered_bytes.push(cast<Byte>(65));
+			}
+		} else {
+			tampered_bytes.push(core.string_byte_at(&token, bi));
+		}
+		bi = bi + 1;
+	}
+	val tampered = _bytes_to_string(&tampered_bytes);
+	val policy = _default_policy();
+	match jwt.verify_hs256(&tampered, &secret, 0, &policy) {
+		core.Result::Ok(_) => { return 402; },
+		core.Result::Err(_) => { return 0; }
+	}
+}
+
+fn scenario_malformed_segment_count() nothrow -> Int {
+	var secret = _test_secret();
+	val policy = _default_policy();
+	val no_dots = "aGVsbG8";
+	match jwt.verify_hs256(&no_dots, &secret, 0, &policy) {
+		core.Result::Ok(_) => { return 501; },
+		core.Result::Err(e) => {
+			if e.tag != "jwt-invalid-format" { return 502; }
+		}
+	}
+	val two_segments = "aGVsbG8.d29ybGQ";
+	match jwt.verify_hs256(&two_segments, &secret, 0, &policy) {
+		core.Result::Ok(_) => { return 503; },
+		core.Result::Err(e) => {
+			if e.tag != "jwt-invalid-format" { return 504; }
+		}
+	}
+	val four_segments = "a.b.c.d";
+	match jwt.verify_hs256(&four_segments, &secret, 0, &policy) {
+		core.Result::Ok(_) => { return 505; },
+		core.Result::Err(e) => {
+			if e.tag != "jwt-invalid-format" { return 506; }
+			return 0;
+		}
+	}
+}
+
+fn scenario_unsupported_alg_rejected() nothrow -> Int {
+	val header = "{\"alg\":\"HS384\",\"typ\":\"JWT\"}";
+	val payload = "{\"sub\":\"u123\"}";
+	var secret = _test_secret();
+	var opts = jwt.new_sign_options();
+	match jwt.sign_hs256(&header, &payload, &secret, &opts) {
+		core.Result::Ok(_) => { return 601; },
+		core.Result::Err(e) => {
+			if e.tag != "jwt-unsupported-alg" { return 602; }
+			return 0;
+		}
+	}
+}
+
+fn scenario_missing_alg_rejected() nothrow -> Int {
+	val header = "{\"typ\":\"JWT\"}";
+	val payload = "{\"sub\":\"u123\"}";
+	var secret = _test_secret();
+	var opts = jwt.new_sign_options();
+	match jwt.sign_hs256(&header, &payload, &secret, &opts) {
+		core.Result::Ok(_) => { return 701; },
+		core.Result::Err(e) => {
+			if e.tag != "jwt-missing-alg" { return 702; }
+			return 0;
+		}
+	}
+}
+
+fn scenario_invalid_header_json() nothrow -> Int {
+	val header = "not json";
+	val payload = "{\"sub\":\"u123\"}";
+	var secret = _test_secret();
+	var opts = jwt.new_sign_options();
+	match jwt.sign_hs256(&header, &payload, &secret, &opts) {
+		core.Result::Ok(_) => { return 801; },
+		core.Result::Err(e) => {
+			if e.tag != "jwt-invalid-header-json" { return 802; }
+			return 0;
+		}
+	}
+}
+
+fn scenario_sign_no_typ_enforcement() nothrow -> Int {
+	val header = "{\"alg\":\"HS256\"}";
+	val payload = "{\"sub\":\"u123\"}";
+	var secret = _test_secret();
+	var opts = jwt.new_sign_options();
+	// With enforce_typ_jwt=true, missing typ should fail
+	match jwt.sign_hs256(&header, &payload, &secret, &opts) {
+		core.Result::Ok(_) => { return 901; },
+		core.Result::Err(e) => {
+			if e.tag != "jwt-header-typ-mismatch" { return 902; }
+		}
+	}
+	// With enforce_typ_jwt=false, missing typ should succeed
+	var opts2 = jwt.new_sign_options();
+	opts2.enforce_typ_jwt = false;
+	match jwt.sign_hs256(&header, &payload, &secret, &opts2) {
+		core.Result::Ok(_) => { return 0; },
+		core.Result::Err(_) => { return 903; }
+	}
+}
+
+fn main() nothrow -> Int {
+	val a = scenario_sign_verify_happy_path();
+	if a != 0 { return a; }
+	val b = scenario_wrong_secret_rejected();
+	if b != 0 { return b; }
+	val c = scenario_tampered_payload_rejected();
+	if c != 0 { return c; }
+	val d = scenario_tampered_header_rejected();
+	if d != 0 { return d; }
+	val e = scenario_malformed_segment_count();
+	if e != 0 { return e; }
+	val f = scenario_unsupported_alg_rejected();
+	if f != 0 { return f; }
+	val g = scenario_missing_alg_rejected();
+	if g != 0 { return g; }
+	val h = scenario_invalid_header_json();
+	if h != 0 { return h; }
+	val i = scenario_sign_no_typ_enforcement();
+	if i != 0 { return i; }
+	return 0;
+}

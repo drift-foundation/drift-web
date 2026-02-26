@@ -1,0 +1,70 @@
+module web.jwt.claims
+
+import std.core as core;
+import std.json as json;
+import web.jwt.errors as errors;
+import web.jwt.model as model;
+
+export {
+	validate_temporal_claims
+};
+
+fn _check_numeric_claim(node: &json.JsonNode, key: &String) nothrow -> core.Result<Optional<Int>, errors.JwtError> {
+	match node.get(key) {
+		Optional::None => { return core.Result::Ok(Optional::None()); },
+		Optional::Some(claim_node) => {
+			match claim_node.as_int() {
+				Optional::Some(v) => { return core.Result::Ok(Optional::Some(v)); },
+				Optional::None => {
+					return core.Result::Err(errors.jwt_error(errors.TAG_CLAIM_INVALID_TYPE, "claim " + *key + " must be numeric"));
+				}
+			}
+		}
+	}
+}
+
+pub fn validate_temporal_claims(payload_node: &json.JsonNode, now_unix: Int, policy: &model.JwtVerifyPolicy) nothrow -> core.Result<Void, errors.JwtError> {
+	val exp_key = "exp";
+	match _check_numeric_claim(payload_node, &exp_key) {
+		core.Result::Err(e) => { return core.Result::Err(e); },
+		core.Result::Ok(opt) => {
+			match opt {
+				Optional::Some(exp) => {
+					if now_unix > exp + policy.skew_sec {
+						return core.Result::Err(errors.jwt_error(errors.TAG_EXPIRED, "token expired"));
+					}
+				},
+				Optional::None => {}
+			}
+		}
+	}
+	val nbf_key = "nbf";
+	match _check_numeric_claim(payload_node, &nbf_key) {
+		core.Result::Err(e) => { return core.Result::Err(e); },
+		core.Result::Ok(opt) => {
+			match opt {
+				Optional::Some(nbf) => {
+					if now_unix + policy.skew_sec < nbf {
+						return core.Result::Err(errors.jwt_error(errors.TAG_NOT_BEFORE, "token not yet valid"));
+					}
+				},
+				Optional::None => {}
+			}
+		}
+	}
+	val iat_key = "iat";
+	match _check_numeric_claim(payload_node, &iat_key) {
+		core.Result::Err(e) => { return core.Result::Err(e); },
+		core.Result::Ok(opt) => {
+			match opt {
+				Optional::Some(iat) => {
+					if iat > now_unix + policy.max_future_iat_sec {
+						return core.Result::Err(errors.jwt_error(errors.TAG_ISSUED_AT_FUTURE, "iat is too far in the future"));
+					}
+				},
+				Optional::None => {}
+			}
+		}
+	}
+	return core.Result::Ok(core.void_value());
+}

@@ -1,0 +1,144 @@
+module web.jwt.tests.unit.strictness_test
+
+import std.core as core;
+import web.jwt as jwt;
+
+fn _test_secret() nothrow -> Array<Byte> {
+	var s: Array<Byte> = [];
+	s.push(cast<Byte>(115)); // s
+	s.push(cast<Byte>(51));  // 3
+	s.push(cast<Byte>(99));  // c
+	s.push(cast<Byte>(114)); // r
+	s.push(cast<Byte>(51));  // 3
+	s.push(cast<Byte>(116)); // t
+	return move s;
+}
+
+fn _default_policy() nothrow -> jwt.JwtVerifyPolicy {
+	var pb = jwt.new_verify_policy_builder();
+	pb.require_typ_jwt = false;
+	match jwt.build_verify_policy(move pb) {
+		core.Result::Ok(v) => { return v; },
+		core.Result::Err(_) => {
+			return jwt.JwtVerifyPolicy(skew_sec = 0, max_future_iat_sec = 0, require_typ_jwt = false);
+		}
+	}
+}
+
+// Token with base64 padding ('=' characters) in a segment should be rejected.
+fn scenario_padding_rejected() nothrow -> Int {
+	// eyJhbGciOiJIUzI1NiJ9 is valid base64url for {"alg":"HS256"}
+	// Adding '=' padding should cause strict decode to fail.
+	val padded_token = "eyJhbGciOiJIUzI1NiJ9=.eyJzdWIiOiJ1MSJ9.AAAA";
+	var secret = _test_secret();
+	val policy = _default_policy();
+	match jwt.verify_hs256(&padded_token, &secret, 0, &policy) {
+		core.Result::Ok(_) => { return 101; },
+		core.Result::Err(e) => {
+			if e.tag != "jwt-invalid-segment" { return 102; }
+			return 0;
+		}
+	}
+}
+
+// Token with standard base64 characters '+' or '/' should be rejected.
+fn scenario_standard_base64_chars_rejected() nothrow -> Int {
+	// '+' is byte 43, '/' is byte 47 — not valid in base64url (should be '-' and '_')
+	val bad_plus = "eyJhbGci+iJIUzI1NiJ9.eyJzdWIiOiJ1MSJ9.AAAA";
+	var secret = _test_secret();
+	val policy = _default_policy();
+	match jwt.verify_hs256(&bad_plus, &secret, 0, &policy) {
+		core.Result::Ok(_) => { return 201; },
+		core.Result::Err(e) => {
+			if e.tag != "jwt-invalid-segment" { return 202; }
+		}
+	}
+	val bad_slash = "eyJhbGci/iJIUzI1NiJ9.eyJzdWIiOiJ1MSJ9.AAAA";
+	match jwt.verify_hs256(&bad_slash, &secret, 0, &policy) {
+		core.Result::Ok(_) => { return 203; },
+		core.Result::Err(e) => {
+			if e.tag != "jwt-invalid-segment" { return 204; }
+			return 0;
+		}
+	}
+}
+
+// Empty segments should be rejected.
+fn scenario_empty_segment_rejected() nothrow -> Int {
+	val empty_header = ".eyJzdWIiOiJ1MSJ9.AAAA";
+	var secret = _test_secret();
+	val policy = _default_policy();
+	match jwt.verify_hs256(&empty_header, &secret, 0, &policy) {
+		core.Result::Ok(_) => { return 301; },
+		core.Result::Err(_) => { return 0; }
+	}
+}
+
+// Verify that typ mismatch is caught during verification when require_typ_jwt is true.
+fn scenario_verify_typ_mismatch_rejected() nothrow -> Int {
+	// Sign with enforce_typ_jwt=false to allow non-JWT typ
+	val header = "{\"alg\":\"HS256\",\"typ\":\"JWE\"}";
+	val payload = "{\"sub\":\"u1\"}";
+	var secret = _test_secret();
+	var opts = jwt.new_sign_options();
+	opts.enforce_typ_jwt = false;
+	var token = "";
+	match jwt.sign_hs256(&header, &payload, &secret, &opts) {
+		core.Result::Ok(v) => { token = move v; },
+		core.Result::Err(_) => { return 401; }
+	}
+	// Verify with require_typ_jwt=true
+	var pb = jwt.new_verify_policy_builder();
+	pb.require_typ_jwt = true;
+	var policy = jwt.JwtVerifyPolicy(skew_sec = 0, max_future_iat_sec = 0, require_typ_jwt = true);
+	match jwt.build_verify_policy(move pb) {
+		core.Result::Ok(v) => { policy = v; },
+		core.Result::Err(_) => { return 402; }
+	}
+	match jwt.verify_hs256(&token, &secret, 0, &policy) {
+		core.Result::Ok(_) => { return 403; },
+		core.Result::Err(e) => {
+			if e.tag != "jwt-header-typ-mismatch" { return 404; }
+			return 0;
+		}
+	}
+}
+
+// Verify that typ check is skipped when require_typ_jwt=false.
+fn scenario_verify_typ_ignored_when_disabled() nothrow -> Int {
+	val header = "{\"alg\":\"HS256\",\"typ\":\"CUSTOM\"}";
+	val payload = "{\"sub\":\"u1\"}";
+	var secret = _test_secret();
+	var opts = jwt.new_sign_options();
+	opts.enforce_typ_jwt = false;
+	var token = "";
+	match jwt.sign_hs256(&header, &payload, &secret, &opts) {
+		core.Result::Ok(v) => { token = move v; },
+		core.Result::Err(_) => { return 501; }
+	}
+	var pb = jwt.new_verify_policy_builder();
+	pb.require_typ_jwt = false;
+	var policy = jwt.JwtVerifyPolicy(skew_sec = 0, max_future_iat_sec = 0, require_typ_jwt = false);
+	match jwt.build_verify_policy(move pb) {
+		core.Result::Ok(v) => { policy = v; },
+		core.Result::Err(_) => { return 502; }
+	}
+	match jwt.verify_hs256(&token, &secret, 0, &policy) {
+		core.Result::Ok(_) => { return 0; },
+		core.Result::Err(_) => { return 503; }
+	}
+}
+
+fn main() nothrow -> Int {
+	val a = scenario_padding_rejected();
+	if a != 0 { return a; }
+	val b = scenario_standard_base64_chars_rejected();
+	if b != 0 { return b; }
+	val c = scenario_empty_segment_rejected();
+	if c != 0 { return c; }
+	val d = scenario_verify_typ_mismatch_rejected();
+	if d != 0 { return d; }
+	val e = scenario_verify_typ_ignored_when_disabled();
+	if e != 0 { return e; }
+	return 0;
+}
