@@ -1,0 +1,51 @@
+module main
+
+import std.core as core;
+import std.console as console;
+import std.time as time;
+import web.jwt as jwt;
+
+fn test_secret() nothrow -> Array<Byte> {
+	var s: Array<Byte> = [];
+	s.push(cast<Byte>(115)); // s
+	s.push(cast<Byte>(51));  // 3
+	s.push(cast<Byte>(99));  // c
+	s.push(cast<Byte>(114)); // r
+	s.push(cast<Byte>(51));  // 3
+	s.push(cast<Byte>(116)); // t
+	return move s;
+}
+
+fn main() nothrow -> Int {
+	val header = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}";
+	val payload = "{\"sub\":\"user-123\"}";
+	var secret = test_secret();
+	var opts = jwt.new_sign_options();
+	var token = "";
+	match jwt.sign_hs256(&header, &payload, &secret, &opts) {
+		core.Result::Ok(v) => { token = move v; },
+		core.Result::Err(e) => {
+			console.println("sign failed: " + e.tag);
+			return 1;
+		}
+	}
+	var pb = jwt.new_verify_policy_builder();
+	val policy = match jwt.build_verify_policy(move pb) {
+		core.Result::Ok(v) => { v },
+		core.Result::Err(e) => {
+			console.println("policy invalid: " + e.tag);
+			return 2;
+		}
+	};
+	val now_unix = time.utc_unix_seconds_now();
+	match jwt.verify_hs256(&token, &secret, now_unix, &policy) {
+		core.Result::Ok(v) => {
+			console.println("verified payload: " + v.payload_json);
+			return 0;
+		},
+		core.Result::Err(e) => {
+			console.println("verify failed: " + e.tag);
+			return 3;
+		}
+	}
+}

@@ -1,0 +1,85 @@
+module web.jwt.tests.e2e.realtime_default_policy_test
+
+import std.core as core;
+import std.time as time;
+import web.jwt as jwt;
+
+fn _test_secret() nothrow -> Array<Byte> {
+	var s: Array<Byte> = [];
+	s.push(cast<Byte>(115)); // s
+	s.push(cast<Byte>(51));  // 3
+	s.push(cast<Byte>(99));  // c
+	s.push(cast<Byte>(114)); // r
+	s.push(cast<Byte>(51));  // 3
+	s.push(cast<Byte>(116)); // t
+	return move s;
+}
+
+fn _default_policy() nothrow -> core.Result<jwt.JwtVerifyPolicy, jwt.JwtConfigError> {
+	var pb = jwt.new_verify_policy_builder();
+	return jwt.build_verify_policy(move pb);
+}
+
+fn scenario_realtime_now_sourcing_happy_path() nothrow -> Int {
+	val header = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}";
+	val payload = "{\"sub\":\"u1\"}";
+	var secret = _test_secret();
+	var opts = jwt.new_sign_options();
+	var token = "";
+	match jwt.sign_hs256(&header, &payload, &secret, &opts) {
+		core.Result::Ok(v) => { token = move v; },
+		core.Result::Err(_) => { return 101; }
+	}
+	var policy_ok = true;
+	val policy = match _default_policy() {
+		core.Result::Ok(v) => { v },
+		core.Result::Err(_) => {
+			policy_ok = false;
+			jwt.JwtVerifyPolicy(skew_sec = 0, max_future_iat_sec = 0, require_typ_jwt = true)
+		}
+	};
+	if not policy_ok { return 102; }
+	val now_unix = time.utc_unix_seconds_now();
+	match jwt.verify_hs256(&token, &secret, now_unix, &policy) {
+		core.Result::Ok(_) => { return 0; },
+		core.Result::Err(_) => { return 103; }
+	}
+}
+
+fn scenario_strict_default_rejects_missing_typ() nothrow -> Int {
+	val header = "{\"alg\":\"HS256\"}";
+	val payload = "{\"sub\":\"u1\"}";
+	var secret = _test_secret();
+	var opts = jwt.new_sign_options();
+	opts.enforce_typ_jwt = false;
+	var token = "";
+	match jwt.sign_hs256(&header, &payload, &secret, &opts) {
+		core.Result::Ok(v) => { token = move v; },
+		core.Result::Err(_) => { return 201; }
+	}
+	var policy_ok = true;
+	val policy = match _default_policy() {
+		core.Result::Ok(v) => { v },
+		core.Result::Err(_) => {
+			policy_ok = false;
+			jwt.JwtVerifyPolicy(skew_sec = 0, max_future_iat_sec = 0, require_typ_jwt = true)
+		}
+	};
+	if not policy_ok { return 202; }
+	val now_unix = time.utc_unix_seconds_now();
+	match jwt.verify_hs256(&token, &secret, now_unix, &policy) {
+		core.Result::Ok(_) => { return 203; },
+		core.Result::Err(e) => {
+			if e.tag != "jwt-header-typ-mismatch" { return 204; }
+			return 0;
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	val a = scenario_realtime_now_sourcing_happy_path();
+	if a != 0 { return a; }
+	val b = scenario_strict_default_rejects_missing_typ();
+	if b != 0 { return b; }
+	return 0;
+}

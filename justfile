@@ -1,6 +1,7 @@
 # Full test suite.
 test:
     @just jwt-check-par
+    @just jwt-e2e-par
 
 # All JWT unit tests (parallel compile, serial run).
 jwt-check-par:
@@ -14,6 +15,13 @@ jwt-check-unit FILE:
     @tools/drift_test_parallel_runner.sh run-one \
       --src-root packages/web-jwt/src \
       --test-file "{{FILE}}" \
+      --target-word-bits 64
+
+# JWT e2e-style tests (no external services).
+jwt-e2e-par:
+    @tools/drift_test_parallel_runner.sh run-all \
+      --src-root packages/web-jwt/src \
+      --test-root packages/web-jwt/tests/e2e \
       --target-word-bits 64
 
 # Compile-only check (no execution).
