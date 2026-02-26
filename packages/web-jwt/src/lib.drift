@@ -41,20 +41,20 @@ pub type JwtConfigError = errors.JwtConfigError;
 pub type JwtError = errors.JwtError;
 pub type VerifiedJwt = model.VerifiedJwt;
 
-pub const TAG_CONFIG_INVALID: String = errors.TAG_CONFIG_INVALID;
-pub const TAG_CONFIG_MISSING_REQUIRED: String = errors.TAG_CONFIG_MISSING_REQUIRED;
-pub const TAG_INVALID_FORMAT: String = errors.TAG_INVALID_FORMAT;
-pub const TAG_INVALID_SEGMENT: String = errors.TAG_INVALID_SEGMENT;
-pub const TAG_INVALID_HEADER_JSON: String = errors.TAG_INVALID_HEADER_JSON;
-pub const TAG_INVALID_PAYLOAD_JSON: String = errors.TAG_INVALID_PAYLOAD_JSON;
-pub const TAG_UNSUPPORTED_ALG: String = errors.TAG_UNSUPPORTED_ALG;
-pub const TAG_MISSING_ALG: String = errors.TAG_MISSING_ALG;
-pub const TAG_SIGNATURE_MISMATCH: String = errors.TAG_SIGNATURE_MISMATCH;
-pub const TAG_CLAIM_INVALID_TYPE: String = errors.TAG_CLAIM_INVALID_TYPE;
-pub const TAG_EXPIRED: String = errors.TAG_EXPIRED;
-pub const TAG_NOT_BEFORE: String = errors.TAG_NOT_BEFORE;
-pub const TAG_ISSUED_AT_FUTURE: String = errors.TAG_ISSUED_AT_FUTURE;
-pub const TAG_HEADER_TYP_MISMATCH: String = errors.TAG_HEADER_TYP_MISMATCH;
+pub const TAG_CONFIG_INVALID: String = "jwt-config-invalid";
+pub const TAG_CONFIG_MISSING_REQUIRED: String = "jwt-config-missing-required";
+pub const TAG_INVALID_FORMAT: String = "jwt-invalid-format";
+pub const TAG_INVALID_SEGMENT: String = "jwt-invalid-segment";
+pub const TAG_INVALID_HEADER_JSON: String = "jwt-invalid-header-json";
+pub const TAG_INVALID_PAYLOAD_JSON: String = "jwt-invalid-payload-json";
+pub const TAG_UNSUPPORTED_ALG: String = "jwt-unsupported-alg";
+pub const TAG_MISSING_ALG: String = "jwt-missing-alg";
+pub const TAG_SIGNATURE_MISMATCH: String = "jwt-signature-mismatch";
+pub const TAG_CLAIM_INVALID_TYPE: String = "jwt-claim-invalid-type";
+pub const TAG_EXPIRED: String = "jwt-expired";
+pub const TAG_NOT_BEFORE: String = "jwt-not-before";
+pub const TAG_ISSUED_AT_FUTURE: String = "jwt-issued-at-future";
+pub const TAG_HEADER_TYP_MISMATCH: String = "jwt-header-typ-mismatch";
 
 pub fn new_sign_options() nothrow -> SignOptions {
 	return model.SignOptions(enforce_typ_jwt = true);

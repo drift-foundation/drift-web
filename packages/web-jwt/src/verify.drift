@@ -95,7 +95,7 @@ fn _validate_header(header_node: &json.JsonNode, policy: &model.JwtVerifyPolicy)
 	if policy.require_typ_jwt {
 		val typ_key = "typ";
 		match header_node.get(&typ_key) {
-			Optional::None => {},
+			Optional::None => { return core.Result::Err(errors.jwt_error(errors.TAG_HEADER_TYP_MISMATCH, "header missing typ field")); },
 			Optional::Some(typ_node) => {
 				match typ_node.as_string() {
 					Optional::None => { return core.Result::Err(errors.jwt_error(errors.TAG_HEADER_TYP_MISMATCH, "typ is not a string")); },

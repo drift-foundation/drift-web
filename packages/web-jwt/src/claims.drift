@@ -11,7 +11,7 @@ export {
 
 fn _check_numeric_claim(node: &json.JsonNode, key: &String) nothrow -> core.Result<Optional<Int>, errors.JwtError> {
 	match node.get(key) {
-		Optional::None => { return core.Result::Ok(Optional::None()); },
+		Optional::None => { return core.Result::Ok(Optional<Int>::None()); },
 		Optional::Some(claim_node) => {
 			match claim_node.as_int() {
 				Optional::Some(v) => { return core.Result::Ok(Optional::Some(v)); },
@@ -23,14 +23,30 @@ fn _check_numeric_claim(node: &json.JsonNode, key: &String) nothrow -> core.Resu
 	}
 }
 
+// Clamp a timestamp to a safe range to prevent overflow in arithmetic.
+// Any legitimate JWT timestamp falls within year 0001..9999 CE.
+// With all operands clamped, the maximum difference between any two values
+// is ~315 billion, which fits safely in a 64-bit signed Int even after adding
+// policy offsets (skew_sec, max_future_iat_sec).
+const SAFE_TS_MIN: Int = -62135596800;
+const SAFE_TS_MAX: Int = 253402300800;
+
+fn _safe_ts(value: Int) nothrow -> Int {
+	if value < SAFE_TS_MIN { return SAFE_TS_MIN; }
+	if value > SAFE_TS_MAX { return SAFE_TS_MAX; }
+	return value;
+}
+
 pub fn validate_temporal_claims(payload_node: &json.JsonNode, now_unix: Int, policy: &model.JwtVerifyPolicy) nothrow -> core.Result<Void, errors.JwtError> {
+	val now = _safe_ts(now_unix);
 	val exp_key = "exp";
 	match _check_numeric_claim(payload_node, &exp_key) {
 		core.Result::Err(e) => { return core.Result::Err(e); },
 		core.Result::Ok(opt) => {
 			match opt {
-				Optional::Some(exp) => {
-					if now_unix > exp + policy.skew_sec {
+				Optional::Some(raw_exp) => {
+					val exp = _safe_ts(raw_exp);
+					if now - policy.skew_sec > exp {
 						return core.Result::Err(errors.jwt_error(errors.TAG_EXPIRED, "token expired"));
 					}
 				},
@@ -43,8 +59,9 @@ pub fn validate_temporal_claims(payload_node: &json.JsonNode, now_unix: Int, pol
 		core.Result::Err(e) => { return core.Result::Err(e); },
 		core.Result::Ok(opt) => {
 			match opt {
-				Optional::Some(nbf) => {
-					if now_unix + policy.skew_sec < nbf {
+				Optional::Some(raw_nbf) => {
+					val nbf = _safe_ts(raw_nbf);
+					if nbf - policy.skew_sec > now {
 						return core.Result::Err(errors.jwt_error(errors.TAG_NOT_BEFORE, "token not yet valid"));
 					}
 				},
@@ -57,8 +74,9 @@ pub fn validate_temporal_claims(payload_node: &json.JsonNode, now_unix: Int, pol
 		core.Result::Err(e) => { return core.Result::Err(e); },
 		core.Result::Ok(opt) => {
 			match opt {
-				Optional::Some(iat) => {
-					if iat > now_unix + policy.max_future_iat_sec {
+				Optional::Some(raw_iat) => {
+					val iat = _safe_ts(raw_iat);
+					if iat - now > policy.max_future_iat_sec {
 						return core.Result::Err(errors.jwt_error(errors.TAG_ISSUED_AT_FUTURE, "iat is too far in the future"));
 					}
 				},

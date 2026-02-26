@@ -129,6 +129,59 @@ fn scenario_verify_typ_ignored_when_disabled() nothrow -> Int {
 	}
 }
 
+// Verify that missing typ is rejected when require_typ_jwt=true.
+fn scenario_verify_missing_typ_rejected_when_required() nothrow -> Int {
+	val header = "{\"alg\":\"HS256\"}";
+	val payload = "{\"sub\":\"u1\"}";
+	var secret = _test_secret();
+	var opts = jwt.new_sign_options();
+	opts.enforce_typ_jwt = false;
+	var token = "";
+	match jwt.sign_hs256(&header, &payload, &secret, &opts) {
+		core.Result::Ok(v) => { token = move v; },
+		core.Result::Err(_) => { return 601; }
+	}
+	var pb = jwt.new_verify_policy_builder();
+	pb.require_typ_jwt = true;
+	var policy = jwt.JwtVerifyPolicy(skew_sec = 0, max_future_iat_sec = 0, require_typ_jwt = true);
+	match jwt.build_verify_policy(move pb) {
+		core.Result::Ok(v) => { policy = v; },
+		core.Result::Err(_) => { return 602; }
+	}
+	match jwt.verify_hs256(&token, &secret, 0, &policy) {
+		core.Result::Ok(_) => { return 603; },
+		core.Result::Err(e) => {
+			if e.tag != "jwt-header-typ-mismatch" { return 604; }
+			return 0;
+		}
+	}
+}
+
+// Verify that missing typ is accepted when require_typ_jwt=false.
+fn scenario_verify_missing_typ_accepted_when_not_required() nothrow -> Int {
+	val header = "{\"alg\":\"HS256\"}";
+	val payload = "{\"sub\":\"u1\"}";
+	var secret = _test_secret();
+	var opts = jwt.new_sign_options();
+	opts.enforce_typ_jwt = false;
+	var token = "";
+	match jwt.sign_hs256(&header, &payload, &secret, &opts) {
+		core.Result::Ok(v) => { token = move v; },
+		core.Result::Err(_) => { return 701; }
+	}
+	var pb = jwt.new_verify_policy_builder();
+	pb.require_typ_jwt = false;
+	var policy = jwt.JwtVerifyPolicy(skew_sec = 0, max_future_iat_sec = 0, require_typ_jwt = false);
+	match jwt.build_verify_policy(move pb) {
+		core.Result::Ok(v) => { policy = v; },
+		core.Result::Err(_) => { return 702; }
+	}
+	match jwt.verify_hs256(&token, &secret, 0, &policy) {
+		core.Result::Ok(_) => { return 0; },
+		core.Result::Err(_) => { return 703; }
+	}
+}
+
 fn main() nothrow -> Int {
 	val a = scenario_padding_rejected();
 	if a != 0 { return a; }
@@ -140,5 +193,9 @@ fn main() nothrow -> Int {
 	if d != 0 { return d; }
 	val e = scenario_verify_typ_ignored_when_disabled();
 	if e != 0 { return e; }
+	val f = scenario_verify_missing_typ_rejected_when_required();
+	if f != 0 { return f; }
+	val g = scenario_verify_missing_typ_accepted_when_not_required();
+	if g != 0 { return g; }
 	return 0;
 }

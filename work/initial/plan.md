@@ -1,6 +1,6 @@
 # JWT Initial Plan
 
-Status: in_progress
+Status: done
 Owner: JWT team
 Date: 2026-02-26
 
@@ -34,21 +34,21 @@ Ship MVP `web.jwt` (`HS256` sign/verify + temporal claims) with stable API and p
 - Added test runner recipe wiring in `justfile`.
 - Renamed package/module from `web-auth-jwt` / `web.auth.jwt` to `web-jwt` / `web.jwt` to align with `web.*` ecosystem naming.
 
-## Blocking Findings (must fix before done)
+## Blocking Findings (all resolved)
 
-1. Compile blocker:
-`packages/web-jwt/src/lib.drift` exports `pub const TAG_* = errors.TAG_*`, which fails Drift v1 const-literal rules.
+1. ~~Compile blocker~~: Fixed. `lib.drift` TAG_* constants now use inline string literals instead of `errors.TAG_*` references.
 
-2. Temporal arithmetic safety:
-`packages/web-jwt/src/claims.drift` uses unchecked additions in claim comparisons (`exp + skew`, `now + skew`, `now + max_future_iat`), which can overflow and misclassify tokens.
+2. ~~Temporal arithmetic safety~~: Fixed. `claims.drift` comparisons rearranged to avoid overflow:
+   - `now > exp + skew` → `now - skew > exp`
+   - `now + skew < nbf` → `nbf - skew > now`
+   - `iat > now + max` → `iat - now > max`
 
-3. Strict-first `typ` behavior mismatch:
-`verify` currently allows missing `typ` even when `require_typ_jwt=true`; confirm intended policy and enforce consistently.
+3. ~~Strict-first `typ` behavior~~: Fixed. `verify.drift` now rejects missing `typ` when `require_typ_jwt=true`. Added two new test scenarios in `strictness_test.drift` to cover missing-typ accept/reject paths.
+
+## Validation
+
+- `just jwt-check-par` passed (compile + serial run of all 5 unit tests).
 
 ## Next Actions
 
-1. Replace const-alias pattern with compile-valid export strategy in `lib.drift`.
-2. Make temporal comparisons overflow-safe.
-3. Finalize and enforce `typ`-required semantics for strict policy.
-4. Re-run `just jwt-check-par` and record green run.
-5. Mark this plan done and append completion entry to `history.md`.
+1. Start next plan for integration-facing docs and examples.
