@@ -1,0 +1,51 @@
+module web.rest.errors
+
+import std.core as core;
+
+export {
+	RestError,
+	rest_error,
+	add_field,
+	EVENT_REQUEST_INVALID,
+	EVENT_UNAUTHORIZED,
+	EVENT_FORBIDDEN,
+	EVENT_NOT_FOUND,
+	EVENT_CONFLICT,
+	EVENT_INTERNAL,
+	TAG_INTERNAL_ERROR
+};
+
+pub struct RestError {
+	pub status: Int,
+	pub event: String,
+	pub tag: String,
+	pub message: String,
+	pub field_keys: Array<String>,
+	pub field_values: Array<String>
+}
+
+implement core.Diagnostic for RestError {
+	pub fn to_diag(self: &RestError) nothrow -> DiagnosticValue {
+		return DiagnosticValue::String(self.event + ":" + self.tag);
+	}
+}
+
+pub const EVENT_REQUEST_INVALID: String = "request-invalid";
+pub const EVENT_UNAUTHORIZED: String = "unauthorized";
+pub const EVENT_FORBIDDEN: String = "forbidden";
+pub const EVENT_NOT_FOUND: String = "not-found";
+pub const EVENT_CONFLICT: String = "conflict";
+pub const EVENT_INTERNAL: String = "internal";
+pub const TAG_INTERNAL_ERROR: String = "internal-error";
+
+pub fn rest_error(status: Int, event: String, tag: String, message: String) nothrow -> RestError {
+	var fk: Array<String> = [];
+	var fv: Array<String> = [];
+	return RestError(status = status, event = event, tag = tag, message = message, field_keys = move fk, field_values = move fv);
+}
+
+pub fn add_field(err: &mut RestError, key: String, value: String) nothrow -> Void {
+	err.field_keys.push(move key);
+	err.field_values.push(move value);
+	return core.void_value();
+}

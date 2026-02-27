@@ -1,0 +1,237 @@
+module web.rest.tests.unit.validation_test
+
+import std.core as core;
+import std.json as json;
+import web.rest as rest;
+
+// Story 3: Invalid input path returning request-invalid with structured fields.
+// Tests require_query_param, require_body_json, and error envelope with fields.
+
+// --- Scenario: missing required query param → 400 request-invalid with fields ---
+
+fn scenario_missing_query_param() nothrow -> Int {
+	var req = rest.new_request("GET", "/v1/search");
+	val name = "q";
+	match rest.require_query_param(&req, &name) {
+		core.Result::Ok(_) => { return 101; },
+		core.Result::Err(e) => {
+			if e.status != 400 { return 102; }
+			if e.event != "request-invalid" { return 103; }
+			if e.tag != "missing-query-param" { return 104; }
+			if e.field_keys.len != 1 { return 105; }
+			if e.field_keys[0] != "q" { return 106; }
+			if e.field_values[0] != "required" { return 107; }
+			return 0;
+		}
+	}
+}
+
+// --- Scenario: present query param → success ---
+
+fn scenario_query_param_present() nothrow -> Int {
+	var req = rest.new_request("GET", "/v1/search");
+	var k = "q";
+	var v = "hello";
+	req.param_keys.push(move k);
+	req.param_values.push(move v);
+	if req.param_keys.len != 1 { return 201; }
+	val name = "q";
+	match rest.query_param(&req, &name) {
+		Optional::Some(v) => {
+			if v != "hello" { return 202; }
+			return 0;
+		},
+		Optional::None => { return 203; }
+	}
+}
+
+// --- Scenario: optional query_param returns None when missing ---
+
+fn scenario_optional_query_param_missing() nothrow -> Int {
+	val req = rest.new_request("GET", "/v1/search");
+	val name = "q";
+	match rest.query_param(&req, &name) {
+		Optional::None => { return 0; },
+		Optional::Some(_) => { return 301; }
+	}
+}
+
+// --- Scenario: empty body → 400 request-invalid ---
+
+fn scenario_empty_body_rejected() nothrow -> Int {
+	val req = rest.new_request("POST", "/v1/users");
+	match rest.require_body_json(&req) {
+		core.Result::Ok(_) => { return 401; },
+		core.Result::Err(e) => {
+			if e.status != 400 { return 402; }
+			if e.event != "request-invalid" { return 403; }
+			if e.tag != "missing-body" { return 404; }
+			return 0;
+		}
+	}
+}
+
+// --- Scenario: malformed JSON body → 400 request-invalid ---
+
+fn scenario_malformed_json_rejected() nothrow -> Int {
+	var req = rest.new_request("POST", "/v1/users");
+	req.body = "not json {{{";
+	match rest.require_body_json(&req) {
+		core.Result::Ok(_) => { return 501; },
+		core.Result::Err(e) => {
+			if e.status != 400 { return 502; }
+			if e.event != "request-invalid" { return 503; }
+			if e.tag != "malformed-json" { return 504; }
+			return 0;
+		}
+	}
+}
+
+// --- Scenario: valid JSON body → parsed successfully ---
+
+fn scenario_valid_json_body_accepted() nothrow -> Int {
+	var req = rest.new_request("POST", "/v1/users");
+	req.body = "{\"name\":\"alice\",\"age\":30}";
+	match rest.require_body_json(&req) {
+		core.Result::Ok(node) => {
+			val name_key = "name";
+			match node.get(&name_key) {
+				Optional::None => { return 601; },
+				Optional::Some(name_node) => {
+					match name_node.as_string() {
+						Optional::None => { return 602; },
+						Optional::Some(v) => {
+							if v != "alice" { return 603; }
+						}
+					}
+				}
+			}
+			return 0;
+		},
+		core.Result::Err(_) => { return 604; }
+	}
+}
+
+// --- Scenario: error envelope with structured fields renders correctly ---
+
+fn scenario_error_envelope_with_fields() nothrow -> Int {
+	var err = rest.rest_error(400, "request-invalid", "validation-failed", "input validation failed");
+	rest.add_field(&mut err, "email", "invalid-format");
+	rest.add_field(&mut err, "age", "out-of-range");
+	val event_id = "evt-test-002";
+	val resp = rest.error_envelope(&err, &event_id);
+	if resp.status != 400 { return 701; }
+	match json.parse(&resp.body) {
+		core.Result::Err(_) => { return 702; },
+		core.Result::Ok(node) => {
+			val event_key = "event";
+			match node.get(&event_key) {
+				Optional::None => { return 703; },
+				Optional::Some(ev) => {
+					match ev.as_string() {
+						Optional::None => { return 704; },
+						Optional::Some(v) => {
+							if v != "request-invalid" { return 705; }
+						}
+					}
+				}
+			}
+			val tag_key = "tag";
+			match node.get(&tag_key) {
+				Optional::None => { return 706; },
+				Optional::Some(tg) => {
+					match tg.as_string() {
+						Optional::None => { return 707; },
+						Optional::Some(v) => {
+							if v != "validation-failed" { return 708; }
+						}
+					}
+				}
+			}
+			val eid_key = "event_id";
+			match node.get(&eid_key) {
+				Optional::None => { return 709; },
+				Optional::Some(eid) => {
+					match eid.as_string() {
+						Optional::None => { return 710; },
+						Optional::Some(v) => {
+							if v != "evt-test-002" { return 711; }
+						}
+					}
+				}
+			}
+			val fields_key = "fields";
+			match node.get(&fields_key) {
+				Optional::None => { return 712; },
+				Optional::Some(fields_node) => {
+					val email_key = "email";
+					match fields_node.get(&email_key) {
+						Optional::None => { return 713; },
+						Optional::Some(email_val) => {
+							match email_val.as_string() {
+								Optional::None => { return 714; },
+								Optional::Some(v) => {
+									if v != "invalid-format" { return 715; }
+								}
+							}
+						}
+					}
+					val age_key = "age";
+					match fields_node.get(&age_key) {
+						Optional::None => { return 716; },
+						Optional::Some(age_val) => {
+							match age_val.as_string() {
+								Optional::None => { return 717; },
+								Optional::Some(v) => {
+									if v != "out-of-range" { return 718; }
+								}
+							}
+						}
+					}
+					return 0;
+				}
+			}
+		}
+	}
+}
+
+// --- Scenario: error envelope with empty fields ---
+
+fn scenario_error_envelope_empty_fields() nothrow -> Int {
+	val err = rest.rest_error(400, "request-invalid", "missing-query-param", "missing param");
+	val event_id = "evt-test-003";
+	val resp = rest.error_envelope(&err, &event_id);
+	if resp.status != 400 { return 801; }
+	match json.parse(&resp.body) {
+		core.Result::Err(_) => { return 802; },
+		core.Result::Ok(node) => {
+			val fields_key = "fields";
+			match node.get(&fields_key) {
+				Optional::None => { return 803; },
+				Optional::Some(_) => {
+					return 0;
+				}
+			}
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	val a = scenario_missing_query_param();
+	if a != 0 { return a; }
+	val b = scenario_query_param_present();
+	if b != 0 { return b; }
+	val c = scenario_optional_query_param_missing();
+	if c != 0 { return c; }
+	val d = scenario_empty_body_rejected();
+	if d != 0 { return d; }
+	val e = scenario_malformed_json_rejected();
+	if e != 0 { return e; }
+	val f = scenario_valid_json_body_accepted();
+	if f != 0 { return f; }
+	val g = scenario_error_envelope_with_fields();
+	if g != 0 { return g; }
+	val h = scenario_error_envelope_empty_fields();
+	if h != 0 { return h; }
+	return 0;
+}

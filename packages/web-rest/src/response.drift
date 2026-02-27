@@ -1,0 +1,80 @@
+module web.rest.response
+
+import std.core as core;
+import std.io as io;
+import web.rest.errors as errors;
+
+export {
+	Response,
+	json_response,
+	error_envelope
+};
+
+pub struct Response {
+	pub status: Int,
+	pub body: String
+}
+
+pub fn json_response(status: Int, body: String) nothrow -> Response {
+	return Response(status = status, body = body);
+}
+
+fn _dup_string(s: &String) nothrow -> String {
+	val n = s.byte_length();
+	var b = io.buffer(n);
+	var i = 0;
+	while i < n {
+		io.buffer_write(&mut b, i, core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&b), n);
+}
+
+fn _escape_json_string(s: &String) nothrow -> String {
+	var out = "\"";
+	var i = 0;
+	val n = s.byte_length();
+	while i < n {
+		val ch = core.string_byte_at(s, i);
+		if ch == cast<Byte>(34) {
+			out = out + "\\\"";
+		} else {
+			if ch == cast<Byte>(92) {
+				out = out + "\\\\";
+			} else {
+				if ch == cast<Byte>(10) {
+					out = out + "\\n";
+				} else {
+					var buf = io.buffer(1);
+					io.buffer_write(&mut buf, 0, ch);
+					out = out + core.string_from_utf8_bytes(io.buffer_ptr(&buf), 1);
+				}
+			}
+		}
+		i = i + 1;
+	}
+	out = out + "\"";
+	return out;
+}
+
+pub fn error_envelope(err: &errors.RestError, event_id: &String) nothrow -> Response {
+	var body = "{\"event\":";
+	body = body + _escape_json_string(&err.event);
+	body = body + ",\"tag\":";
+	body = body + _escape_json_string(&err.tag);
+	body = body + ",\"event_id\":";
+	body = body + _escape_json_string(event_id);
+	body = body + ",\"fields\":{";
+	var fi = 0;
+	while fi < err.field_keys.len {
+		if fi > 0 {
+			body = body + ",";
+		}
+		body = body + _escape_json_string(&err.field_keys[fi]);
+		body = body + ":";
+		body = body + _escape_json_string(&err.field_values[fi]);
+		fi = fi + 1;
+	}
+	body = body + "}}";
+	return Response(status = err.status, body = body);
+}

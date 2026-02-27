@@ -1,0 +1,76 @@
+module web.rest.tests.unit.repro_array_push_struct_field
+
+import std.core as core;
+
+// CORE_BUG repro: `return void_fn(mut_ref, ...)` corrupts &mut state.
+//
+// When a function with `&mut` parameter is called via `return f(ref, ...)`,
+// the mutation performed inside f() is lost or causes a crash.
+// The same call without `return` (i.e. `f(ref, ...); return void_value();`)
+// works correctly.
+//
+// Affected: any Void-returning function that mutates through &mut,
+//   when called via `return` from another Void function.
+// Not type-specific: affects Array<Int>, Array<String>, etc.
+
+pub struct IntBox {
+	pub items: Array<Int>
+}
+
+fn _new_int_box() nothrow -> IntBox {
+	var items: Array<Int> = [];
+	return IntBox(items = move items);
+}
+
+fn _push_int(box: &mut IntBox, v: Int) nothrow -> Void {
+	box.items.push(v);
+	return core.void_value();
+}
+
+// BUG: return-forwarding pattern — mutation lost.
+fn _push_int_return_fwd(box: &mut IntBox, v: Int) nothrow -> Void {
+	return _push_int(box, v);
+}
+
+// OK: call-then-return pattern — mutation preserved.
+fn _push_int_call_then_return(box: &mut IntBox, v: Int) nothrow -> Void {
+	_push_int(box, v);
+	return core.void_value();
+}
+
+// PASS: one-level &mut call.
+fn scenario_one_level() nothrow -> Int {
+	var b = _new_int_box();
+	_push_int(&mut b, 42);
+	if b.items.len != 1 { return 101; }
+	if b.items[0] != 42 { return 102; }
+	return 0;
+}
+
+// PASS: two-level with call-then-return.
+fn scenario_two_level_call_then_return() nothrow -> Int {
+	var b = _new_int_box();
+	_push_int_call_then_return(&mut b, 42);
+	if b.items.len != 1 { return 201; }
+	if b.items[0] != 42 { return 202; }
+	return 0;
+}
+
+// BUG: two-level with return-forwarding — exits 301 or crashes.
+fn scenario_two_level_return_fwd() nothrow -> Int {
+	var b = _new_int_box();
+	_push_int_return_fwd(&mut b, 42);
+	if b.items.len != 1 { return 301; }
+	if b.items[0] != 42 { return 302; }
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	val a = scenario_one_level();
+	if a != 0 { return a; }
+	val b = scenario_two_level_call_then_return();
+	if b != 0 { return b; }
+	val c = scenario_two_level_return_fwd();
+	if c != 0 { return c; }
+	return 0;
+}

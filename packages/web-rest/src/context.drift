@@ -1,0 +1,37 @@
+module web.rest.context
+
+import std.core as core;
+
+export {
+	Context,
+	Principal,
+	new_context,
+	set_principal,
+	get_principal
+};
+
+pub struct Principal {
+	pub sub: String
+}
+
+pub struct Context {
+	pub has_principal: Bool,
+	pub principal_sub: String
+}
+
+pub fn new_context() nothrow -> Context {
+	return Context(has_principal = false, principal_sub = "");
+}
+
+pub fn set_principal(ctx: &mut Context, sub: String) nothrow -> Void {
+	ctx.has_principal = true;
+	ctx.principal_sub = sub;
+	return core.void_value();
+}
+
+pub fn get_principal(ctx: &Context) nothrow -> Optional<Principal> {
+	if ctx.has_principal {
+		return Optional::Some(Principal(sub = ctx.principal_sub));
+	}
+	return Optional<Principal>::None();
+}

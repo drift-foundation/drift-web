@@ -1,0 +1,121 @@
+module web.rest
+
+import std.core as core;
+import std.json as json;
+import web.jwt as jwt;
+import web.rest.errors as errors;
+import web.rest.response as response;
+import web.rest.context as context;
+import web.rest.request as request;
+import web.rest.jwt_guard as jwt_guard;
+
+export {
+	RestError,
+	Response,
+	Request,
+	Context,
+	Principal,
+	EVENT_REQUEST_INVALID,
+	EVENT_UNAUTHORIZED,
+	EVENT_FORBIDDEN,
+	EVENT_NOT_FOUND,
+	EVENT_CONFLICT,
+	EVENT_INTERNAL,
+	TAG_INTERNAL_ERROR,
+	rest_error,
+	add_field,
+	json_response,
+	error_envelope,
+	new_context,
+	new_request,
+	add_query_param,
+	set_principal,
+	get_principal,
+	require_principal,
+	query_param,
+	require_query_param,
+	body_json,
+	require_body_json,
+	jwt_guard_apply
+};
+
+pub type RestError = errors.RestError;
+pub type Response = response.Response;
+pub type Request = request.Request;
+pub type Context = context.Context;
+pub type Principal = context.Principal;
+
+pub const EVENT_REQUEST_INVALID: String = "request-invalid";
+pub const EVENT_UNAUTHORIZED: String = "unauthorized";
+pub const EVENT_FORBIDDEN: String = "forbidden";
+pub const EVENT_NOT_FOUND: String = "not-found";
+pub const EVENT_CONFLICT: String = "conflict";
+pub const EVENT_INTERNAL: String = "internal";
+pub const TAG_INTERNAL_ERROR: String = "internal-error";
+
+pub fn rest_error(status: Int, event: String, tag: String, message: String) nothrow -> RestError {
+	return errors.rest_error(status, event, tag, message);
+}
+
+pub fn add_field(err: &mut RestError, key: String, value: String) nothrow -> Void {
+	return errors.add_field(err, key, value);
+}
+
+pub fn json_response(status: Int, body: String) nothrow -> Response {
+	return response.json_response(status, body);
+}
+
+pub fn error_envelope(err: &RestError, event_id: &String) nothrow -> Response {
+	return response.error_envelope(err, event_id);
+}
+
+pub fn new_context() nothrow -> Context {
+	return context.new_context();
+}
+
+pub fn new_request(method: String, path: String) nothrow -> Request {
+	return request.new_request(method, path);
+}
+
+pub fn add_query_param(req: &mut Request, key: String, value: String) nothrow -> Void {
+	return request.add_query_param(req, key, value);
+}
+
+pub fn set_principal(ctx: &mut Context, sub: String) nothrow -> Void {
+	return context.set_principal(ctx, sub);
+}
+
+pub fn get_principal(ctx: &Context) nothrow -> Optional<Principal> {
+	return context.get_principal(ctx);
+}
+
+pub fn require_principal(ctx: &Context) nothrow -> core.Result<Principal, RestError> {
+	match context.get_principal(ctx) {
+		Optional::Some(p) => {
+			return core.Result::Ok(p);
+		},
+		Optional::None => {
+			return core.Result::Err(errors.rest_error(401, "unauthorized", "missing-principal", "no authenticated principal in context"));
+		}
+	}
+}
+
+pub fn query_param(req: &Request, name: &String) nothrow -> Optional<String> {
+	return request.query_param(req, name);
+}
+
+pub fn require_query_param(req: &Request, name: &String) nothrow -> core.Result<String, RestError> {
+	return request.require_query_param(req, name);
+}
+
+pub fn body_json(req: &Request) nothrow -> core.Result<json.JsonNode, RestError> {
+	return request.body_json(req);
+}
+
+pub fn require_body_json(req: &Request) nothrow -> core.Result<json.JsonNode, RestError> {
+	return request.require_body_json(req);
+}
+
+pub fn jwt_guard_apply(token: &String, secret: &Array<Byte>, now_unix: Int, policy: &jwt.JwtVerifyPolicy, ctx: &mut Context) nothrow -> core.Result<Void, RestError> {
+	return jwt_guard.jwt_guard_apply(token, secret, now_unix, policy, ctx);
+}

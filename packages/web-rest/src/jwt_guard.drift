@@ -1,0 +1,86 @@
+module web.rest.jwt_guard
+
+import std.core as core;
+import std.json as json;
+import web.jwt as jwt;
+import web.rest.errors as errors;
+import web.rest.context as context;
+
+export {
+	jwt_guard_apply
+};
+
+// Map a JWT error tag to the appropriate REST error.
+// Per plan.md JWT Middleware Mapping Contract:
+//   -> RestUnauthorized (401): jwt-signature-mismatch, jwt-expired, jwt-not-before, jwt-issued-at-future
+//   -> RestBadRequest (400): jwt-invalid-format, jwt-invalid-segment, jwt-invalid-header-json,
+//                            jwt-invalid-payload-json, jwt-unsupported-alg, jwt-missing-alg,
+//                            jwt-claim-invalid-type, jwt-header-typ-mismatch
+//   -> Unknown tags default to RestUnauthorized (fail-closed)
+fn _map_jwt_error(e: &jwt.JwtError) nothrow -> errors.RestError {
+	if e.tag == "jwt-invalid-format" {
+		return errors.rest_error(400, "request-invalid", e.tag, e.message);
+	}
+	if e.tag == "jwt-invalid-segment" {
+		return errors.rest_error(400, "request-invalid", e.tag, e.message);
+	}
+	if e.tag == "jwt-invalid-header-json" {
+		return errors.rest_error(400, "request-invalid", e.tag, e.message);
+	}
+	if e.tag == "jwt-invalid-payload-json" {
+		return errors.rest_error(400, "request-invalid", e.tag, e.message);
+	}
+	if e.tag == "jwt-unsupported-alg" {
+		return errors.rest_error(400, "request-invalid", e.tag, e.message);
+	}
+	if e.tag == "jwt-missing-alg" {
+		return errors.rest_error(400, "request-invalid", e.tag, e.message);
+	}
+	if e.tag == "jwt-claim-invalid-type" {
+		return errors.rest_error(400, "request-invalid", e.tag, e.message);
+	}
+	if e.tag == "jwt-header-typ-mismatch" {
+		return errors.rest_error(400, "request-invalid", e.tag, e.message);
+	}
+	// jwt-signature-mismatch, jwt-expired, jwt-not-before, jwt-issued-at-future,
+	// and any unknown/future tags -> 401 unauthorized (fail-closed)
+	return errors.rest_error(401, "unauthorized", e.tag, e.message);
+}
+
+// Apply JWT HS256 guard to a token string.
+// On success, stores the principal (sub claim from payload) in context.
+// On failure, returns the mapped RestError.
+pub fn jwt_guard_apply(token: &String, secret: &Array<Byte>, now_unix: Int, policy: &jwt.JwtVerifyPolicy, ctx: &mut context.Context) nothrow -> core.Result<Void, errors.RestError> {
+	match jwt.verify_hs256(token, secret, now_unix, policy) {
+		core.Result::Err(jwt_err) => {
+			return core.Result::Err(_map_jwt_error(&jwt_err));
+		},
+		core.Result::Ok(verified) => {
+			// Extract sub from payload JSON.
+			match json.parse(&verified.payload_json) {
+				core.Result::Err(_) => {
+					return core.Result::Err(errors.rest_error(500, "internal", "payload-parse-failed", "verified payload is not valid JSON"));
+				},
+				core.Result::Ok(payload_node) => {
+					val sub_key = "sub";
+					match payload_node.get(&sub_key) {
+						Optional::None => {
+							context.set_principal(ctx, "");
+						},
+						Optional::Some(sub_node) => {
+							match sub_node.as_string() {
+								Optional::None => {
+									context.set_principal(ctx, "");
+								},
+								Optional::Some(sub_val) => {
+									context.set_principal(ctx, sub_val);
+								}
+							}
+						}
+					}
+					return core.Result::Ok(core.void_value());
+				}
+			}
+		}
+	}
+}

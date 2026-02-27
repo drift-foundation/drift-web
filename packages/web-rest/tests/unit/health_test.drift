@@ -1,0 +1,71 @@
+module web.rest.tests.unit.health_test
+
+import std.core as core;
+import std.json as json;
+import web.rest as rest;
+
+// Story 1: GET /health success
+// The health endpoint returns 200 with a JSON body containing {"ok":true}.
+// This tests the simplest handler path: no auth, no middleware, just a response.
+
+fn _health_handler() nothrow -> rest.Response {
+	return rest.json_response(200, "{\"ok\":true}");
+}
+
+// Scenario: health handler returns status 200.
+fn scenario_health_status_200() nothrow -> Int {
+	val resp = _health_handler();
+	if resp.status != 200 { return 101; }
+	return 0;
+}
+
+// Scenario: health response body is valid JSON.
+fn scenario_health_body_valid_json() nothrow -> Int {
+	val resp = _health_handler();
+	match json.parse(&resp.body) {
+		core.Result::Ok(_) => { return 0; },
+		core.Result::Err(_) => { return 201; }
+	}
+}
+
+// Scenario: health response body contains ok=true.
+fn scenario_health_body_ok_true() nothrow -> Int {
+	val resp = _health_handler();
+	match json.parse(&resp.body) {
+		core.Result::Ok(node) => {
+			val ok_key = "ok";
+			match node.get(&ok_key) {
+				Optional::None => { return 301; },
+				Optional::Some(ok_node) => {
+					match ok_node.as_bool() {
+						Optional::None => { return 302; },
+						Optional::Some(v) => {
+							if not v { return 303; }
+							return 0;
+						}
+					}
+				}
+			}
+		},
+		core.Result::Err(_) => { return 304; }
+	}
+}
+
+// Scenario: json_response constructs body exactly as provided (no envelope wrapping).
+fn scenario_health_body_exact() nothrow -> Int {
+	val resp = _health_handler();
+	if resp.body != "{\"ok\":true}" { return 401; }
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	val a = scenario_health_status_200();
+	if a != 0 { return a; }
+	val b = scenario_health_body_valid_json();
+	if b != 0 { return b; }
+	val c = scenario_health_body_ok_true();
+	if c != 0 { return c; }
+	val d = scenario_health_body_exact();
+	if d != 0 { return d; }
+	return 0;
+}

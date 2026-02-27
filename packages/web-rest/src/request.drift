@@ -1,0 +1,89 @@
+module web.rest.request
+
+import std.core as core;
+import std.io as io;
+import std.json as json;
+import web.rest.errors as errors;
+
+export {
+	Request,
+	new_request,
+	add_query_param,
+	query_param,
+	require_query_param,
+	body_json,
+	require_body_json
+};
+
+pub struct Request {
+	pub method: String,
+	pub path: String,
+	pub body: String,
+	pub param_keys: Array<String>,
+	pub param_values: Array<String>
+}
+
+pub fn new_request(method: String, path: String) nothrow -> Request {
+	var keys: Array<String> = [];
+	var values: Array<String> = [];
+	return Request(method = method, path = path, body = "", param_keys = move keys, param_values = move values);
+}
+
+pub fn add_query_param(req: &mut Request, key: String, value: String) nothrow -> Void {
+	req.param_keys.push(move key);
+	req.param_values.push(move value);
+	return core.void_value();
+}
+
+fn _dup_string(s: &String) nothrow -> String {
+	val n = s.byte_length();
+	var b = io.buffer(n);
+	var i = 0;
+	while i < n {
+		io.buffer_write(&mut b, i, core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&b), n);
+}
+
+pub fn query_param(req: &Request, name: &String) nothrow -> Optional<String> {
+	var i = 0;
+	while i < req.param_keys.len {
+		if req.param_keys[i] == *name {
+			return Optional::Some(_dup_string(&req.param_values[i]));
+		}
+		i = i + 1;
+	}
+	return Optional<String>::None();
+}
+
+pub fn require_query_param(req: &Request, name: &String) nothrow -> core.Result<String, errors.RestError> {
+	match query_param(req, name) {
+		Optional::Some(v) => {
+			return core.Result::Ok(v);
+		},
+		Optional::None => {
+			var err = errors.rest_error(400, "request-invalid", "missing-query-param", "missing required query parameter");
+			errors.add_field(&mut err, _dup_string(name), "required");
+			return core.Result::Err(err);
+		}
+	}
+}
+
+pub fn body_json(req: &Request) nothrow -> core.Result<json.JsonNode, errors.RestError> {
+	if req.body.byte_length() == 0 {
+		return core.Result::Err(errors.rest_error(400, "request-invalid", "missing-body", "request body is empty"));
+	}
+	match json.parse(&req.body) {
+		core.Result::Ok(node) => {
+			return core.Result::Ok(move node);
+		},
+		core.Result::Err(_) => {
+			return core.Result::Err(errors.rest_error(400, "request-invalid", "malformed-json", "request body is not valid JSON"));
+		}
+	}
+}
+
+pub fn require_body_json(req: &Request) nothrow -> core.Result<json.JsonNode, errors.RestError> {
+	return body_json(req);
+}

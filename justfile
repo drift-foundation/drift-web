@@ -2,6 +2,7 @@
 test:
     @just jwt-check-par
     @just jwt-e2e-par
+    @just rest-check-par
 
 # All JWT unit tests (parallel compile, serial run).
 jwt-check-par:
@@ -36,6 +37,30 @@ jwt-compile-check-par:
     @tools/drift_test_parallel_runner.sh compile \
       --src-root packages/web-jwt/src \
       --test-root packages/web-jwt/tests/unit \
+      --target-word-bits 64
+
+# All REST unit tests (parallel compile, serial run).
+rest-check-par:
+    @tools/drift_test_parallel_runner.sh run-all \
+      --src-root packages/web-jwt/src \
+      --src-root packages/web-rest/src \
+      --test-root packages/web-rest/tests/unit \
+      --target-word-bits 64
+
+# Single REST unit test.
+rest-check-unit FILE:
+    @tools/drift_test_parallel_runner.sh run-one \
+      --src-root packages/web-jwt/src \
+      --src-root packages/web-rest/src \
+      --test-file "{{FILE}}" \
+      --target-word-bits 64
+
+# Compile-only check for REST (no execution).
+rest-compile-check FILE="packages/web-rest/src/lib.drift":
+    @tools/drift_test_parallel_runner.sh compile \
+      --src-root packages/web-jwt/src \
+      --src-root packages/web-rest/src \
+      --file "{{FILE}}" \
       --target-word-bits 64
 
 # Show driftc version info.

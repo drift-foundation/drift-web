@@ -14,3 +14,12 @@
   - Temporal-claim arithmetic hardening with bounded timestamp clamping and typed `Optional` inference fix.
 - Validation:
   - `just jwt-check-par` passed (5/5 unit tests).
+- Added REST UX-first artifacts:
+  - `docs/effective-web-rest.md`
+  - `work/rest/plan.md`
+  - `work/rest/progress.md`
+- Delivered REST acceptance-test skeleton and minimal story-driven `web-rest` surface:
+  - `packages/web-rest/src/{lib,errors,response,context,request,jwt_guard}.drift`
+  - REST unit tests: `health_test`, `jwt_guard_test`, `validation_test`, `repro_array_push_struct_field`
+- Validation:
+  - `just test` passed (JWT unit + JWT e2e + REST unit suite).
