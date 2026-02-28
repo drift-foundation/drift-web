@@ -7,11 +7,17 @@ Status: UX-first draft. This document is the source for acceptance tests before 
 ## Design Intent
 
 - Primary app UX: throws-style handlers.
-- Advanced path: `nothrow + Result` handlers.
+- Post-MVP extension: public `nothrow + Result` handler registration.
 - Single bootstrap path: builder only.
 - Middleware is explicit:
   - `filter(...)` for enrichment/observability
   - `guard(...)` for access/precondition gates
+
+Pinned public/normalized callback types:
+- `RestHandler = fn(req: &Request, ctx: &mut Context) -> Response`
+- `RestFilter = fn(req: &Request, ctx: &mut Context) nothrow -> core.Result<Void, rest.RestError>`
+- `RestGuard = fn(req: &Request, ctx: &mut Context) nothrow -> core.Result<Void, rest.RestError>`
+- Internal router callback: `RestRouteCallback = fn(req: &Request, ctx: &mut Context) nothrow -> core.Result<Response, rest.RestError>`
 
 ## Canonical Bootstrap Shape
 
@@ -61,7 +67,7 @@ fn main() nothrow -> Int {
 }
 ```
 
-## Same Behavior (Result-Style Advanced)
+## Same Behavior (Result-Style Advanced, Post-MVP)
 
 ```drift
 import std.core as core;
@@ -74,6 +80,8 @@ fn me_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result
 	}
 }
 ```
+
+This style remains documented for contract continuity, but public route registration for it is deferred until after MVP.
 
 ## Request Accessors
 

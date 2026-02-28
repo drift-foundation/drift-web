@@ -39,22 +39,28 @@ Known-error surface rule (explicit):
 - The framework only treats enumerated REST event types as public error surface.
 - Any non-enumerated/unexpected thrown event is treated as internal and mapped to a sanitized 500.
 
-## Proposed Handler Signatures (Draft)
+## Callback Type Contracts (Pinned)
 
-Core/internal:
-- `fn dispatch(...) nothrow -> core.Result<Response, RestError>`
-- `fn run_middleware(...) nothrow -> core.Result<Void, RestError>`
+### Public handler type (MVP)
+- `type RestHandler = fn(req: &Request, ctx: &mut Context) -> Response`
+  - Throws-style: handler code may throw typed REST events.
+  - This is the only public handler registration surface in MVP.
 
-App-facing ergonomic handler:
-- `type RouteHandler = fn(req: &Request, ctx: &mut Context) -> Response`
-  where handler code may throw typed REST events.
+### Public Result-style handler (Deferred — post-MVP)
+- `type RestHandlerResult = fn(req: &Request, ctx: &mut Context) nothrow -> core.Result<Response, RestError>`
+  - Documented as post-MVP contract continuity; not exposed in MVP registration API.
 
-App-facing strict alternative:
-- `type RouteHandlerResult = fn(req: &Request, ctx: &mut Context) nothrow -> core.Result<Response, RestError>`
+### Internal normalized router callback
+- `type RestRouteCallback = fn(req: &Request, ctx: &mut Context) nothrow -> core.Result<Response, RestError>`
+  - Router stores one normalized callback form.
+  - Throws-style handlers are adapted at registration time, not dispatch time.
 
-Storage/dispatch model (pinned for MVP):
+### Adapter contracts
+- MVP: RestHandler → RestRouteCallback adapter (registration-time normalization via try/catch wrapper).
+- Post-MVP: RestHandlerResult → RestRouteCallback adapter (trivial identity mapping).
+
+### Storage/dispatch model (pinned for MVP)
 - Router stores handlers as callback types (heterogeneous route table).
-- Throws-style handlers are adapted to a nothrow dispatch form at registration time, not at hot-path dispatch.
 - Bottom line for framework internals: routing/middleware/handler execution is dynamic callback dispatch.
 - Generic/static dispatch may be used in helper builders, but not in the runtime route table.
 
@@ -85,7 +91,7 @@ Storage/dispatch model (pinned for MVP):
 
 5. Handler style emphasis:
    - throws-style handlers are primary UX in docs/examples
-   - `nothrow + Result` handlers are supported from day one as advanced path
+   - public `nothrow + Result` handler registration is deferred until after MVP
 
 ## REST Events and HTTP Mapping (Draft)
 
@@ -206,10 +212,16 @@ Middleware composition model (pinned for MVP):
 
 Guard execution contract (pinned for MVP):
 - Guards are framework-internal `nothrow + Result` components:
-  - `Guard.apply(req, ctx) nothrow -> core.Result<Void, RestError>`
+  - `type RestGuard = fn(req: &Request, ctx: &mut Context) nothrow -> core.Result<Void, RestError>`
 - Guards do not throw directly in MVP.
 - Guard errors are mapped by the framework boundary using the same deterministic envelope policy as other `RestError` paths.
 - This keeps middleware/guard layer aligned with low-level nonthrow rule while handlers remain ergonomic throw-surface.
+
+Filter execution contract (pinned for MVP):
+- Filters are framework-internal `nothrow + Result` components:
+  - `type RestFilter = fn(req: &Request, ctx: &mut Context) nothrow -> core.Result<Void, RestError>`
+- Filters do not terminate normal flow unless they return `Err(RestError)`.
+- Filters and guards share uniform callback arity: `(&Request, &mut Context)`.
 
 ## Request/Response Shape (Initial Draft)
 
@@ -267,12 +279,20 @@ Error `fields` type (pinned for MVP):
 
 ## Open Questions (UX-first)
 
-1. Final callback type names and exact callback signatures.
-2. Whether outbound filters ship in MVP or immediately after MVP.
+1. Whether outbound filters ship in MVP or immediately after MVP.
+
+## Completed Milestones
+
+1. UX stories and API examples: `docs/effective-web-rest.md`
+2. UX acceptance tests: 3 stories (health, jwt_guard, validation) — all passing
+3. JWT tag-mapping coverage: all 14 tags + unknown-tag fail-closed path
+4. Validation-error tests: structured `fields` payload verified
+5. Callback type contracts: all names and signatures pinned (RestHandler, RestFilter, RestGuard, RestRouteCallback)
+6. Request headers: added to skeleton; JWT guard extracts `Authorization: Bearer` from request
 
 ## Next Step
 
-1. Write one pinned “hello API” UX spec with both handler styles.
-2. Write UX acceptance tests for the 3 MVP stories before internal implementation.
-3. Add explicit JWT tag-mapping acceptance tests (all known tags + unknown-tag default path).
-4. Add validation-error acceptance tests asserting structured `fields` payload behavior.
+1. Resolve upstream driftc 0.8.0-dev stdlib regression (std.json/regex broken) — blocks all compilation.
+2. Implement internal REST framework machinery: router, builder, middleware chain, handler dispatch.
+3. Wire throws-handler → RestRouteCallback adapter.
+4. Add HTTP listener integration (TCP accept loop + request parsing).

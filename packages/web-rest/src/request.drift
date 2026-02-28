@@ -9,10 +9,16 @@ export {
 	Request,
 	new_request,
 	add_query_param,
+	add_header,
+	header,
 	query_param,
 	require_query_param,
 	body_json,
-	require_body_json
+	require_body_json,
+	add_path_param,
+	clear_path_params,
+	path_param,
+	require_path_param
 };
 
 pub struct Request {
@@ -20,19 +26,72 @@ pub struct Request {
 	pub path: String,
 	pub body: String,
 	pub param_keys: Array<String>,
-	pub param_values: Array<String>
+	pub param_values: Array<String>,
+	pub header_keys: Array<String>,
+	pub header_values: Array<String>,
+	pub path_param_keys: Array<String>,
+	pub path_param_values: Array<String>
 }
 
 pub fn new_request(method: String, path: String) nothrow -> Request {
 	var keys: Array<String> = [];
 	var values: Array<String> = [];
-	return Request(method = method, path = path, body = "", param_keys = move keys, param_values = move values);
+	var hk: Array<String> = [];
+	var hv: Array<String> = [];
+	var ppk: Array<String> = [];
+	var ppv: Array<String> = [];
+	return Request(method = method, path = path, body = "", param_keys = move keys, param_values = move values, header_keys = move hk, header_values = move hv, path_param_keys = move ppk, path_param_values = move ppv);
 }
 
 pub fn add_query_param(req: &mut Request, key: String, value: String) nothrow -> Void {
 	req.param_keys.push(move key);
 	req.param_values.push(move value);
 	return core.void_value();
+}
+
+pub fn add_header(req: &mut Request, key: String, value: String) nothrow -> Void {
+	req.header_keys.push(move key);
+	req.header_values.push(move value);
+	return core.void_value();
+}
+
+// Lowercase a single ASCII byte: A-Z (65-90) → a-z (97-122).
+fn _ascii_lower(b: Byte) nothrow -> Int {
+	val v = cast<Int>(b);
+	if v >= 65 {
+		if v <= 90 {
+			return v + 32;
+		}
+	}
+	return v;
+}
+
+// ASCII case-insensitive comparison for HTTP header names (RFC 7230).
+fn _ascii_eq_ignore_case(a: &String, b: &String) nothrow -> Bool {
+	if a.byte_length() != b.byte_length() {
+		return false;
+	}
+	var i = 0;
+	while i < a.byte_length() {
+		val la = _ascii_lower(core.string_byte_at(a, i));
+		val lb = _ascii_lower(core.string_byte_at(b, i));
+		if la != lb {
+			return false;
+		}
+		i = i + 1;
+	}
+	return true;
+}
+
+pub fn header(req: &Request, name: &String) nothrow -> Optional<String> {
+	var i = 0;
+	while i < req.header_keys.len {
+		if _ascii_eq_ignore_case(&req.header_keys[i], name) {
+			return Optional::Some(_dup_string(&req.header_values[i]));
+		}
+		i = i + 1;
+	}
+	return Optional<String>::None();
 }
 
 fn _dup_string(s: &String) nothrow -> String {
@@ -86,4 +145,33 @@ pub fn body_json(req: &Request) nothrow -> core.Result<json.JsonNode, errors.Res
 
 pub fn require_body_json(req: &Request) nothrow -> core.Result<json.JsonNode, errors.RestError> {
 	return body_json(req);
+}
+
+pub fn add_path_param(req: &mut Request, key: String, value: String) nothrow -> Void {
+	req.path_param_keys.push(move key);
+	req.path_param_values.push(move value);
+	return core.void_value();
+}
+
+pub fn clear_path_params(req: &mut Request) nothrow -> Void {
+	var empty_keys: Array<String> = [];
+	var empty_values: Array<String> = [];
+	req.path_param_keys = move empty_keys;
+	req.path_param_values = move empty_values;
+	return core.void_value();
+}
+
+pub fn path_param(req: &Request, name: &String) nothrow -> core.Result<String, errors.RestError> {
+	var i = 0;
+	while i < req.path_param_keys.len {
+		if req.path_param_keys[i] == *name {
+			return core.Result::Ok(_dup_string(&req.path_param_values[i]));
+		}
+		i = i + 1;
+	}
+	return core.Result::Err(errors.rest_error(404, "not-found", "missing-path-param", "missing required path parameter"));
+}
+
+pub fn require_path_param(req: &Request, name: &String) nothrow -> core.Result<String, errors.RestError> {
+	return path_param(req, name);
 }

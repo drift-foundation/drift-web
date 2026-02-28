@@ -7,6 +7,8 @@ import web.rest as rest;
 
 // Story 2: GET /v1/me — JWT guard unauthorized/authorized flows.
 // Tests JWT middleware mapping from jwt.JwtError.tag to RestError event/tag/status.
+// Guard now uses RestGuard-compatible contract: (config, req, ctx).
+// Token is extracted from Authorization: Bearer <token> header on Request.
 
 fn _test_secret() nothrow -> Array<Byte> {
 	var s: Array<Byte> = [];
@@ -40,6 +42,10 @@ fn _default_policy() nothrow -> jwt.JwtVerifyPolicy {
 	}
 }
 
+fn _default_config() nothrow -> rest.JwtGuardConfig {
+	return rest.new_jwt_guard_config(_test_secret(), _default_policy());
+}
+
 fn _sign_token(payload: &String) nothrow -> core.Result<String, jwt.JwtError> {
 	val header = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}";
 	var secret = _test_secret();
@@ -52,6 +58,47 @@ fn _valid_token() nothrow -> core.Result<String, jwt.JwtError> {
 	return _sign_token(&payload);
 }
 
+fn _bearer_request(token: &String) nothrow -> rest.Request {
+	var req = rest.new_request("GET", "/v1/me");
+	rest.add_header(&mut req, "Authorization", "Bearer " + *token);
+	return move req;
+}
+
+// --- Scenario: missing Authorization header → 401 unauthorized ---
+
+fn scenario_missing_authorization() nothrow -> Int {
+	val config = _default_config();
+	val req = rest.new_request("GET", "/v1/me");
+	var ctx = rest.new_context();
+	match rest.jwt_guard_apply(&config, &req, &mut ctx) {
+		core.Result::Ok(_) => { return 1301; },
+		core.Result::Err(e) => {
+			if e.status != 401 { return 1302; }
+			if e.event != "unauthorized" { return 1303; }
+			if e.tag != "missing-authorization" { return 1304; }
+			return 0;
+		}
+	}
+}
+
+// --- Scenario: invalid Authorization format (not Bearer) → 400 request-invalid ---
+
+fn scenario_invalid_authorization_format() nothrow -> Int {
+	val config = _default_config();
+	var req = rest.new_request("GET", "/v1/me");
+	rest.add_header(&mut req, "Authorization", "Basic dXNlcjpwYXNz");
+	var ctx = rest.new_context();
+	match rest.jwt_guard_apply(&config, &req, &mut ctx) {
+		core.Result::Ok(_) => { return 1401; },
+		core.Result::Err(e) => {
+			if e.status != 400 { return 1402; }
+			if e.event != "request-invalid" { return 1403; }
+			if e.tag != "invalid-authorization-format" { return 1404; }
+			return 0;
+		}
+	}
+}
+
 // --- Scenario: valid token → guard passes, principal extracted ---
 
 fn scenario_valid_token_authorized() nothrow -> Int {
@@ -60,10 +107,10 @@ fn scenario_valid_token_authorized() nothrow -> Int {
 		core.Result::Ok(v) => { token = move v; },
 		core.Result::Err(_) => { return 101; }
 	}
-	var secret = _test_secret();
-	val policy = _default_policy();
+	val config = _default_config();
+	val req = _bearer_request(&token);
 	var ctx = rest.new_context();
-	match rest.jwt_guard_apply(&token, &secret, 0, &policy, &mut ctx) {
+	match rest.jwt_guard_apply(&config, &req, &mut ctx) {
 		core.Result::Ok(_) => {},
 		core.Result::Err(_) => { return 102; }
 	}
@@ -84,10 +131,10 @@ fn scenario_me_handler_success() nothrow -> Int {
 		core.Result::Ok(v) => { token = move v; },
 		core.Result::Err(_) => { return 201; }
 	}
-	var secret = _test_secret();
-	val policy = _default_policy();
+	val config = _default_config();
+	val req = _bearer_request(&token);
 	var ctx = rest.new_context();
-	match rest.jwt_guard_apply(&token, &secret, 0, &policy, &mut ctx) {
+	match rest.jwt_guard_apply(&config, &req, &mut ctx) {
 		core.Result::Ok(_) => {},
 		core.Result::Err(_) => { return 202; }
 	}
@@ -126,11 +173,11 @@ fn scenario_expired_token_unauthorized() nothrow -> Int {
 		core.Result::Ok(v) => { token = move v; },
 		core.Result::Err(_) => { return 401; }
 	}
-	var secret = _test_secret();
-	val policy = _default_policy();
+	var config = _default_config();
+	config.now_unix = 1700099000;
+	val req = _bearer_request(&token);
 	var ctx = rest.new_context();
-	// now_unix well past exp
-	match rest.jwt_guard_apply(&token, &secret, 1700099000, &policy, &mut ctx) {
+	match rest.jwt_guard_apply(&config, &req, &mut ctx) {
 		core.Result::Ok(_) => { return 402; },
 		core.Result::Err(e) => {
 			if e.status != 401 { return 403; }
@@ -149,10 +196,10 @@ fn scenario_signature_mismatch_unauthorized() nothrow -> Int {
 		core.Result::Ok(v) => { token = move v; },
 		core.Result::Err(_) => { return 501; }
 	}
-	var wrong = _wrong_secret();
-	val policy = _default_policy();
+	val config = rest.new_jwt_guard_config(_wrong_secret(), _default_policy());
+	val req = _bearer_request(&token);
 	var ctx = rest.new_context();
-	match rest.jwt_guard_apply(&token, &wrong, 0, &policy, &mut ctx) {
+	match rest.jwt_guard_apply(&config, &req, &mut ctx) {
 		core.Result::Ok(_) => { return 502; },
 		core.Result::Err(e) => {
 			if e.status != 401 { return 503; }
@@ -172,10 +219,11 @@ fn scenario_not_before_unauthorized() nothrow -> Int {
 		core.Result::Ok(v) => { token = move v; },
 		core.Result::Err(_) => { return 601; }
 	}
-	var secret = _test_secret();
-	val policy = _default_policy();
+	var config = _default_config();
+	config.now_unix = 1700000000;
+	val req = _bearer_request(&token);
 	var ctx = rest.new_context();
-	match rest.jwt_guard_apply(&token, &secret, 1700000000, &policy, &mut ctx) {
+	match rest.jwt_guard_apply(&config, &req, &mut ctx) {
 		core.Result::Ok(_) => { return 602; },
 		core.Result::Err(e) => {
 			if e.status != 401 { return 603; }
@@ -195,10 +243,11 @@ fn scenario_iat_future_unauthorized() nothrow -> Int {
 		core.Result::Ok(v) => { token = move v; },
 		core.Result::Err(_) => { return 701; }
 	}
-	var secret = _test_secret();
-	val policy = _default_policy();
+	var config = _default_config();
+	config.now_unix = 1700000000;
+	val req = _bearer_request(&token);
 	var ctx = rest.new_context();
-	match rest.jwt_guard_apply(&token, &secret, 1700000000, &policy, &mut ctx) {
+	match rest.jwt_guard_apply(&config, &req, &mut ctx) {
 		core.Result::Ok(_) => { return 702; },
 		core.Result::Err(e) => {
 			if e.status != 401 { return 703; }
@@ -212,11 +261,11 @@ fn scenario_iat_future_unauthorized() nothrow -> Int {
 // --- Scenario: invalid format (no dots) → 400 request-invalid ---
 
 fn scenario_invalid_format_bad_request() nothrow -> Int {
-	val bad_token = "not-a-jwt";
-	var secret = _test_secret();
-	val policy = _default_policy();
+	val config = _default_config();
+	var req = rest.new_request("GET", "/v1/me");
+	rest.add_header(&mut req, "Authorization", "Bearer not-a-jwt");
 	var ctx = rest.new_context();
-	match rest.jwt_guard_apply(&bad_token, &secret, 0, &policy, &mut ctx) {
+	match rest.jwt_guard_apply(&config, &req, &mut ctx) {
 		core.Result::Ok(_) => { return 801; },
 		core.Result::Err(e) => {
 			if e.status != 400 { return 802; }
@@ -230,16 +279,15 @@ fn scenario_invalid_format_bad_request() nothrow -> Int {
 // --- Scenario: invalid segment (bad base64url) → 400 request-invalid ---
 
 fn scenario_invalid_segment_bad_request() nothrow -> Int {
-	val bad_token = "====.====.====";
-	var secret = _test_secret();
-	val policy = _default_policy();
+	val config = _default_config();
+	var req = rest.new_request("GET", "/v1/me");
+	rest.add_header(&mut req, "Authorization", "Bearer ====.====.====");
 	var ctx = rest.new_context();
-	match rest.jwt_guard_apply(&bad_token, &secret, 0, &policy, &mut ctx) {
+	match rest.jwt_guard_apply(&config, &req, &mut ctx) {
 		core.Result::Ok(_) => { return 901; },
 		core.Result::Err(e) => {
 			if e.status != 400 { return 902; }
 			if e.event != "request-invalid" { return 903; }
-			// Could be jwt-invalid-segment or jwt-invalid-format
 			if e.tag != "jwt-invalid-segment" { return 904; }
 			return 0;
 		}
@@ -249,24 +297,16 @@ fn scenario_invalid_segment_bad_request() nothrow -> Int {
 // --- Scenario: unsupported alg → 400 request-invalid ---
 
 fn scenario_unsupported_alg_bad_request() nothrow -> Int {
-	// Craft a token with alg=none by signing with enforce_typ_jwt=false
 	val header = "{\"alg\":\"none\",\"typ\":\"JWT\"}";
 	val payload = "{\"sub\":\"u1\"}";
 	var secret = _test_secret();
 	var opts = jwt.new_sign_options();
-	// sign_hs256 validates alg=HS256 at sign time, so this should fail at sign
 	match jwt.sign_hs256(&header, &payload, &secret, &opts) {
 		core.Result::Ok(_) => { return 1001; },
 		core.Result::Err(e) => {
 			if e.tag != "jwt-unsupported-alg" { return 1002; }
 		}
 	}
-	// Verify: the jwt_guard would map this to 400 request-invalid
-	// We test the mapping via the error we got from jwt directly
-	// by constructing a verify-side test with a malformed token
-	// whose header has wrong alg after decode.
-	// For now, the sign-time rejection confirms the tag is correct.
-	// The guard mapping is tested structurally via the other scenarios.
 	return 0;
 }
 
@@ -277,7 +317,6 @@ fn scenario_error_envelope_unauthorized() nothrow -> Int {
 	val event_id = "evt-test-001";
 	val resp = rest.error_envelope(&err, &event_id);
 	if resp.status != 401 { return 1101; }
-	// Parse the envelope body and check fields
 	match json.parse(&resp.body) {
 		core.Result::Err(_) => { return 1102; },
 		core.Result::Ok(node) => {
@@ -341,9 +380,10 @@ fn scenario_typ_mismatch_bad_request() nothrow -> Int {
 		core.Result::Ok(v) => { token = move v; },
 		core.Result::Err(_) => { return 1201; }
 	}
-	val policy = _default_policy();
+	val config = rest.new_jwt_guard_config(_test_secret(), _default_policy());
+	val req = _bearer_request(&token);
 	var ctx = rest.new_context();
-	match rest.jwt_guard_apply(&token, &secret, 0, &policy, &mut ctx) {
+	match rest.jwt_guard_apply(&config, &req, &mut ctx) {
 		core.Result::Ok(_) => { return 1202; },
 		core.Result::Err(e) => {
 			if e.status != 400 { return 1203; }
@@ -354,7 +394,36 @@ fn scenario_typ_mismatch_bad_request() nothrow -> Int {
 	}
 }
 
+// --- Scenario: lowercase "authorization" header → guard still works (RFC 7230) ---
+
+fn scenario_lowercase_authorization_header() nothrow -> Int {
+	var token = "";
+	match _valid_token() {
+		core.Result::Ok(v) => { token = move v; },
+		core.Result::Err(_) => { return 1501; }
+	}
+	val config = _default_config();
+	var req = rest.new_request("GET", "/v1/me");
+	rest.add_header(&mut req, "authorization", "Bearer " + token);
+	var ctx = rest.new_context();
+	match rest.jwt_guard_apply(&config, &req, &mut ctx) {
+		core.Result::Ok(_) => {},
+		core.Result::Err(_) => { return 1502; }
+	}
+	match rest.get_principal(&ctx) {
+		Optional::None => { return 1503; },
+		Optional::Some(p) => {
+			if p.sub != "user-42" { return 1504; }
+		}
+	}
+	return 0;
+}
+
 fn main() nothrow -> Int {
+	val ma = scenario_missing_authorization();
+	if ma != 0 { return ma; }
+	val ia = scenario_invalid_authorization_format();
+	if ia != 0 { return ia; }
 	val a = scenario_valid_token_authorized();
 	if a != 0 { return a; }
 	val b = scenario_me_handler_success();
@@ -379,5 +448,7 @@ fn main() nothrow -> Int {
 	if k != 0 { return k; }
 	val l = scenario_typ_mismatch_bad_request();
 	if l != 0 { return l; }
+	val m = scenario_lowercase_authorization_header();
+	if m != 0 { return m; }
 	return 0;
 }

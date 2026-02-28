@@ -1,14 +1,57 @@
 module web.rest.jwt_guard
 
 import std.core as core;
+import std.io as io;
 import std.json as json;
+import std.time as time;
 import web.jwt as jwt;
 import web.rest.errors as errors;
 import web.rest.context as context;
+import web.rest.request as request;
 
 export {
+	JwtGuardConfig,
+	new_jwt_guard_config,
 	jwt_guard_apply
 };
+
+// now_unix semantics: 0 = use real clock (std.time.utc_unix_seconds_now()),
+// nonzero = use this value (test injection).
+pub struct JwtGuardConfig {
+	pub secret: Array<Byte>,
+	pub policy: jwt.JwtVerifyPolicy,
+	pub now_unix: Int
+}
+
+pub fn new_jwt_guard_config(secret: Array<Byte>, policy: jwt.JwtVerifyPolicy) nothrow -> JwtGuardConfig {
+	return JwtGuardConfig(secret = move secret, policy = move policy, now_unix = 0);
+}
+
+// Extract Bearer token from Authorization header value.
+// Returns the token string after "Bearer ", or None if format is wrong.
+fn _extract_bearer(value: &String) nothrow -> Optional<String> {
+	val prefix_len = 7;
+	if value.byte_length() <= prefix_len {
+		return Optional<String>::None();
+	}
+	// Check "Bearer " prefix (B=66 e=101 a=97 r=114 e=101 r=114 space=32)
+	if core.string_byte_at(value, 0) != cast<Byte>(66) { return Optional<String>::None(); }
+	if core.string_byte_at(value, 1) != cast<Byte>(101) { return Optional<String>::None(); }
+	if core.string_byte_at(value, 2) != cast<Byte>(97) { return Optional<String>::None(); }
+	if core.string_byte_at(value, 3) != cast<Byte>(114) { return Optional<String>::None(); }
+	if core.string_byte_at(value, 4) != cast<Byte>(101) { return Optional<String>::None(); }
+	if core.string_byte_at(value, 5) != cast<Byte>(114) { return Optional<String>::None(); }
+	if core.string_byte_at(value, 6) != cast<Byte>(32) { return Optional<String>::None(); }
+	// Extract the token substring after "Bearer "
+	val token_len = value.byte_length() - prefix_len;
+	var buf = io.buffer(token_len);
+	var i = 0;
+	while i < token_len {
+		io.buffer_write(&mut buf, i, core.string_byte_at(value, prefix_len + i));
+		i = i + 1;
+	}
+	return Optional::Some(core.string_from_utf8_bytes(io.buffer_ptr(&buf), token_len));
+}
 
 // Map a JWT error tag to the appropriate REST error.
 // Per plan.md JWT Middleware Mapping Contract:
@@ -47,16 +90,22 @@ fn _map_jwt_error(e: &jwt.JwtError) nothrow -> errors.RestError {
 	return errors.rest_error(401, "unauthorized", e.tag, e.message);
 }
 
-// Apply JWT HS256 guard to a token string.
-// On success, stores the principal (sub claim from payload) in context.
-// On failure, returns the mapped RestError.
-pub fn jwt_guard_apply(token: &String, secret: &Array<Byte>, now_unix: Int, policy: &jwt.JwtVerifyPolicy, ctx: &mut context.Context) nothrow -> core.Result<Void, errors.RestError> {
-	match jwt.verify_hs256(token, secret, now_unix, policy) {
+// Resolve effective unix seconds: 0 = real clock, nonzero = override.
+fn _resolve_now(config: &JwtGuardConfig) nothrow -> Int {
+	if config.now_unix != 0 {
+		return config.now_unix;
+	}
+	return time.utc_unix_seconds_now();
+}
+
+// Internal: verify token string against config, store principal on success.
+fn _verify_token(token: &String, config: &JwtGuardConfig, ctx: &mut context.Context) nothrow -> core.Result<Void, errors.RestError> {
+	val now = _resolve_now(config);
+	match jwt.verify_hs256(token, &config.secret, now, &config.policy) {
 		core.Result::Err(jwt_err) => {
 			return core.Result::Err(_map_jwt_error(&jwt_err));
 		},
 		core.Result::Ok(verified) => {
-			// Extract sub from payload JSON.
 			match json.parse(&verified.payload_json) {
 				core.Result::Err(_) => {
 					return core.Result::Err(errors.rest_error(500, "internal", "payload-parse-failed", "verified payload is not valid JSON"));
@@ -79,6 +128,29 @@ pub fn jwt_guard_apply(token: &String, secret: &Array<Byte>, now_unix: Int, poli
 						}
 					}
 					return core.Result::Ok(core.void_value());
+				}
+			}
+		}
+	}
+}
+
+// Apply JWT HS256 guard: extracts Bearer token from Authorization header,
+// verifies against config, and stores principal in context on success.
+// Signature: (&JwtGuardConfig, &Request, &mut Context) — config is separated
+// so the future router can bind it at registration time, yielding RestGuard(&Request, &mut Context).
+pub fn jwt_guard_apply(config: &JwtGuardConfig, req: &request.Request, ctx: &mut context.Context) nothrow -> core.Result<Void, errors.RestError> {
+	val auth_key = "Authorization";
+	match request.header(req, &auth_key) {
+		Optional::None => {
+			return core.Result::Err(errors.rest_error(401, "unauthorized", "missing-authorization", "Authorization header is required"));
+		},
+		Optional::Some(auth_value) => {
+			match _extract_bearer(&auth_value) {
+				Optional::None => {
+					return core.Result::Err(errors.rest_error(400, "request-invalid", "invalid-authorization-format", "Authorization header must use Bearer scheme"));
+				},
+				Optional::Some(token) => {
+					return _verify_token(&token, config, ctx);
 				}
 			}
 		}

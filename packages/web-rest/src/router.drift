@@ -1,0 +1,186 @@
+module web.rest.router
+
+import std.core as core;
+import std.io as io;
+import web.rest.errors as errors;
+import web.rest.request as request;
+
+export {
+	RoutePattern,
+	parse_route_pattern,
+	match_route,
+	extract_path_params,
+	split_path
+};
+
+pub struct RoutePattern {
+	pub raw: String,
+	pub seg_values: Array<String>,
+	pub seg_is_param: Array<Bool>,
+	pub seg_param_names: Array<String>,
+	pub seg_count: Int,
+	pub static_count: Int
+}
+
+// Split path on '/', skip leading slash, skip trailing empty segment.
+// "/users/42" → ["users", "42"]
+// "/" → []
+pub fn split_path(path: &String) nothrow -> Array<String> {
+	var result: Array<String> = [];
+	val len = path.byte_length();
+	if len == 0 {
+		return move result;
+	}
+	// Skip leading slash
+	var start = 0;
+	if len > 0 {
+		if core.string_byte_at(path, 0) == cast<Byte>(47) {
+			start = 1;
+		}
+	}
+	var seg_start = start;
+	var i = start;
+	while i < len {
+		if core.string_byte_at(path, i) == cast<Byte>(47) {
+			if i > seg_start {
+				result.push(_substring(path, seg_start, i));
+			}
+			seg_start = i + 1;
+		}
+		i = i + 1;
+	}
+	// Last segment
+	if seg_start < len {
+		result.push(_substring(path, seg_start, len));
+	}
+	return move result;
+}
+
+// Extract a substring from a string by byte range [start, end).
+fn _substring(s: &String, start: Int, end: Int) nothrow -> String {
+	val n = end - start;
+	if n <= 0 {
+		return "";
+	}
+	var b = io.buffer(n);
+	var i = 0;
+	while i < n {
+		io.buffer_write(&mut b, i, core.string_byte_at(s, start + i));
+		i = i + 1;
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&b), n);
+}
+
+// Parse a route pattern string like "/users/{id}" into a RoutePattern.
+// Validates: no duplicate param names, no empty segments, balanced braces.
+pub fn parse_route_pattern(path: &String) nothrow -> core.Result<RoutePattern, errors.RestError> {
+	val segs = split_path(path);
+	var seg_values: Array<String> = [];
+	var seg_is_param: Array<Bool> = [];
+	var seg_param_names: Array<String> = [];
+	var static_count = 0;
+	var i = 0;
+	while i < segs.len {
+		val seg = &segs[i];
+		val seg_len = seg.byte_length();
+		if seg_len == 0 {
+			return core.Result::Err(errors.rest_error(500, "internal", "empty-path-segment", "route pattern has empty segment"));
+		}
+		// Check if this segment is a parameter: starts with '{' and ends with '}'
+		if core.string_byte_at(seg, 0) == cast<Byte>(123) {
+			// '{' found — check for closing '}'
+			if core.string_byte_at(seg, seg_len - 1) != cast<Byte>(125) {
+				return core.Result::Err(errors.rest_error(500, "internal", "invalid-path-param", "unclosed path parameter brace"));
+			}
+			val param_name = _substring(seg, 1, seg_len - 1);
+			if param_name.byte_length() == 0 {
+				return core.Result::Err(errors.rest_error(500, "internal", "invalid-path-param", "empty path parameter name"));
+			}
+			// Check for duplicate param names
+			var j = 0;
+			while j < seg_param_names.len {
+				if seg_param_names[j] == param_name {
+					return core.Result::Err(errors.rest_error(500, "internal", "duplicate-path-param", "duplicate path parameter name"));
+				}
+				j = j + 1;
+			}
+			var empty = "";
+			seg_values.push(move empty);
+			var is_p = true;
+			seg_is_param.push(move is_p);
+			seg_param_names.push(move param_name);
+		} else {
+			// Check for unbalanced braces in static segments
+			var k = 0;
+			while k < seg_len {
+				val ch = core.string_byte_at(seg, k);
+				if ch == cast<Byte>(123) {
+					return core.Result::Err(errors.rest_error(500, "internal", "invalid-path-param", "misplaced brace in path segment"));
+				}
+				if ch == cast<Byte>(125) {
+					return core.Result::Err(errors.rest_error(500, "internal", "invalid-path-param", "misplaced brace in path segment"));
+				}
+				k = k + 1;
+			}
+			val sv = _dup_string(seg);
+			seg_values.push(move sv);
+			var not_p = false;
+			seg_is_param.push(move not_p);
+			var empty_name = "";
+			seg_param_names.push(move empty_name);
+			static_count = static_count + 1;
+		}
+		i = i + 1;
+	}
+	var seg_count = segs.len;
+	var raw_str = _dup_string(path);
+	return core.Result::Ok(RoutePattern(
+		raw = move raw_str,
+		seg_values = move seg_values,
+		seg_is_param = move seg_is_param,
+		seg_param_names = move seg_param_names,
+		seg_count = move seg_count,
+		static_count = move static_count
+	));
+}
+
+// Check if request segments match a route pattern.
+// Static segments must match exactly; param segments accept any value.
+pub fn match_route(pattern: &RoutePattern, segments: &Array<String>) nothrow -> Bool {
+	if pattern.seg_count != segments.len {
+		return false;
+	}
+	var i = 0;
+	while i < pattern.seg_count {
+		if !pattern.seg_is_param[i] {
+			if pattern.seg_values[i] != segments[i] {
+				return false;
+			}
+		}
+		i = i + 1;
+	}
+	return true;
+}
+
+// Populate request path param arrays from matched segments.
+pub fn extract_path_params(pattern: &RoutePattern, segments: &Array<String>, req: &mut request.Request) nothrow -> Void {
+	var i = 0;
+	while i < pattern.seg_count {
+		if pattern.seg_is_param[i] {
+			request.add_path_param(req, _dup_string(&pattern.seg_param_names[i]), _dup_string(&segments[i]));
+		}
+		i = i + 1;
+	}
+	return core.void_value();
+}
+
+fn _dup_string(s: &String) nothrow -> String {
+	val n = s.byte_length();
+	var b = io.buffer(n);
+	var i = 0;
+	while i < n {
+		io.buffer_write(&mut b, i, core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&b), n);
+}

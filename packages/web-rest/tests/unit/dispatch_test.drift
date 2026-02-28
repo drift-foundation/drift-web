@@ -1,0 +1,669 @@
+module web.rest.tests.unit.dispatch_test
+
+import std.core as core;
+import web.rest as rest;
+import web.rest.app as rest_app;
+import web.rest.events as events;
+
+// Tests for dispatch machinery: routing, path params, filters, guards, throws adapter.
+
+// --- Helpers ---
+
+fn _build_test_app() nothrow -> rest.App {
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 8080);
+	match rest.build_app(move b) {
+		core.Result::Ok(a) => { return move a; },
+		core.Result::Err(_) => {
+			// Should never happen; bind was provided.
+			var b2 = rest.new_app_builder();
+			rest.bind(&mut b2, "127.0.0.1", 8080);
+			match rest.build_app(move b2) {
+				core.Result::Ok(a2) => { return move a2; },
+				core.Result::Err(_) => { return _unreachable_app(); }
+			}
+		}
+	}
+}
+
+fn _unreachable_app() nothrow -> rest.App {
+	// Placeholder; never called.
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "0.0.0.0", 1);
+	match rest.build_app(move b) {
+		core.Result::Ok(a) => { return move a; },
+		core.Result::Err(_) => { return _unreachable_app(); }
+	}
+}
+
+fn _health_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	return core.Result::Ok(rest.json_response(200, "{\"status\":\"ok\"}"));
+}
+
+fn _echo_id_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	val name = "id";
+	match rest.path_param(req, &name) {
+		core.Result::Ok(id) => {
+			val body = "{\"id\":\"" + id + "\"}";
+			return core.Result::Ok(rest.json_response(200, body));
+		},
+		core.Result::Err(e) => {
+			return core.Result::Err(e);
+		}
+	}
+}
+
+fn _me_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	return core.Result::Ok(rest.json_response(200, "{\"user\":\"me\"}"));
+}
+
+fn _multi_param_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	val x_name = "x";
+	val y_name = "y";
+	match rest.path_param(req, &x_name) {
+		core.Result::Err(e) => { return core.Result::Err(e); },
+		core.Result::Ok(xv) => {
+			match rest.path_param(req, &y_name) {
+				core.Result::Err(e) => { return core.Result::Err(e); },
+				core.Result::Ok(yv) => {
+					val body = "{\"x\":\"" + xv + "\",\"y\":\"" + yv + "\"}";
+					return core.Result::Ok(rest.json_response(200, body));
+				}
+			}
+		}
+	}
+}
+
+fn _post_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	return core.Result::Ok(rest.json_response(201, "{\"created\":true}"));
+}
+
+fn _admin_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	return core.Result::Ok(rest.json_response(200, "{\"admin\":true}"));
+}
+
+fn _guarded_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	match rest.get_principal(ctx) {
+		Optional::Some(p) => {
+			val body = "{\"sub\":\"" + p.sub + "\"}";
+			return core.Result::Ok(rest.json_response(200, body));
+		},
+		Optional::None => {
+			return core.Result::Ok(rest.json_response(200, "{\"sub\":\"none\"}"));
+		}
+	}
+}
+
+// --- Routing basics ---
+
+// Scenario: static GET /health matches and returns handler response
+fn scenario_static_route_match() nothrow -> Int {
+	var app = _build_test_app();
+	match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+		core.Result::Err(_) => { return 101; },
+		core.Result::Ok(_) => {}
+	}
+	var req = rest.new_request("GET", "/health");
+	var ctx = rest.new_context();
+	match rest.dispatch(&app, &mut req, &mut ctx) {
+		core.Result::Err(_) => { return 102; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 103; }
+			if resp.body != "{\"status\":\"ok\"}" { return 104; }
+			return 0;
+		}
+	}
+}
+
+// Scenario: POST /health does not match GET /health → 404
+fn scenario_method_mismatch() nothrow -> Int {
+	var app = _build_test_app();
+	match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+		core.Result::Err(_) => { return 201; },
+		core.Result::Ok(_) => {}
+	}
+	var req = rest.new_request("POST", "/health");
+	var ctx = rest.new_context();
+	match rest.dispatch(&app, &mut req, &mut ctx) {
+		core.Result::Ok(_) => { return 202; },
+		core.Result::Err(e) => {
+			if e.status != 404 { return 203; }
+			if e.event != "not-found" { return 204; }
+			if e.tag != "route-not-found" { return 205; }
+			return 0;
+		}
+	}
+}
+
+// Scenario: GET /unknown → 404 not-found
+fn scenario_path_mismatch() nothrow -> Int {
+	var app = _build_test_app();
+	match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+		core.Result::Err(_) => { return 301; },
+		core.Result::Ok(_) => {}
+	}
+	var req = rest.new_request("GET", "/unknown");
+	var ctx = rest.new_context();
+	match rest.dispatch(&app, &mut req, &mut ctx) {
+		core.Result::Ok(_) => { return 302; },
+		core.Result::Err(e) => {
+			if e.status != 404 { return 303; }
+			if e.tag != "route-not-found" { return 304; }
+			return 0;
+		}
+	}
+}
+
+// Scenario: two routes, correct one dispatched
+fn scenario_multiple_routes() nothrow -> Int {
+	var app = _build_test_app();
+	match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+		core.Result::Err(_) => { return 401; },
+		core.Result::Ok(_) => {}
+	}
+	match rest_app.add_route(&mut app, "POST", "/users", core.callback2(_post_handler)) {
+		core.Result::Err(_) => { return 402; },
+		core.Result::Ok(_) => {}
+	}
+	var req = rest.new_request("POST", "/users");
+	var ctx = rest.new_context();
+	match rest.dispatch(&app, &mut req, &mut ctx) {
+		core.Result::Err(_) => { return 403; },
+		core.Result::Ok(resp) => {
+			if resp.status != 201 { return 404; }
+			if resp.body != "{\"created\":true}" { return 405; }
+			return 0;
+		}
+	}
+}
+
+// --- Path parameters ---
+
+// Scenario: GET /users/{id} with /users/42 → path_param("id") = "42"
+fn scenario_path_param_extracted() nothrow -> Int {
+	var app = _build_test_app();
+	match rest_app.add_route(&mut app, "GET", "/users/{id}", core.callback2(_echo_id_handler)) {
+		core.Result::Err(_) => { return 501; },
+		core.Result::Ok(_) => {}
+	}
+	var req = rest.new_request("GET", "/users/42");
+	var ctx = rest.new_context();
+	match rest.dispatch(&app, &mut req, &mut ctx) {
+		core.Result::Err(_) => { return 502; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 503; }
+			if resp.body != "{\"id\":\"42\"}" { return 504; }
+			return 0;
+		}
+	}
+}
+
+// Scenario: /users/me (static) beats /users/{id} (param) for GET /users/me
+fn scenario_static_beats_param() nothrow -> Int {
+	var app = _build_test_app();
+	// Register param route first
+	match rest_app.add_route(&mut app, "GET", "/users/{id}", core.callback2(_echo_id_handler)) {
+		core.Result::Err(_) => { return 601; },
+		core.Result::Ok(_) => {}
+	}
+	// Register static route second — should still win by static_count
+	match rest_app.add_route(&mut app, "GET", "/users/me", core.callback2(_me_handler)) {
+		core.Result::Err(_) => { return 602; },
+		core.Result::Ok(_) => {}
+	}
+	var req = rest.new_request("GET", "/users/me");
+	var ctx = rest.new_context();
+	match rest.dispatch(&app, &mut req, &mut ctx) {
+		core.Result::Err(_) => { return 603; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 604; }
+			if resp.body != "{\"user\":\"me\"}" { return 605; }
+			return 0;
+		}
+	}
+}
+
+// Scenario: /a/{x}/b/{y} extracts both params
+fn scenario_multiple_path_params() nothrow -> Int {
+	var app = _build_test_app();
+	match rest_app.add_route(&mut app, "GET", "/a/{x}/b/{y}", core.callback2(_multi_param_handler)) {
+		core.Result::Err(_) => { return 701; },
+		core.Result::Ok(_) => {}
+	}
+	var req = rest.new_request("GET", "/a/hello/b/world");
+	var ctx = rest.new_context();
+	match rest.dispatch(&app, &mut req, &mut ctx) {
+		core.Result::Err(_) => { return 702; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 703; }
+			if resp.body != "{\"x\":\"hello\",\"y\":\"world\"}" { return 704; }
+			return 0;
+		}
+	}
+}
+
+// --- Middleware chain ---
+
+// Filter that sets principal on context
+fn _set_principal_filter(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<Void, rest.RestError> {
+	rest.set_principal(ctx, "filter-user");
+	return core.Result::Ok(core.void_value());
+}
+
+// Filter that always rejects with 403
+fn _reject_filter(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<Void, rest.RestError> {
+	return core.Result::Err(rest.rest_error(403, "forbidden", "deny-all", "filter denied"));
+}
+
+// Guard that checks principal is set
+fn _require_principal_guard(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<Void, rest.RestError> {
+	match rest.get_principal(ctx) {
+		Optional::Some(_) => { return core.Result::Ok(core.void_value()); },
+		Optional::None => { return core.Result::Err(rest.rest_error(401, "unauthorized", "guard-no-principal", "no principal")); }
+	}
+}
+
+// Scenario: filter sets context, handler reads it
+fn scenario_filter_runs_before_handler() nothrow -> Int {
+	var app = _build_test_app();
+	rest.add_filter(&mut app, core.callback2(_set_principal_filter));
+	match rest_app.add_route(&mut app, "GET", "/me", core.callback2(_guarded_handler)) {
+		core.Result::Err(_) => { return 801; },
+		core.Result::Ok(_) => {}
+	}
+	var req = rest.new_request("GET", "/me");
+	var ctx = rest.new_context();
+	match rest.dispatch(&app, &mut req, &mut ctx) {
+		core.Result::Err(_) => { return 802; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 803; }
+			if resp.body != "{\"sub\":\"filter-user\"}" { return 804; }
+			return 0;
+		}
+	}
+}
+
+// Scenario: filter returns Err → handler never called
+fn scenario_filter_rejects() nothrow -> Int {
+	var app = _build_test_app();
+	rest.add_filter(&mut app, core.callback2(_reject_filter));
+	match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+		core.Result::Err(_) => { return 901; },
+		core.Result::Ok(_) => {}
+	}
+	var req = rest.new_request("GET", "/health");
+	var ctx = rest.new_context();
+	match rest.dispatch(&app, &mut req, &mut ctx) {
+		core.Result::Ok(_) => { return 902; },
+		core.Result::Err(e) => {
+			if e.status != 403 { return 903; }
+			if e.tag != "deny-all" { return 904; }
+			return 0;
+		}
+	}
+}
+
+// Scenario: guard runs for group routes only (root route unguarded)
+fn scenario_guard_runs_for_group() nothrow -> Int {
+	var app = _build_test_app();
+	// Create group with guard
+	match rest.add_group(&mut app, "/admin") {
+		core.Result::Err(_) => { return 1001; },
+		core.Result::Ok(group) => {
+			rest.add_group_guard(&mut app, &group, core.callback2(_require_principal_guard));
+			// Add guarded group route
+			match rest_app.add_group_route(&mut app, &group, "GET", "/dash", core.callback2(_admin_handler)) {
+				core.Result::Err(_) => { return 1002; },
+				core.Result::Ok(_) => {}
+			}
+		}
+	}
+	// Add unguarded root route
+	match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+		core.Result::Err(_) => { return 1003; },
+		core.Result::Ok(_) => {}
+	}
+	// Root route should work without principal
+	var req1 = rest.new_request("GET", "/health");
+	var ctx1 = rest.new_context();
+	match rest.dispatch(&app, &mut req1, &mut ctx1) {
+		core.Result::Err(_) => { return 1004; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 1005; }
+		}
+	}
+	// Group route without principal → guard rejects
+	var req2 = rest.new_request("GET", "/admin/dash");
+	var ctx2 = rest.new_context();
+	match rest.dispatch(&app, &mut req2, &mut ctx2) {
+		core.Result::Ok(_) => { return 1006; },
+		core.Result::Err(e) => {
+			if e.status != 401 { return 1007; }
+			if e.tag != "guard-no-principal" { return 1008; }
+		}
+	}
+	// Group route with principal → succeeds
+	var req3 = rest.new_request("GET", "/admin/dash");
+	var ctx3 = rest.new_context();
+	rest.set_principal(&mut ctx3, "admin-user");
+	match rest.dispatch(&app, &mut req3, &mut ctx3) {
+		core.Result::Err(_) => { return 1009; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 1010; }
+			if resp.body != "{\"admin\":true}" { return 1011; }
+		}
+	}
+	return 0;
+}
+
+// Scenario: guard returns Err → handler never called
+fn scenario_guard_rejects() nothrow -> Int {
+	var app = _build_test_app();
+	match rest.add_group(&mut app, "/api") {
+		core.Result::Err(_) => { return 1101; },
+		core.Result::Ok(group) => {
+			rest.add_group_guard(&mut app, &group, core.callback2(_require_principal_guard));
+			match rest_app.add_group_route(&mut app, &group, "GET", "/data", core.callback2(_health_handler)) {
+				core.Result::Err(_) => { return 1102; },
+				core.Result::Ok(_) => {}
+			}
+		}
+	}
+	var req = rest.new_request("GET", "/api/data");
+	var ctx = rest.new_context();
+	match rest.dispatch(&app, &mut req, &mut ctx) {
+		core.Result::Ok(_) => { return 1103; },
+		core.Result::Err(e) => {
+			if e.status != 401 { return 1104; }
+			if e.tag != "guard-no-principal" { return 1105; }
+			return 0;
+		}
+	}
+}
+
+// Filter that appends "A" to context principal_sub (used to verify order)
+fn _filter_a(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<Void, rest.RestError> {
+	ctx.principal_sub = ctx.principal_sub + "A";
+	return core.Result::Ok(core.void_value());
+}
+
+// Filter that appends "B" to context principal_sub
+fn _filter_b(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<Void, rest.RestError> {
+	ctx.principal_sub = ctx.principal_sub + "B";
+	return core.Result::Ok(core.void_value());
+}
+
+// Handler that returns context principal_sub as response body
+fn _echo_ctx_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	return core.Result::Ok(rest.json_response(200, ctx.principal_sub));
+}
+
+// Scenario: multiple filters run in registration order
+fn scenario_filter_order_preserved() nothrow -> Int {
+	var app = _build_test_app();
+	rest.add_filter(&mut app, core.callback2(_filter_a));
+	rest.add_filter(&mut app, core.callback2(_filter_b));
+	match rest_app.add_route(&mut app, "GET", "/echo", core.callback2(_echo_ctx_handler)) {
+		core.Result::Err(_) => { return 1201; },
+		core.Result::Ok(_) => {}
+	}
+	var req = rest.new_request("GET", "/echo");
+	var ctx = rest.new_context();
+	match rest.dispatch(&app, &mut req, &mut ctx) {
+		core.Result::Err(_) => { return 1202; },
+		core.Result::Ok(resp) => {
+			if resp.body != "AB" { return 1203; }
+			return 0;
+		}
+	}
+}
+
+// --- Adapter (throws → nothrow) ---
+
+// Throws handler that returns normally
+fn _throws_ok_handler(req: &rest.Request, ctx: &mut rest.Context) -> rest.Response {
+	return rest.json_response(200, "{\"throws\":\"ok\"}");
+}
+
+// Throws handler that throws RestBadRequest
+fn _throws_bad_request_handler(req: &rest.Request, ctx: &mut rest.Context) -> rest.Response {
+	throw events:RestBadRequest(tag = "test-bad", message = "bad request test");
+}
+
+// Throws handler that throws RestUnauthorized
+fn _throws_unauthorized_handler(req: &rest.Request, ctx: &mut rest.Context) -> rest.Response {
+	throw events:RestUnauthorized(tag = "test-unauth", message = "unauthorized test");
+}
+
+// Throws handler that throws RestInternal
+fn _throws_internal_handler(req: &rest.Request, ctx: &mut rest.Context) -> rest.Response {
+	throw events:RestInternal(tag = "test-internal", message = "internal test");
+}
+
+// Scenario: throws handler returns normally → Ok(Response)
+fn scenario_throws_handler_success() nothrow -> Int {
+	var app = _build_test_app();
+	match rest.add_throws_route(&mut app, "GET", "/thr", core.callback_throw2(_throws_ok_handler)) {
+		core.Result::Err(_) => { return 1301; },
+		core.Result::Ok(_) => {}
+	}
+	var req = rest.new_request("GET", "/thr");
+	var ctx = rest.new_context();
+	match rest.dispatch(&app, &mut req, &mut ctx) {
+		core.Result::Err(_) => { return 1302; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 1303; }
+			if resp.body != "{\"throws\":\"ok\"}" { return 1304; }
+			return 0;
+		}
+	}
+}
+
+// Scenario: throws handler throws RestBadRequest → Err(400)
+fn scenario_throws_handler_bad_request() nothrow -> Int {
+	var app = _build_test_app();
+	match rest.add_throws_route(&mut app, "POST", "/thr", core.callback_throw2(_throws_bad_request_handler)) {
+		core.Result::Err(_) => { return 1401; },
+		core.Result::Ok(_) => {}
+	}
+	var req = rest.new_request("POST", "/thr");
+	var ctx = rest.new_context();
+	match rest.dispatch(&app, &mut req, &mut ctx) {
+		core.Result::Ok(_) => { return 1402; },
+		core.Result::Err(e) => {
+			if e.status != 400 { return 1403; }
+			if e.event != "request-invalid" { return 1404; }
+			if e.tag != "test-bad" { return 1405; }
+			return 0;
+		}
+	}
+}
+
+// Scenario: throws handler throws RestUnauthorized → Err(401)
+fn scenario_throws_handler_unauthorized() nothrow -> Int {
+	var app = _build_test_app();
+	match rest.add_throws_route(&mut app, "GET", "/auth", core.callback_throw2(_throws_unauthorized_handler)) {
+		core.Result::Err(_) => { return 1501; },
+		core.Result::Ok(_) => {}
+	}
+	var req = rest.new_request("GET", "/auth");
+	var ctx = rest.new_context();
+	match rest.dispatch(&app, &mut req, &mut ctx) {
+		core.Result::Ok(_) => { return 1502; },
+		core.Result::Err(e) => {
+			if e.status != 401 { return 1503; }
+			if e.event != "unauthorized" { return 1504; }
+			if e.tag != "test-unauth" { return 1505; }
+			return 0;
+		}
+	}
+}
+
+// Scenario: throws handler throws RestInternal → Err(500)
+fn scenario_throws_handler_internal() nothrow -> Int {
+	var app = _build_test_app();
+	match rest.add_throws_route(&mut app, "GET", "/fail", core.callback_throw2(_throws_internal_handler)) {
+		core.Result::Err(_) => { return 1601; },
+		core.Result::Ok(_) => {}
+	}
+	var req = rest.new_request("GET", "/fail");
+	var ctx = rest.new_context();
+	match rest.dispatch(&app, &mut req, &mut ctx) {
+		core.Result::Ok(_) => { return 1602; },
+		core.Result::Err(e) => {
+			if e.status != 500 { return 1603; }
+			if e.event != "internal" { return 1604; }
+			if e.tag != "test-internal" { return 1605; }
+			return 0;
+		}
+	}
+}
+
+// --- Registration validation ---
+
+// Scenario: duplicate param name rejected at registration
+fn scenario_duplicate_param_name_rejected() nothrow -> Int {
+	var app = _build_test_app();
+	match rest_app.add_route(&mut app, "GET", "/users/{id}/posts/{id}", core.callback2(_health_handler)) {
+		core.Result::Ok(_) => { return 1701; },
+		core.Result::Err(e) => {
+			if e.status != 500 { return 1702; }
+			if e.tag != "duplicate-path-param" { return 1703; }
+			return 0;
+		}
+	}
+}
+
+// Scenario: group prefix with {param} rejected
+fn scenario_group_prefix_no_params() nothrow -> Int {
+	var app = _build_test_app();
+	match rest.add_group(&mut app, "/users/{id}") {
+		core.Result::Ok(_) => { return 1801; },
+		core.Result::Err(e) => {
+			if e.status != 500 { return 1802; }
+			if e.tag != "invalid-group-prefix" { return 1803; }
+			return 0;
+		}
+	}
+}
+
+// --- Group throws route ---
+
+// Scenario: throws handler on a group route works correctly
+fn scenario_group_throws_route() nothrow -> Int {
+	var app = _build_test_app();
+	match rest.add_group(&mut app, "/api") {
+		core.Result::Err(_) => { return 1901; },
+		core.Result::Ok(group) => {
+			match rest.add_group_throws_route(&mut app, &group, "GET", "/ok", core.callback_throw2(_throws_ok_handler)) {
+				core.Result::Err(_) => { return 1902; },
+				core.Result::Ok(_) => {}
+			}
+		}
+	}
+	var req = rest.new_request("GET", "/api/ok");
+	var ctx = rest.new_context();
+	match rest.dispatch(&app, &mut req, &mut ctx) {
+		core.Result::Err(_) => { return 1903; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 1904; }
+			if resp.body != "{\"throws\":\"ok\"}" { return 1905; }
+			return 0;
+		}
+	}
+}
+
+// Scenario: reused request does not leak stale path params across dispatches
+fn scenario_path_params_cleared_on_redispatch() nothrow -> Int {
+	var app = _build_test_app();
+	match rest_app.add_route(&mut app, "GET", "/users/{id}", core.callback2(_echo_id_handler)) {
+		core.Result::Err(_) => { return 2001; },
+		core.Result::Ok(_) => {}
+	}
+	match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+		core.Result::Err(_) => { return 2002; },
+		core.Result::Ok(_) => {}
+	}
+	// First dispatch: extracts id=42
+	var req = rest.new_request("GET", "/users/42");
+	var ctx = rest.new_context();
+	match rest.dispatch(&app, &mut req, &mut ctx) {
+		core.Result::Err(_) => { return 2003; },
+		core.Result::Ok(resp) => {
+			if resp.body != "{\"id\":\"42\"}" { return 2004; }
+		}
+	}
+	// Verify path params were populated
+	if req.path_param_keys.len != 1 { return 2005; }
+	// Second dispatch on same request with different path (no path params)
+	req.path = "/health";
+	req.method = "GET";
+	var ctx2 = rest.new_context();
+	match rest.dispatch(&app, &mut req, &mut ctx2) {
+		core.Result::Err(_) => { return 2006; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 2007; }
+		}
+	}
+	// Path params must be cleared — no stale id param
+	if req.path_param_keys.len != 0 { return 2008; }
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	// Routing basics
+	val a = scenario_static_route_match();
+	if a != 0 { return a; }
+	val b = scenario_method_mismatch();
+	if b != 0 { return b; }
+	val c = scenario_path_mismatch();
+	if c != 0 { return c; }
+	val d = scenario_multiple_routes();
+	if d != 0 { return d; }
+
+	// Path parameters
+	val e = scenario_path_param_extracted();
+	if e != 0 { return e; }
+	val f = scenario_static_beats_param();
+	if f != 0 { return f; }
+	val g = scenario_multiple_path_params();
+	if g != 0 { return g; }
+
+	// Middleware chain
+	val h = scenario_filter_runs_before_handler();
+	if h != 0 { return h; }
+	val i = scenario_filter_rejects();
+	if i != 0 { return i; }
+	val j = scenario_guard_runs_for_group();
+	if j != 0 { return j; }
+	val k = scenario_guard_rejects();
+	if k != 0 { return k; }
+	val l = scenario_filter_order_preserved();
+	if l != 0 { return l; }
+
+	// Adapter (throws → nothrow)
+	val m = scenario_throws_handler_success();
+	if m != 0 { return m; }
+	val n = scenario_throws_handler_bad_request();
+	if n != 0 { return n; }
+	val o = scenario_throws_handler_unauthorized();
+	if o != 0 { return o; }
+	val p = scenario_throws_handler_internal();
+	if p != 0 { return p; }
+
+	// Registration validation
+	val q = scenario_duplicate_param_name_rejected();
+	if q != 0 { return q; }
+	val r = scenario_group_prefix_no_params();
+	if r != 0 { return r; }
+
+	// Group throws route
+	val s = scenario_group_throws_route();
+	if s != 0 { return s; }
+
+	// Path param clearing
+	val t = scenario_path_params_cleared_on_redispatch();
+	if t != 0 { return t; }
+
+	return 0;
+}

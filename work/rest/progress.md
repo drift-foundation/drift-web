@@ -38,10 +38,14 @@ No server, router, builder, middleware chain, or HTTP listener implemented.
 
 ### Story 2: `packages/web-rest/tests/unit/jwt_guard_test.drift`
 - JWT guard unauthorized/authorized flows with full tag mapping
-- 12 scenarios (100–1200 range)
+- Guard uses RestGuard-compatible contract: (config, req, ctx)
+- Token extracted from Authorization: Bearer header on Request
+- 14 scenarios (100–1400 range)
 
 | Scenario | Asserts |
 |----------|---------|
+| `scenario_missing_authorization` | No Authorization header → 401/unauthorized/missing-authorization |
+| `scenario_invalid_authorization_format` | Non-Bearer scheme → 400/request-invalid/invalid-authorization-format |
 | `scenario_valid_token_authorized` | Guard passes, principal.sub = "user-42" |
 | `scenario_me_handler_success` | Handler returns 200 `{"sub":"user-42"}` |
 | `scenario_no_principal_unauthorized` | require_principal → 401/unauthorized/missing-principal |
@@ -103,5 +107,6 @@ Reported to compiler team, resolved. Repro retained as regression test.
 
 ## Verification
 
-- [x] `just rest-check-par` — all 4 test files pass (3 stories + 1 repro)
-- [x] `just test` — full suite (JWT + REST) passes (10 tests total)
+- [x] `just rest-check-par` — all 4 test files pass (3 stories + 1 repro) (as of 2026-02-26)
+- [x] `just test` — full suite (JWT + REST) passes (10 tests total) (as of 2026-02-26)
+- [ ] Blocked: driftc 0.8.0-dev stdlib regression breaks all compilation (std.json/regex internals). Upstream fix required. Old code on main also fails — not caused by our changes.

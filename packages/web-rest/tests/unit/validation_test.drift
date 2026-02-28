@@ -216,6 +216,35 @@ fn scenario_error_envelope_empty_fields() nothrow -> Int {
 	}
 }
 
+// --- Scenario: header lookup is case-insensitive (RFC 7230) ---
+
+fn scenario_header_case_insensitive() nothrow -> Int {
+	var req = rest.new_request("GET", "/v1/test");
+	rest.add_header(&mut req, "content-type", "application/json");
+	val key1 = "Content-Type";
+	match rest.header(&req, &key1) {
+		Optional::None => { return 901; },
+		Optional::Some(v) => {
+			if v != "application/json" { return 902; }
+		}
+	}
+	val key2 = "CONTENT-TYPE";
+	match rest.header(&req, &key2) {
+		Optional::None => { return 903; },
+		Optional::Some(v) => {
+			if v != "application/json" { return 904; }
+		}
+	}
+	val key3 = "content-type";
+	match rest.header(&req, &key3) {
+		Optional::None => { return 905; },
+		Optional::Some(v) => {
+			if v != "application/json" { return 906; }
+		}
+	}
+	return 0;
+}
+
 fn main() nothrow -> Int {
 	val a = scenario_missing_query_param();
 	if a != 0 { return a; }
@@ -233,5 +262,7 @@ fn main() nothrow -> Int {
 	if g != 0 { return g; }
 	val h = scenario_error_envelope_empty_fields();
 	if h != 0 { return h; }
+	val i = scenario_header_case_insensitive();
+	if i != 0 { return i; }
 	return 0;
 }

@@ -1,0 +1,387 @@
+module web.rest.app
+
+import std.core as core;
+import std.io as io;
+import web.rest.errors as errors;
+import web.rest.events as events;
+import web.rest.request as request;
+import web.rest.response as response;
+import web.rest.context as context;
+import web.rest.router as router;
+
+export {
+	AppBuilder,
+	App,
+	Group,
+	new_app_builder,
+	bind,
+	build_app,
+	add_filter,
+	add_group,
+	add_group_guard,
+	add_route,
+	add_group_route,
+	add_throws_route,
+	add_group_throws_route,
+	dispatch
+};
+
+pub struct AppBuilder {
+	pub bind_hosts: Array<String>,
+	pub bind_ports: Array<Int>,
+	pub has_bind: Bool
+}
+
+// Route storage uses parallel arrays.
+// Nothrow handlers stored in route_handlers with route_is_throws[i] = false.
+// Throws handlers stored in route_throws_handlers with route_is_throws[i] = true.
+// For each route, exactly one of the two arrays has a meaningful entry at that index;
+// the other has a placeholder. This avoids returning interface types from functions.
+pub struct App {
+	// Routes (parallel arrays)
+	pub route_methods: Array<String>,
+	pub route_patterns: Array<router.RoutePattern>,
+	pub route_handlers: Array<core.Callback2<&request.Request, &mut context.Context, core.Result<response.Response, errors.RestError>>>,
+	pub route_throws_handlers: Array<core.CallbackThrow2<&request.Request, &mut context.Context, response.Response>>,
+	pub route_is_throws: Array<Bool>,
+	pub route_group_ids: Array<Int>,
+
+	// Global filters (flat array)
+	pub filters: Array<core.Callback2<&request.Request, &mut context.Context, core.Result<Void, errors.RestError>>>,
+
+	// Group guards (flat array, parallel group_id)
+	pub guard_callbacks: Array<core.Callback2<&request.Request, &mut context.Context, core.Result<Void, errors.RestError>>>,
+	pub guard_group_ids: Array<Int>,
+
+	// Group prefixes (parallel arrays indexed by group id)
+	pub group_prefix_raw: Array<String>,
+	pub group_prefix_seg_counts: Array<Int>,
+	pub group_count: Int,
+
+	// Bind config
+	pub bind_hosts: Array<String>,
+	pub bind_ports: Array<Int>
+}
+
+pub struct Group {
+	pub id: Int
+}
+
+// --- Builder ---
+
+pub fn new_app_builder() nothrow -> AppBuilder {
+	var hosts: Array<String> = [];
+	var ports: Array<Int> = [];
+	return AppBuilder(bind_hosts = move hosts, bind_ports = move ports, has_bind = false);
+}
+
+pub fn bind(b: &mut AppBuilder, host: String, port: Int) nothrow -> Void {
+	b.bind_hosts.push(move host);
+	b.bind_ports.push(port);
+	b.has_bind = true;
+	return core.void_value();
+}
+
+pub fn build_app(b: AppBuilder) nothrow -> core.Result<App, errors.RestError> {
+	if !b.has_bind {
+		return core.Result::Err(errors.rest_error(500, "internal", "missing-bind", "at least one bind address is required"));
+	}
+	return _build_app_inner(move b);
+}
+
+fn _build_app_inner(b: AppBuilder) nothrow -> core.Result<App, errors.RestError> {
+	var rm: Array<String> = [];
+	var rp: Array<router.RoutePattern> = [];
+	var rh: Array<core.Callback2<&request.Request, &mut context.Context, core.Result<response.Response, errors.RestError>>> = [];
+	var rth: Array<core.CallbackThrow2<&request.Request, &mut context.Context, response.Response>> = [];
+	var rit: Array<Bool> = [];
+	var rg: Array<Int> = [];
+	var filters: Array<core.Callback2<&request.Request, &mut context.Context, core.Result<Void, errors.RestError>>> = [];
+	var gc: Array<core.Callback2<&request.Request, &mut context.Context, core.Result<Void, errors.RestError>>> = [];
+	var ggi: Array<Int> = [];
+	var gpr: Array<String> = [];
+	var gpsc: Array<Int> = [];
+	var bh: Array<String> = [];
+	var bp: Array<Int> = [];
+	var i = 0;
+	while i < b.bind_hosts.len {
+		bh.push(b.bind_hosts[i]);
+		bp.push(b.bind_ports[i]);
+		i = i + 1;
+	}
+	return core.Result::Ok(App(
+		route_methods = move rm,
+		route_patterns = move rp,
+		route_handlers = move rh,
+		route_throws_handlers = move rth,
+		route_is_throws = move rit,
+		route_group_ids = move rg,
+		filters = move filters,
+		guard_callbacks = move gc,
+		guard_group_ids = move ggi,
+		group_prefix_raw = move gpr,
+		group_prefix_seg_counts = move gpsc,
+		group_count = 0,
+		bind_hosts = move bh,
+		bind_ports = move bp
+	));
+}
+
+// --- Registration ---
+
+pub fn add_filter(app: &mut App, filter: core.Callback2<&request.Request, &mut context.Context, core.Result<Void, errors.RestError>>) nothrow -> Void {
+	app.filters.push(move filter);
+	return core.void_value();
+}
+
+pub fn add_group(app: &mut App, prefix: String) nothrow -> core.Result<Group, errors.RestError> {
+	val segs = router.split_path(&prefix);
+	var i = 0;
+	while i < segs.len {
+		val seg = &segs[i];
+		val seg_len = seg.byte_length();
+		var j = 0;
+		while j < seg_len {
+			val ch = core.string_byte_at(seg, j);
+			if ch == cast<Byte>(123) {
+				return core.Result::Err(errors.rest_error(500, "internal", "invalid-group-prefix", "group prefix must not contain path parameters"));
+			}
+			if ch == cast<Byte>(125) {
+				return core.Result::Err(errors.rest_error(500, "internal", "invalid-group-prefix", "group prefix must not contain path parameters"));
+			}
+			j = j + 1;
+		}
+		i = i + 1;
+	}
+	val id = app.group_count;
+	val seg_count = segs.len;
+	app.group_prefix_raw.push(move prefix);
+	app.group_prefix_seg_counts.push(move seg_count);
+	app.group_count = app.group_count + 1;
+	return core.Result::Ok(Group(id = id));
+}
+
+pub fn add_group_guard(app: &mut App, group: &Group, guard: core.Callback2<&request.Request, &mut context.Context, core.Result<Void, errors.RestError>>) nothrow -> Void {
+	app.guard_callbacks.push(move guard);
+	app.guard_group_ids.push(group.id);
+	return core.void_value();
+}
+
+// Nothrow handler placeholder for throws route slots.
+fn _nothrow_placeholder(req: &request.Request, ctx: &mut context.Context) nothrow -> core.Result<response.Response, errors.RestError> {
+	return core.Result::Err(errors.rest_error(500, "internal", "internal-error", "placeholder handler called"));
+}
+
+// Throws handler placeholder for nothrow route slots.
+fn _throws_placeholder(req: &request.Request, ctx: &mut context.Context) -> response.Response {
+	return response.json_response(500, "placeholder");
+}
+
+pub fn add_route(app: &mut App, method: String, path: String, handler: core.Callback2<&request.Request, &mut context.Context, core.Result<response.Response, errors.RestError>>) nothrow -> core.Result<Void, errors.RestError> {
+	match router.parse_route_pattern(&path) {
+		core.Result::Err(e) => {
+			return core.Result::Err(e);
+		},
+		core.Result::Ok(pattern) => {
+			app.route_methods.push(move method);
+			app.route_patterns.push(move pattern);
+			app.route_handlers.push(move handler);
+			app.route_throws_handlers.push(core.callback_throw2(_throws_placeholder));
+			var is_t = false;
+			app.route_is_throws.push(move is_t);
+			app.route_group_ids.push(-1);
+			return core.Result::Ok(core.void_value());
+		}
+	}
+}
+
+pub fn add_group_route(app: &mut App, group: &Group, method: String, path: String, handler: core.Callback2<&request.Request, &mut context.Context, core.Result<response.Response, errors.RestError>>) nothrow -> core.Result<Void, errors.RestError> {
+	var full_path = app.group_prefix_raw[group.id];
+	val route_segs = router.split_path(&path);
+	var j = 0;
+	while j < route_segs.len {
+		full_path = full_path + "/" + route_segs[j];
+		j = j + 1;
+	}
+	if full_path.byte_length() == 0 {
+		full_path = "/";
+	}
+	match router.parse_route_pattern(&full_path) {
+		core.Result::Err(e) => {
+			return core.Result::Err(e);
+		},
+		core.Result::Ok(pattern) => {
+			app.route_methods.push(move method);
+			app.route_patterns.push(move pattern);
+			app.route_handlers.push(move handler);
+			app.route_throws_handlers.push(core.callback_throw2(_throws_placeholder));
+			var is_t = false;
+			app.route_is_throws.push(move is_t);
+			app.route_group_ids.push(group.id);
+			return core.Result::Ok(core.void_value());
+		}
+	}
+}
+
+pub fn add_throws_route(app: &mut App, method: String, path: String, handler: core.CallbackThrow2<&request.Request, &mut context.Context, response.Response>) nothrow -> core.Result<Void, errors.RestError> {
+	match router.parse_route_pattern(&path) {
+		core.Result::Err(e) => {
+			return core.Result::Err(e);
+		},
+		core.Result::Ok(pattern) => {
+			app.route_methods.push(move method);
+			app.route_patterns.push(move pattern);
+			app.route_handlers.push(core.callback2(_nothrow_placeholder));
+			app.route_throws_handlers.push(move handler);
+			var is_t = true;
+			app.route_is_throws.push(move is_t);
+			app.route_group_ids.push(-1);
+			return core.Result::Ok(core.void_value());
+		}
+	}
+}
+
+pub fn add_group_throws_route(app: &mut App, group: &Group, method: String, path: String, handler: core.CallbackThrow2<&request.Request, &mut context.Context, response.Response>) nothrow -> core.Result<Void, errors.RestError> {
+	var full_path = app.group_prefix_raw[group.id];
+	val route_segs = router.split_path(&path);
+	var j = 0;
+	while j < route_segs.len {
+		full_path = full_path + "/" + route_segs[j];
+		j = j + 1;
+	}
+	if full_path.byte_length() == 0 {
+		full_path = "/";
+	}
+	match router.parse_route_pattern(&full_path) {
+		core.Result::Err(e) => {
+			return core.Result::Err(e);
+		},
+		core.Result::Ok(pattern) => {
+			app.route_methods.push(move method);
+			app.route_patterns.push(move pattern);
+			app.route_handlers.push(core.callback2(_nothrow_placeholder));
+			app.route_throws_handlers.push(move handler);
+			var is_t = true;
+			app.route_is_throws.push(move is_t);
+			app.route_group_ids.push(group.id);
+			return core.Result::Ok(core.void_value());
+		}
+	}
+}
+
+// --- Throws adapter (internal, called at dispatch time) ---
+
+fn _extract_exc_string(dv: DiagnosticValue) nothrow -> String {
+	match dv.as_string() {
+		Optional::Some(s) => { return s; },
+		Optional::None => { return ""; }
+	}
+}
+
+fn _dispatch_throws(app: &App, idx: Int, req: &request.Request, ctx: &mut context.Context) nothrow -> core.Result<response.Response, errors.RestError> {
+	val h = &app.route_throws_handlers[idx];
+	try {
+		val resp = (*h).call(req, ctx);
+		return core.Result::Ok(resp);
+	} catch events:RestBadRequest(e) {
+		val t = _extract_exc_string(e.attrs["tag"]);
+		val m = _extract_exc_string(e.attrs["message"]);
+		return core.Result::Err(errors.rest_error(400, "request-invalid", t, m));
+	} catch events:RestUnauthorized(e) {
+		val t = _extract_exc_string(e.attrs["tag"]);
+		val m = _extract_exc_string(e.attrs["message"]);
+		return core.Result::Err(errors.rest_error(401, "unauthorized", t, m));
+	} catch events:RestForbidden(e) {
+		val t = _extract_exc_string(e.attrs["tag"]);
+		val m = _extract_exc_string(e.attrs["message"]);
+		return core.Result::Err(errors.rest_error(403, "forbidden", t, m));
+	} catch events:RestNotFound(e) {
+		val t = _extract_exc_string(e.attrs["tag"]);
+		val m = _extract_exc_string(e.attrs["message"]);
+		return core.Result::Err(errors.rest_error(404, "not-found", t, m));
+	} catch events:RestConflict(e) {
+		val t = _extract_exc_string(e.attrs["tag"]);
+		val m = _extract_exc_string(e.attrs["message"]);
+		return core.Result::Err(errors.rest_error(409, "conflict", t, m));
+	} catch events:RestInternal(e) {
+		val t = _extract_exc_string(e.attrs["tag"]);
+		val m = _extract_exc_string(e.attrs["message"]);
+		return core.Result::Err(errors.rest_error(500, "internal", t, m));
+	} catch {
+		return core.Result::Err(errors.rest_error(500, "internal", "internal-error", "unhandled exception"));
+	}
+	return core.Result::Err(errors.rest_error(500, "internal", "internal-error", "unreachable"));
+}
+
+// --- Dispatch ---
+
+pub fn dispatch(app: &App, req: &mut request.Request, ctx: &mut context.Context) nothrow -> core.Result<response.Response, errors.RestError> {
+	// 1. Split request path into segments
+	val segments = router.split_path(&req.path);
+
+	// 2. Find best matching route (method + path; highest static_count wins)
+	var best_idx = -1;
+	var best_static = -1;
+	var ri = 0;
+	while ri < app.route_methods.len {
+		if app.route_methods[ri] == req.method {
+			val pat = &app.route_patterns[ri];
+			if router.match_route(pat, &segments) {
+				val sc = pat.static_count;
+				if sc > best_static {
+					best_static = sc;
+					best_idx = ri;
+				}
+			}
+		}
+		ri = ri + 1;
+	}
+
+	// 3. No match → 404
+	if best_idx == -1 {
+		return core.Result::Err(errors.rest_error(404, "not-found", "route-not-found", "no matching route"));
+	}
+
+	// 4. Clear stale path params, then extract from matched route
+	request.clear_path_params(req);
+	val best_pat = &app.route_patterns[best_idx];
+	router.extract_path_params(best_pat, &segments, req);
+
+	// 5. Run all global filters in order; short-circuit on Err
+	var fi = 0;
+	while fi < app.filters.len {
+		val f = &app.filters[fi];
+		match (*f).call(req, ctx) {
+			core.Result::Ok(_) => {},
+			core.Result::Err(e) => {
+				return core.Result::Err(e);
+			}
+		}
+		fi = fi + 1;
+	}
+
+	// 6. If route has a group → run group guards
+	val gid = app.route_group_ids[best_idx];
+	if gid >= 0 {
+		var gi = 0;
+		while gi < app.guard_group_ids.len {
+			if app.guard_group_ids[gi] == gid {
+				val g = &app.guard_callbacks[gi];
+				match (*g).call(req, ctx) {
+					core.Result::Ok(_) => {},
+					core.Result::Err(e) => {
+						return core.Result::Err(e);
+					}
+				}
+			}
+			gi = gi + 1;
+		}
+	}
+
+	// 7. Call route handler (nothrow or throws)
+	if app.route_is_throws[best_idx] {
+		return _dispatch_throws(app, best_idx, req, ctx);
+	}
+	val h = &app.route_handlers[best_idx];
+	return (*h).call(req, ctx);
+}

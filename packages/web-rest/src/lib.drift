@@ -4,10 +4,13 @@ import std.core as core;
 import std.json as json;
 import web.jwt as jwt;
 import web.rest.errors as errors;
+import web.rest.events as events;
 import web.rest.response as response;
 import web.rest.context as context;
 import web.rest.request as request;
 import web.rest.jwt_guard as jwt_guard;
+import web.rest.router as router;
+import web.rest.app as app;
 
 export {
 	RestError,
@@ -15,6 +18,16 @@ export {
 	Request,
 	Context,
 	Principal,
+	JwtGuardConfig,
+	AppBuilder,
+	App,
+	Group,
+	RestBadRequest,
+	RestUnauthorized,
+	RestForbidden,
+	RestNotFound,
+	RestConflict,
+	RestInternal,
 	EVENT_REQUEST_INVALID,
 	EVENT_UNAUTHORIZED,
 	EVENT_FORBIDDEN,
@@ -29,6 +42,8 @@ export {
 	new_context,
 	new_request,
 	add_query_param,
+	add_header,
+	header,
 	set_principal,
 	get_principal,
 	require_principal,
@@ -36,7 +51,24 @@ export {
 	require_query_param,
 	body_json,
 	require_body_json,
-	jwt_guard_apply
+	add_path_param,
+	path_param,
+	require_path_param,
+	new_jwt_guard_config,
+	jwt_guard_apply,
+	new_app_builder,
+	bind,
+	build_app,
+	add_filter,
+	add_group,
+	add_group_guard,
+	add_throws_route,
+	add_group_throws_route,
+	dispatch,
+	split_path,
+	parse_route_pattern,
+	match_route,
+	extract_path_params
 };
 
 pub type RestError = errors.RestError;
@@ -44,6 +76,17 @@ pub type Response = response.Response;
 pub type Request = request.Request;
 pub type Context = context.Context;
 pub type Principal = context.Principal;
+pub type JwtGuardConfig = jwt_guard.JwtGuardConfig;
+pub type AppBuilder = app.AppBuilder;
+pub type App = app.App;
+pub type Group = app.Group;
+
+pub type RestBadRequest = events.RestBadRequest;
+pub type RestUnauthorized = events.RestUnauthorized;
+pub type RestForbidden = events.RestForbidden;
+pub type RestNotFound = events.RestNotFound;
+pub type RestConflict = events.RestConflict;
+pub type RestInternal = events.RestInternal;
 
 pub const EVENT_REQUEST_INVALID: String = "request-invalid";
 pub const EVENT_UNAUTHORIZED: String = "unauthorized";
@@ -81,6 +124,14 @@ pub fn add_query_param(req: &mut Request, key: String, value: String) nothrow ->
 	return request.add_query_param(req, key, value);
 }
 
+pub fn add_header(req: &mut Request, key: String, value: String) nothrow -> Void {
+	return request.add_header(req, key, value);
+}
+
+pub fn header(req: &Request, name: &String) nothrow -> Optional<String> {
+	return request.header(req, name);
+}
+
 pub fn set_principal(ctx: &mut Context, sub: String) nothrow -> Void {
 	return context.set_principal(ctx, sub);
 }
@@ -116,6 +167,74 @@ pub fn require_body_json(req: &Request) nothrow -> core.Result<json.JsonNode, Re
 	return request.require_body_json(req);
 }
 
-pub fn jwt_guard_apply(token: &String, secret: &Array<Byte>, now_unix: Int, policy: &jwt.JwtVerifyPolicy, ctx: &mut Context) nothrow -> core.Result<Void, RestError> {
-	return jwt_guard.jwt_guard_apply(token, secret, now_unix, policy, ctx);
+pub fn add_path_param(req: &mut Request, key: String, value: String) nothrow -> Void {
+	return request.add_path_param(req, key, value);
+}
+
+pub fn path_param(req: &Request, name: &String) nothrow -> core.Result<String, RestError> {
+	return request.path_param(req, name);
+}
+
+pub fn require_path_param(req: &Request, name: &String) nothrow -> core.Result<String, RestError> {
+	return request.require_path_param(req, name);
+}
+
+pub fn new_jwt_guard_config(secret: Array<Byte>, policy: jwt.JwtVerifyPolicy) nothrow -> JwtGuardConfig {
+	return jwt_guard.new_jwt_guard_config(move secret, move policy);
+}
+
+pub fn jwt_guard_apply(config: &JwtGuardConfig, req: &Request, ctx: &mut Context) nothrow -> core.Result<Void, RestError> {
+	return jwt_guard.jwt_guard_apply(config, req, ctx);
+}
+
+pub fn new_app_builder() nothrow -> AppBuilder {
+	return app.new_app_builder();
+}
+
+pub fn bind(b: &mut AppBuilder, host: String, port: Int) nothrow -> Void {
+	return app.bind(b, host, port);
+}
+
+pub fn build_app(b: AppBuilder) nothrow -> core.Result<App, RestError> {
+	return app.build_app(move b);
+}
+
+pub fn add_filter(a: &mut App, filter: core.Callback2<&Request, &mut Context, core.Result<Void, RestError>>) nothrow -> Void {
+	return app.add_filter(a, move filter);
+}
+
+pub fn add_group(a: &mut App, prefix: String) nothrow -> core.Result<Group, RestError> {
+	return app.add_group(a, prefix);
+}
+
+pub fn add_group_guard(a: &mut App, group: &Group, guard: core.Callback2<&Request, &mut Context, core.Result<Void, RestError>>) nothrow -> Void {
+	return app.add_group_guard(a, group, move guard);
+}
+
+pub fn add_throws_route(a: &mut App, method: String, path: String, handler: core.CallbackThrow2<&Request, &mut Context, Response>) nothrow -> core.Result<Void, RestError> {
+	return app.add_throws_route(a, method, path, move handler);
+}
+
+pub fn add_group_throws_route(a: &mut App, group: &Group, method: String, path: String, handler: core.CallbackThrow2<&Request, &mut Context, Response>) nothrow -> core.Result<Void, RestError> {
+	return app.add_group_throws_route(a, group, method, path, move handler);
+}
+
+pub fn dispatch(a: &App, req: &mut Request, ctx: &mut Context) nothrow -> core.Result<Response, RestError> {
+	return app.dispatch(a, req, ctx);
+}
+
+pub fn split_path(path: &String) nothrow -> Array<String> {
+	return router.split_path(path);
+}
+
+pub fn parse_route_pattern(path: &String) nothrow -> core.Result<router.RoutePattern, RestError> {
+	return router.parse_route_pattern(path);
+}
+
+pub fn match_route(pattern: &router.RoutePattern, segments: &Array<String>) nothrow -> Bool {
+	return router.match_route(pattern, segments);
+}
+
+pub fn extract_path_params(pattern: &router.RoutePattern, segments: &Array<String>, req: &mut Request) nothrow -> Void {
+	return router.extract_path_params(pattern, segments, req);
 }
