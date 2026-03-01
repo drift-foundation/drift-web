@@ -5,6 +5,7 @@ import std.io as io;
 import std.net as net;
 import std.concurrent as conc;
 import std.time as time;
+import std.parse as parse;
 import web.jwt as jwt;
 import web.rest as rest;
 import web.rest.app as rest_app;
@@ -604,12 +605,12 @@ fn scenario_large_headers() nothrow -> Int {
 
 // --- Scenario 5: Malformed request matrix (500-range) ---
 //
-// Sends a variety of malformed HTTP payloads and verifies proper error
-// responses. Each sub-case uses a single server with max_requests = 1 to
-// keep lifecycle clean. The server must stay alive and respond to every one.
+// All 7 malformed payloads are sent sequentially to a single server instance
+// with max_requests = 7. This proves the server recovers and stays alive
+// across multiple malformed requests on the same lifecycle.
 //
 // Tags allowed per sub-case:
-//   1. empty connect-close: read-failed or empty-request
+//   1. empty (no data sent, connection held open until server times out): read-failed or empty-request
 //   2. blank request line (\r\n\r\n): malformed-http
 //   3. no path (GET\r\n\r\n): malformed-http
 //   4. Content-Length but no body: incomplete-body
@@ -618,10 +619,8 @@ fn scenario_large_headers() nothrow -> Int {
 //   7. no HTTP version (GET /health\r\n\r\n): malformed-http
 
 // Raw send+recv: connect, optionally write raw bytes, read whatever comes back.
-// If payload is empty string, connects then immediately closes write direction
-// by closing the stream, but we still need to read response before that.
-// For empty-connect, we connect, send nothing, and wait for server to respond
-// (server sees EOF or read error).
+// If payload is empty, connects without writing and waits for the server to
+// respond (server's stream.read() times out → error envelope sent back).
 fn _raw_send_recv(port: Int, payload: &String, timeout: conc.Duration) nothrow -> core.Result<String, Int> {
 	var addr = net.socket_addr("127.0.0.1", port);
 	match net.connect(&addr, timeout) {
@@ -674,80 +673,28 @@ fn _raw_send_recv(port: Int, payload: &String, timeout: conc.Duration) nothrow -
 	}
 }
 
-// Run one malformed sub-case: build app, listen, serve with max_requests=1,
-// send the payload, check response against expected status line and allowed tags.
-// allowed_tag1 and allowed_tag2: at least one must appear in the response body.
-// Pass empty string for allowed_tag2 if only one tag is acceptable.
-// server_timeout: used for the server's I/O (controls how fast it times out on
-//   missing body bytes).
-// client_timeout: used for the client's connect/write/read (should be longer
-//   than server_timeout so client outlives server's error path).
-fn _malformed_subcase(payload: &String, expected_status: &String, allowed_tag1: &String, allowed_tag2: &String, server_timeout: conc.Duration, client_timeout: conc.Duration) nothrow -> Int {
-	var b = rest.new_app_builder();
-	rest.bind(&mut b, "127.0.0.1", 0);
-	match rest.build_app(move b) {
-		core.Result::Err(_) => { return 1; },
-		core.Result::Ok(a) => {
-			var app = move a;
-			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
-				core.Result::Err(_) => { return 2; },
-				core.Result::Ok(_) => {}
-			}
-			match rest.listen_app(&app, client_timeout) {
-				core.Result::Err(_) => { return 3; },
-				core.Result::Ok(lst) => {
-					var listener = move lst;
-					val port = listener.local_port();
-					var handle = rest.new_server_handle();
-					handle.max_requests = 1;
-					var caller_handle = rest.clone_handle(&handle);
-					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy server_timeout) => {
-						return _run_serve(move app, move listener, move handle, server_timeout);
-					});
-
-					match _raw_send_recv(port, payload, client_timeout) {
-						core.Result::Err(_) => {
-							rest.stop(&caller_handle);
-							val _ = sv.join();
-							return 4;
-						},
-						core.Result::Ok(resp_str) => {
-							rest.stop(&caller_handle);
-							match sv.join() {
-								core.Result::Err(_) => { return 5; },
-								core.Result::Ok(exit_code) => {
-									if exit_code != 0 { return 6; }
-								}
-							}
-
-							if !_starts_with(&resp_str, expected_status) { return 7; }
-
-							// Check that at least one allowed tag appears
-							val has_tag1 = _contains(&resp_str, allowed_tag1);
-							if allowed_tag2.byte_length() == 0 {
-								if !has_tag1 { return 8; }
-							} else {
-								val has_tag2 = _contains(&resp_str, allowed_tag2);
-								if !has_tag1 {
-									if !has_tag2 { return 8; }
-								}
-							}
-							return 0;
-						}
-					}
-				}
-			}
+// Check response against expected status line and at least one of two allowed tags.
+// Returns 0 on success, non-zero on failure.
+fn _check_malformed_response(resp_str: &String, expected_status: &String, allowed_tag1: &String, allowed_tag2: &String) nothrow -> Int {
+	if !_starts_with(resp_str, expected_status) { return 1; }
+	val has_tag1 = _contains(resp_str, allowed_tag1);
+	if allowed_tag2.byte_length() == 0 {
+		if !has_tag1 { return 2; }
+	} else {
+		val has_tag2 = _contains(resp_str, allowed_tag2);
+		if !has_tag1 {
+			if !has_tag2 { return 2; }
 		}
 	}
+	return 0;
 }
 
 fn scenario_malformed_matrix() nothrow -> Int {
-	val timeout = conc.Duration(millis = 5000);
-	// For truncated-body cases: server uses short timeout so it times out fast
-	// on the missing body bytes, client uses longer timeout so it outlives the
-	// server's error path and reads the response.
-	val srv_short = conc.Duration(millis = 1000);
-	val cli_long = conc.Duration(millis = 5000);
+	// Server uses 1s timeout — fast timeout on truncated-body reads, and all
+	// other sub-cases complete their reads almost instantly.
+	// Client uses 5s timeout — outlives the server's error path.
+	val srv_timeout = conc.Duration(millis = 1000);
+	val cli_timeout = conc.Duration(millis = 5000);
 	val s_400 = "HTTP/1.1 400 Bad Request";
 	val t_read_failed = "read-failed";
 	val t_empty = "empty-request";
@@ -755,90 +702,147 @@ fn scenario_malformed_matrix() nothrow -> Int {
 	val t_incomplete = "incomplete-body";
 	val empty = "";
 
-	// Sub 1: empty connect-close — server sees EOF/error, stays alive.
-	// Client connects then immediately closes. Server gets read-failed or
-	// empty-request, writes error response (may fail — client is gone), and
-	// proceeds. We verify the server VT exits cleanly.
-	var b1 = rest.new_app_builder();
-	rest.bind(&mut b1, "127.0.0.1", 0);
-	match rest.build_app(move b1) {
+	// Single server for all 7 sub-cases. max_requests = 7.
+	var bld = rest.new_app_builder();
+	rest.bind(&mut bld, "127.0.0.1", 0);
+	match rest.build_app(move bld) {
 		core.Result::Err(_) => { return 501; },
-		core.Result::Ok(a1) => {
-			var app1 = move a1;
-			match rest_app.add_route(&mut app1, "GET", "/health", core.callback2(_health_handler)) {
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
 				core.Result::Err(_) => { return 502; },
 				core.Result::Ok(_) => {}
 			}
-			match rest.listen_app(&app1, timeout) {
+			match rest_app.add_route(&mut app, "POST", "/health", core.callback2(_health_handler)) {
 				core.Result::Err(_) => { return 503; },
-				core.Result::Ok(lst1) => {
-					var listener1 = move lst1;
-					val port1 = listener1.local_port();
-					var handle1 = rest.new_server_handle();
-					handle1.max_requests = 1;
-					var caller1 = rest.clone_handle(&handle1);
-					var sv1 = conc.spawn_cb(| | captures(move app1, move listener1, move handle1, copy timeout) => {
-						return _run_serve(move app1, move listener1, move handle1, timeout);
+				core.Result::Ok(_) => {}
+			}
+			match rest.listen_app(&app, cli_timeout) {
+				core.Result::Err(_) => { return 504; },
+				core.Result::Ok(lst) => {
+					var listener = move lst;
+					val port = listener.local_port();
+					var handle = rest.new_server_handle();
+					handle.max_requests = 7;
+					var caller_handle = rest.clone_handle(&handle);
+					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy srv_timeout) => {
+						return _run_serve(move app, move listener, move handle, srv_timeout);
 					});
 
-					// Connect and immediately close
-					var addr1 = net.socket_addr("127.0.0.1", port1);
-					match net.connect(&addr1, timeout) {
+					// Sub 1: empty — client sends nothing, keeps connection open.
+					// Server's stream.read() times out (1s) → read-failed or
+					// empty-request. Server writes error response. Client reads it.
+					val p1 = "";
+					match _raw_send_recv(port, &p1, cli_timeout) {
 						core.Result::Err(_) => {
-							rest.stop(&caller1);
-							val _ = sv1.join();
-							return 504;
+							rest.stop(&caller_handle);
+							val _ = sv.join();
+							return 510;
 						},
-						core.Result::Ok(conn1) => {
-							var s1 = move conn1;
-							val _ = s1.close(timeout);
+						core.Result::Ok(r1) => {
+							val c1 = _check_malformed_response(&r1, &s_400, &t_read_failed, &t_empty);
+							if c1 != 0 { return 511; }
 						}
 					}
 
-					// Server processes the empty connection then stops
-					rest.stop(&caller1);
-					match sv1.join() {
-						core.Result::Err(_) => { return 505; },
-						core.Result::Ok(exit_code) => {
-							if exit_code != 0 { return 506; }
+					// Sub 2: blank request line (\r\n\r\n only)
+					val p2 = "\r\n\r\n";
+					match _raw_send_recv(port, &p2, cli_timeout) {
+						core.Result::Err(_) => {
+							rest.stop(&caller_handle);
+							val _ = sv.join();
+							return 520;
+						},
+						core.Result::Ok(r2) => {
+							val c2 = _check_malformed_response(&r2, &s_400, &t_malformed, &empty);
+							if c2 != 0 { return 521; }
 						}
 					}
+
+					// Sub 3: no path (GET\r\n\r\n)
+					val p3 = "GET\r\n\r\n";
+					match _raw_send_recv(port, &p3, cli_timeout) {
+						core.Result::Err(_) => {
+							rest.stop(&caller_handle);
+							val _ = sv.join();
+							return 530;
+						},
+						core.Result::Ok(r3) => {
+							val c3 = _check_malformed_response(&r3, &s_400, &t_malformed, &empty);
+							if c3 != 0 { return 531; }
+						}
+					}
+
+					// Sub 4: Content-Length declared but no body (server read times out)
+					val p4 = "GET / HTTP/1.1\r\nContent-Length: 100\r\n\r\n";
+					match _raw_send_recv(port, &p4, cli_timeout) {
+						core.Result::Err(_) => {
+							rest.stop(&caller_handle);
+							val _ = sv.join();
+							return 540;
+						},
+						core.Result::Ok(r4) => {
+							val c4 = _check_malformed_response(&r4, &s_400, &t_incomplete, &empty);
+							if c4 != 0 { return 541; }
+						}
+					}
+
+					// Sub 5: binary garbage + \r\n\r\n
+					val p5 = "~~~~~~~~~~~~~~~~~~~~\r\n\r\n";
+					match _raw_send_recv(port, &p5, cli_timeout) {
+						core.Result::Err(_) => {
+							rest.stop(&caller_handle);
+							val _ = sv.join();
+							return 550;
+						},
+						core.Result::Ok(r5) => {
+							val c5 = _check_malformed_response(&r5, &s_400, &t_malformed, &empty);
+							if c5 != 0 { return 551; }
+						}
+					}
+
+					// Sub 6: truncated body (Content-Length: 5, only 2 bytes sent)
+					val p6 = "POST /health HTTP/1.1\r\nContent-Length: 5\r\n\r\nAB";
+					match _raw_send_recv(port, &p6, cli_timeout) {
+						core.Result::Err(_) => {
+							rest.stop(&caller_handle);
+							val _ = sv.join();
+							return 560;
+						},
+						core.Result::Ok(r6) => {
+							val c6 = _check_malformed_response(&r6, &s_400, &t_incomplete, &empty);
+							if c6 != 0 { return 561; }
+						}
+					}
+
+					// Sub 7: no HTTP version (GET /health\r\n\r\n)
+					val p7 = "GET /health\r\n\r\n";
+					match _raw_send_recv(port, &p7, cli_timeout) {
+						core.Result::Err(_) => {
+							rest.stop(&caller_handle);
+							val _ = sv.join();
+							return 570;
+						},
+						core.Result::Ok(r7) => {
+							val c7 = _check_malformed_response(&r7, &s_400, &t_malformed, &empty);
+							if c7 != 0 { return 571; }
+						}
+					}
+
+					// All 7 sub-cases done. Server should have self-stopped
+					// (max_requests = 7). Stop + join to be safe.
+					rest.stop(&caller_handle);
+					match sv.join() {
+						core.Result::Err(_) => { return 580; },
+						core.Result::Ok(exit_code) => {
+							if exit_code != 0 { return 581; }
+						}
+					}
+					return 0;
 				}
 			}
 		}
 	}
-
-	// Sub 2: blank request line (\r\n\r\n only)
-	val p2 = "\r\n\r\n";
-	val r2 = _malformed_subcase(&p2, &s_400, &t_malformed, &empty, timeout, timeout);
-	if r2 != 0 { return 510 + r2; }
-
-	// Sub 3: no path (GET\r\n\r\n)
-	val p3 = "GET\r\n\r\n";
-	val r3 = _malformed_subcase(&p3, &s_400, &t_malformed, &empty, timeout, timeout);
-	if r3 != 0 { return 520 + r3; }
-
-	// Sub 4: Content-Length declared but no body (server read times out)
-	val p4 = "GET / HTTP/1.1\r\nContent-Length: 100\r\n\r\n";
-	val r4 = _malformed_subcase(&p4, &s_400, &t_incomplete, &empty, srv_short, cli_long);
-	if r4 != 0 { return 530 + r4; }
-
-	// Sub 5: binary garbage + \r\n\r\n
-	var p5 = "~~~~~~~~~~~~~~~~~~~~\r\n\r\n";
-	val r5 = _malformed_subcase(&p5, &s_400, &t_malformed, &empty, timeout, timeout);
-	if r5 != 0 { return 540 + r5; }
-
-	// Sub 6: truncated body (Content-Length: 5, only 2 bytes sent; server read times out)
-	val p6 = "POST /health HTTP/1.1\r\nContent-Length: 5\r\n\r\nAB";
-	val r6 = _malformed_subcase(&p6, &s_400, &t_incomplete, &empty, srv_short, cli_long);
-	if r6 != 0 { return 550 + r6; }
-
-	// Sub 7: no HTTP version (GET /health\r\n\r\n)
-	val p7 = "GET /health\r\n\r\n";
-	val r7 = _malformed_subcase(&p7, &s_400, &t_malformed, &empty, timeout, timeout);
-	if r7 != 0 { return 560 + r7; }
-
-	return 0;
 }
 
 // --- Scenario 6: Partial/slow client (600-range) ---
@@ -972,6 +976,189 @@ fn scenario_partial_slow_client() nothrow -> Int {
 	}
 }
 
+// --- Scenario 7: Large response body (700-range) ---
+//
+// Handler returns a JSON body >8KB (~12KB of repeated payload). Client reads
+// the full response and verifies Content-Length matches actual body length
+// and body content is intact via start/end spot checks.
+
+// Build a ~12KB JSON body: {"data":"<repeated 'X' ~12000 chars>"}
+// Outer envelope is 10 bytes: {"data":"  ... "}
+// So we need ~12000 X chars for ~12010 byte body.
+fn _build_large_body() nothrow -> String {
+	// Build 100-char block via doubling
+	var blk = "XXXXXXXXXX"; // 10
+	blk = blk + blk; // 20
+	blk = blk + blk; // 40
+	blk = blk + blk; // 80
+	blk = blk + "XXXXXXXXXXXXXXXXXXXX"; // 100
+
+	// 120 repetitions of 100 chars = 12000 chars
+	var payload = "";
+	var i = 0;
+	while i < 120 {
+		payload = payload + blk;
+		i = i + 1;
+	}
+	return "{\"data\":\"" + payload + "\"}";
+}
+
+fn _large_handler(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	val body = _build_large_body();
+	return core.Result::Ok(rest.json_response(200, body));
+}
+
+// Extract substring from index start to end (byte positions).
+fn _substr(s: &String, start: Int, end: Int) nothrow -> String {
+	val n = end - start;
+	if n <= 0 {
+		return "";
+	}
+	var b = io.buffer(n);
+	var i = 0;
+	while i < n {
+		io.buffer_write(&mut b, i, core.string_byte_at(s, start + i));
+		i = i + 1;
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&b), n);
+}
+
+// Find \r\n\r\n in string, return index of the first byte after it (body start).
+// Returns -1 if not found.
+fn _find_body_start(s: &String) nothrow -> Int {
+	val len = s.byte_length();
+	if len < 4 {
+		return -1;
+	}
+	var i = 0;
+	val limit = len - 3;
+	while i < limit {
+		if core.string_byte_at(s, i) == cast<Byte>(13) {
+			if core.string_byte_at(s, i + 1) == cast<Byte>(10) {
+				if core.string_byte_at(s, i + 2) == cast<Byte>(13) {
+					if core.string_byte_at(s, i + 3) == cast<Byte>(10) {
+						return i + 4;
+					}
+				}
+			}
+		}
+		i = i + 1;
+	}
+	return -1;
+}
+
+// Extract Content-Length value from response header string.
+// Returns -1 if not found or unparseable.
+fn _extract_content_length(resp: &String) nothrow -> Int {
+	val marker = "Content-Length: ";
+	val m_len = marker.byte_length();
+	val r_len = resp.byte_length();
+	if r_len < m_len {
+		return -1;
+	}
+	var i = 0;
+	val limit = r_len - m_len;
+	while i < limit {
+		var matched = true;
+		var j = 0;
+		while j < m_len {
+			if core.string_byte_at(resp, i + j) != core.string_byte_at(marker, j) {
+				matched = false;
+				j = m_len;
+			} else {
+				j = j + 1;
+			}
+		}
+		if matched {
+			// Found "Content-Length: " at position i. Read digits until \r.
+			val val_start = i + m_len;
+			var val_end = val_start;
+			while val_end < r_len {
+				if core.string_byte_at(resp, val_end) == cast<Byte>(13) {
+					val_end = val_end; // stop
+					// break by jumping past loop
+					val_end = val_end + r_len; // force exit
+				} else {
+					val_end = val_end + 1;
+				}
+			}
+			// Undo the force-exit offset
+			if val_end >= r_len {
+				val_end = val_end - r_len;
+			}
+			val val_str = _substr(resp, val_start, val_end);
+			match parse.parse_int(val_str) {
+				core.Result::Ok(n) => { return n; },
+				core.Result::Err(_) => { return -1; }
+			}
+		}
+		i = i + 1;
+	}
+	return -1;
+}
+
+fn scenario_large_response() nothrow -> Int {
+	val timeout = conc.Duration(millis = 5000);
+
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 701; },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest_app.add_route(&mut app, "GET", "/v1/large", core.callback2(_large_handler)) {
+				core.Result::Err(_) => { return 702; },
+				core.Result::Ok(_) => {}
+			}
+
+			var reqs: Array<String> = [];
+			var r = "GET /v1/large HTTP/1.1\r\nHost: localhost\r\n\r\n";
+			reqs.push(move r);
+			match _multi_roundtrip(move app, &reqs, timeout) {
+				core.Result::Err(_) => { return 703; },
+				core.Result::Ok(resps) => {
+					if resps.len != 1 { return 704; }
+
+					val resp = &resps[0];
+
+					// Check status line
+					val s_200 = "HTTP/1.1 200 OK";
+					if !_starts_with(resp, &s_200) { return 705; }
+
+					// Extract Content-Length header
+					val cl = _extract_content_length(resp);
+					if cl <= 0 { return 706; }
+
+					// Find body start
+					val body_start = _find_body_start(resp);
+					if body_start == -1 { return 707; }
+
+					// Actual body length = total response length - body_start
+					val actual_body_len = resp.byte_length() - body_start;
+					if actual_body_len != cl { return 708; }
+
+					// Body should be ~12010 bytes
+					if cl < 12000 { return 709; }
+
+					// Spot-check: body starts with {"data":"X
+					val body = _substr(resp, body_start, resp.byte_length());
+					val prefix = "{\"data\":\"X";
+					if !_starts_with(&body, &prefix) { return 710; }
+
+					// Spot-check: body ends with X"}
+					val suffix = "X\"}";
+					val s_len = suffix.byte_length();
+					val b_len = body.byte_length();
+					val tail = _substr(&body, b_len - s_len, b_len);
+					if tail != suffix { return 711; }
+
+					return 0;
+				}
+			}
+		}
+	}
+}
+
 fn main() nothrow -> Int {
 	val a = scenario_many_sequential_mixed();
 	if a != 0 { return a; }
@@ -985,5 +1172,7 @@ fn main() nothrow -> Int {
 	if e != 0 { return e; }
 	val f = scenario_partial_slow_client();
 	if f != 0 { return f; }
+	val g = scenario_large_response();
+	if g != 0 { return g; }
 	return 0;
 }
