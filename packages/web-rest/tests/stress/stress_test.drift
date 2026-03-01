@@ -256,6 +256,22 @@ fn _me_handler(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Result<
 	}
 }
 
+// --- Shared client VT helper ---
+
+fn _client_health_check(port: Int, timeout: conc.Duration) nothrow -> Int {
+	val raw_req = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
+	match _http_roundtrip(port, &raw_req, timeout) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(resp_str) => {
+			val s_200 = "HTTP/1.1 200 OK";
+			if !_starts_with(&resp_str, &s_200) { return 2; }
+			val m_health = "{\"ok\":true}";
+			if !_contains(&resp_str, &m_health) { return 3; }
+			return 0;
+		}
+	}
+}
+
 // --- Scenario 1: Many sequential requests, mixed types (100-range) ---
 //
 // Sends 50 requests cycling through 5 types: health, echo query, echo body,
@@ -366,8 +382,88 @@ fn scenario_many_sequential_mixed() nothrow -> Int {
 	}
 }
 
+// --- Scenario 2: Concurrent client connections (200-range) ---
+//
+// Spawns 10 client VTs that connect ~simultaneously. Server processes them
+// one at a time from the accept loop while client VTs park on their own I/O.
+// Exercises VT scheduler under contention and OS backlog draining.
+
+fn scenario_concurrent_clients() nothrow -> Int {
+	val timeout = conc.Duration(millis = 10000);
+
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 201; },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+				core.Result::Err(_) => { return 202; },
+				core.Result::Ok(_) => {}
+			}
+
+			match rest.listen_app(&app, timeout) {
+				core.Result::Err(_) => { return 203; },
+				core.Result::Ok(lst) => {
+					var listener = move lst;
+					val port = listener.local_port();
+					var handle = rest.new_server_handle();
+					handle.max_requests = 10;
+					var caller_handle = rest.clone_handle(&handle);
+
+					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
+						return _run_serve(move app, move listener, move handle, timeout);
+					});
+
+					// Spawn 10 client VTs
+					var c0 = conc.spawn_cb(| | captures(copy port, copy timeout) => { return _client_health_check(port, timeout); });
+					var c1 = conc.spawn_cb(| | captures(copy port, copy timeout) => { return _client_health_check(port, timeout); });
+					var c2 = conc.spawn_cb(| | captures(copy port, copy timeout) => { return _client_health_check(port, timeout); });
+					var c3 = conc.spawn_cb(| | captures(copy port, copy timeout) => { return _client_health_check(port, timeout); });
+					var c4 = conc.spawn_cb(| | captures(copy port, copy timeout) => { return _client_health_check(port, timeout); });
+					var c5 = conc.spawn_cb(| | captures(copy port, copy timeout) => { return _client_health_check(port, timeout); });
+					var c6 = conc.spawn_cb(| | captures(copy port, copy timeout) => { return _client_health_check(port, timeout); });
+					var c7 = conc.spawn_cb(| | captures(copy port, copy timeout) => { return _client_health_check(port, timeout); });
+					var c8 = conc.spawn_cb(| | captures(copy port, copy timeout) => { return _client_health_check(port, timeout); });
+					var c9 = conc.spawn_cb(| | captures(copy port, copy timeout) => { return _client_health_check(port, timeout); });
+
+					// Join all 10 — join every VT even if some fail
+					var join_err = 0;
+					var check_err = 0;
+
+					match c0.join() { core.Result::Err(_) => { join_err = join_err + 1; }, core.Result::Ok(code) => { if code != 0 { check_err = check_err + 1; } } }
+					match c1.join() { core.Result::Err(_) => { join_err = join_err + 1; }, core.Result::Ok(code) => { if code != 0 { check_err = check_err + 1; } } }
+					match c2.join() { core.Result::Err(_) => { join_err = join_err + 1; }, core.Result::Ok(code) => { if code != 0 { check_err = check_err + 1; } } }
+					match c3.join() { core.Result::Err(_) => { join_err = join_err + 1; }, core.Result::Ok(code) => { if code != 0 { check_err = check_err + 1; } } }
+					match c4.join() { core.Result::Err(_) => { join_err = join_err + 1; }, core.Result::Ok(code) => { if code != 0 { check_err = check_err + 1; } } }
+					match c5.join() { core.Result::Err(_) => { join_err = join_err + 1; }, core.Result::Ok(code) => { if code != 0 { check_err = check_err + 1; } } }
+					match c6.join() { core.Result::Err(_) => { join_err = join_err + 1; }, core.Result::Ok(code) => { if code != 0 { check_err = check_err + 1; } } }
+					match c7.join() { core.Result::Err(_) => { join_err = join_err + 1; }, core.Result::Ok(code) => { if code != 0 { check_err = check_err + 1; } } }
+					match c8.join() { core.Result::Err(_) => { join_err = join_err + 1; }, core.Result::Ok(code) => { if code != 0 { check_err = check_err + 1; } } }
+					match c9.join() { core.Result::Err(_) => { join_err = join_err + 1; }, core.Result::Ok(code) => { if code != 0 { check_err = check_err + 1; } } }
+
+					// Stop server and join
+					rest.stop(&caller_handle);
+					match sv.join() {
+						core.Result::Err(_) => { return 204; },
+						core.Result::Ok(exit_code) => {
+							if exit_code != 0 { return 205; }
+						}
+					}
+
+					if join_err > 0 { return 210; }
+					if check_err > 0 { return 211; }
+					return 0;
+				}
+			}
+		}
+	}
+}
+
 fn main() nothrow -> Int {
 	val a = scenario_many_sequential_mixed();
 	if a != 0 { return a; }
+	val b = scenario_concurrent_clients();
+	if b != 0 { return b; }
 	return 0;
 }
