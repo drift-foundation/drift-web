@@ -1,0 +1,373 @@
+module web.rest.tests.stress.stress_test
+
+import std.core as core;
+import std.io as io;
+import std.net as net;
+import std.concurrent as conc;
+import std.time as time;
+import web.jwt as jwt;
+import web.rest as rest;
+import web.rest.app as rest_app;
+
+// Stress & correctness tests for the REST server.
+// Separated from unit tests: slower, timing-sensitive, exercises sustained load.
+
+// --- Shared byte/string helpers ---
+
+fn _to_bytes(s: &String) nothrow -> Array<Byte> {
+	var out: Array<Byte> = [];
+	var i = 0;
+	val n = s.byte_length();
+	while i < n {
+		out.push(core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return move out;
+}
+
+fn _bytes_to_string(raw: &Array<Byte>) nothrow -> String {
+	val n = raw.len;
+	if n == 0 {
+		return "";
+	}
+	var b = io.buffer(n);
+	var i = 0;
+	while i < n {
+		io.buffer_write(&mut b, i, raw[i]);
+		i = i + 1;
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&b), n);
+}
+
+// --- Shared string matchers ---
+
+fn _contains(haystack: &String, needle: &String) nothrow -> Bool {
+	val h_len = haystack.byte_length();
+	val n_len = needle.byte_length();
+	if n_len > h_len {
+		return false;
+	}
+	var i = 0;
+	val limit = h_len - n_len + 1;
+	while i < limit {
+		var matched = true;
+		var j = 0;
+		while j < n_len {
+			if core.string_byte_at(haystack, i + j) != core.string_byte_at(needle, j) {
+				matched = false;
+				j = n_len;
+			} else {
+				j = j + 1;
+			}
+		}
+		if matched {
+			return true;
+		}
+		i = i + 1;
+	}
+	return false;
+}
+
+fn _starts_with(s: &String, prefix: &String) nothrow -> Bool {
+	val p_len = prefix.byte_length();
+	if s.byte_length() < p_len {
+		return false;
+	}
+	var i = 0;
+	while i < p_len {
+		if core.string_byte_at(s, i) != core.string_byte_at(prefix, i) {
+			return false;
+		}
+		i = i + 1;
+	}
+	return true;
+}
+
+// --- Shared TCP helpers ---
+
+fn _http_roundtrip(port: Int, raw_request: &String, timeout: conc.Duration) nothrow -> core.Result<String, Int> {
+	var addr = net.socket_addr("127.0.0.1", port);
+	match net.connect(&addr, timeout) {
+		core.Result::Err(_) => { return core.Result::Err(1); },
+		core.Result::Ok(conn) => {
+			var stream = move conn;
+			val req_bytes = _to_bytes(raw_request);
+			var wbuf = io.buffer(req_bytes.len);
+			var i = 0;
+			while i < req_bytes.len {
+				io.buffer_write(&mut wbuf, i, req_bytes[i]);
+				i = i + 1;
+			}
+			match stream.write(&wbuf, timeout) {
+				core.Result::Err(_) => {
+					val _ = stream.close(timeout);
+					return core.Result::Err(2);
+				},
+				core.Result::Ok(_) => {}
+			}
+			var collected: Array<Byte> = [];
+			var done = false;
+			while !done {
+				var rbuf = io.buffer(4096);
+				match stream.read(&mut rbuf, timeout) {
+					core.Result::Err(_) => { done = true; },
+					core.Result::Ok(n) => {
+						if n == 0 {
+							done = true;
+						} else {
+							var j = 0;
+							while j < n {
+								collected.push(io.buffer_read(&mut rbuf, j));
+								j = j + 1;
+							}
+						}
+					}
+				}
+			}
+			val _ = stream.close(timeout);
+			return core.Result::Ok(_bytes_to_string(&collected));
+		}
+	}
+}
+
+fn _run_serve(a: rest.App, listener: net.TcpListener, handle: rest.ServerHandle, timeout: conc.Duration) nothrow -> Int {
+	match rest.serve(move a, move listener, move handle, timeout) {
+		core.Result::Ok(_) => { return 0; },
+		core.Result::Err(_) => { return 1; }
+	}
+}
+
+// --- Multi-roundtrip lifecycle helper ---
+//
+// Sets up server with max_requests = requests.len, sends all requests
+// sequentially, collects responses. Stops server and joins VT before
+// returning.
+
+fn _multi_roundtrip(app: rest.App, requests: &Array<String>, timeout: conc.Duration) nothrow -> core.Result<Array<String>, Int> {
+	match rest.listen_app(&app, timeout) {
+		core.Result::Err(_) => { return core.Result::Err(1); },
+		core.Result::Ok(lst) => {
+			var listener = move lst;
+			val port = listener.local_port();
+			var handle = rest.new_server_handle();
+			handle.max_requests = requests.len;
+			var caller_handle = rest.clone_handle(&handle);
+			var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
+				return _run_serve(move app, move listener, move handle, timeout);
+			});
+
+			var responses: Array<String> = [];
+			var ok = true;
+			var i = 0;
+			while i < requests.len {
+				if ok {
+					match _http_roundtrip(port, &requests[i], timeout) {
+						core.Result::Err(_) => {
+							ok = false;
+						},
+						core.Result::Ok(resp_str) => {
+							responses.push(move resp_str);
+						}
+					}
+				}
+				i = i + 1;
+			}
+
+			rest.stop(&caller_handle);
+			match sv.join() {
+				core.Result::Err(_) => { return core.Result::Err(2); },
+				core.Result::Ok(exit_code) => {
+					if exit_code != 0 { return core.Result::Err(3); }
+				}
+			}
+
+			if !ok {
+				return core.Result::Err(4);
+			}
+
+			return core.Result::Ok(move responses);
+		}
+	}
+}
+
+// --- JWT helpers ---
+
+fn _test_secret() nothrow -> Array<Byte> {
+	var out: Array<Byte> = [cast<Byte>(115), cast<Byte>(101), cast<Byte>(99), cast<Byte>(114), cast<Byte>(101), cast<Byte>(116)];
+	return move out;
+}
+
+fn _build_policy() nothrow -> jwt.JwtVerifyPolicy {
+	var pb = jwt.new_verify_policy_builder();
+	pb.require_typ_jwt = false;
+	match jwt.build_verify_policy(move pb) {
+		core.Result::Ok(v) => { return v; },
+		core.Result::Err(_) => {
+			return jwt.JwtVerifyPolicy(skew_sec = 0, max_future_iat_sec = 0, require_typ_jwt = false);
+		}
+	}
+}
+
+fn _jwt_guard_owned(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Result<Void, rest.RestError> {
+	var config = rest.new_jwt_guard_config(_test_secret(), _build_policy());
+	config.now_unix = time.utc_unix_seconds_now();
+	return rest.jwt_guard_apply(&config, req, c);
+}
+
+// --- Handler helpers ---
+
+fn _health_handler(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	return core.Result::Ok(rest.json_response(200, "{\"ok\":true}"));
+}
+
+fn _echo_query_handler(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	val name = "key";
+	match rest.query_param(req, &name) {
+		Optional::Some(v) => {
+			val body = "{\"key\":\"" + v + "\"}";
+			return core.Result::Ok(rest.json_response(200, body));
+		},
+		Optional::None => {
+			return core.Result::Ok(rest.json_response(200, "{\"key\":null}"));
+		}
+	}
+}
+
+fn _echo_body_handler(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	match rest.body_json(req) {
+		core.Result::Ok(_) => {
+			return core.Result::Ok(rest.json_response(200, "{\"echo\":true}"));
+		},
+		core.Result::Err(e) => {
+			return core.Result::Err(e);
+		}
+	}
+}
+
+fn _me_handler(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	match rest.get_principal(c) {
+		Optional::Some(p) => {
+			val body = "{\"sub\":\"" + p.sub + "\"}";
+			return core.Result::Ok(rest.json_response(200, body));
+		},
+		Optional::None => {
+			return core.Result::Err(rest.rest_error(401, "unauthorized", "missing-principal", "no principal"));
+		}
+	}
+}
+
+// --- Scenario 1: Many sequential requests, mixed types (100-range) ---
+//
+// Sends 50 requests cycling through 5 types: health, echo query, echo body,
+// 404, and 401. Exercises success paths, error paths, body parsing, query
+// params, and guard rejection across a sustained run.
+
+fn scenario_many_sequential_mixed() nothrow -> Int {
+	val timeout = conc.Duration(millis = 5000);
+
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 101; },
+		core.Result::Ok(a) => {
+			var app = move a;
+
+			// Ungrouped routes
+			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+				core.Result::Err(_) => { return 102; },
+				core.Result::Ok(_) => {}
+			}
+			match rest_app.add_route(&mut app, "GET", "/v1/echo", core.callback2(_echo_query_handler)) {
+				core.Result::Err(_) => { return 103; },
+				core.Result::Ok(_) => {}
+			}
+			match rest_app.add_route(&mut app, "POST", "/v1/echo", core.callback2(_echo_body_handler)) {
+				core.Result::Err(_) => { return 104; },
+				core.Result::Ok(_) => {}
+			}
+
+			// Guarded group for /v1/me
+			match rest.add_group(&mut app, "/v1") {
+				core.Result::Err(_) => { return 105; },
+				core.Result::Ok(group) => {
+					rest.add_group_guard(&mut app, &group, core.callback2(_jwt_guard_owned));
+					match rest_app.add_group_route(&mut app, &group, "GET", "/me", core.callback2(_me_handler)) {
+						core.Result::Err(_) => { return 106; },
+						core.Result::Ok(_) => {}
+					}
+				}
+			}
+
+			// Build 50 requests: 10 cycles of 5 types
+			var requests: Array<String> = [];
+			var cycle = 0;
+			while cycle < 10 {
+				var r0 = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
+				requests.push(move r0);
+				var r1 = "GET /v1/echo?key=stress HTTP/1.1\r\nHost: localhost\r\n\r\n";
+				requests.push(move r1);
+				var r2 = "POST /v1/echo HTTP/1.1\r\nHost: localhost\r\nContent-Length: 15\r\n\r\n{\"test\":\"body\"}";
+				requests.push(move r2);
+				var r3 = "GET /nonexistent HTTP/1.1\r\nHost: localhost\r\n\r\n";
+				requests.push(move r3);
+				var r4 = "GET /v1/me HTTP/1.1\r\nHost: localhost\r\n\r\n";
+				requests.push(move r4);
+				cycle = cycle + 1;
+			}
+
+			match _multi_roundtrip(move app, &requests, timeout) {
+				core.Result::Err(_) => { return 110; },
+				core.Result::Ok(responses) => {
+					if responses.len != 50 { return 111; }
+
+					val s_200 = "HTTP/1.1 200 OK";
+					val s_404 = "HTTP/1.1 404 Not Found";
+					val s_401 = "HTTP/1.1 401 Unauthorized";
+					val m_health = "{\"ok\":true}";
+					val m_key = "\"key\":\"stress\"";
+					val m_echo = "\"echo\":true";
+					val m_notfound = "\"event\":\"not-found\"";
+					val m_unauth = "\"event\":\"unauthorized\"";
+
+					var j = 0;
+					var kind = 0;
+					while j < 50 {
+						if kind == 0 {
+							if !_starts_with(&responses[j], &s_200) { return 120; }
+							if !_contains(&responses[j], &m_health) { return 121; }
+						}
+						if kind == 1 {
+							if !_starts_with(&responses[j], &s_200) { return 122; }
+							if !_contains(&responses[j], &m_key) { return 123; }
+						}
+						if kind == 2 {
+							if !_starts_with(&responses[j], &s_200) { return 124; }
+							if !_contains(&responses[j], &m_echo) { return 125; }
+						}
+						if kind == 3 {
+							if !_starts_with(&responses[j], &s_404) { return 126; }
+							if !_contains(&responses[j], &m_notfound) { return 127; }
+						}
+						if kind == 4 {
+							if !_starts_with(&responses[j], &s_401) { return 128; }
+							if !_contains(&responses[j], &m_unauth) { return 129; }
+						}
+						kind = kind + 1;
+						if kind >= 5 {
+							kind = 0;
+						}
+						j = j + 1;
+					}
+
+					return 0;
+				}
+			}
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	val a = scenario_many_sequential_mixed();
+	if a != 0 { return a; }
+	return 0;
+}

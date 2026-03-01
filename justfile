@@ -55,6 +55,14 @@ rest-check-unit FILE:
       --test-file "{{FILE}}" \
       --target-word-bits 64
 
+# REST stress tests (separate gate, not in default test target).
+rest-stress:
+    @tools/drift_test_parallel_runner.sh run-one \
+      --src-root packages/web-jwt/src \
+      --src-root packages/web-rest/src \
+      --test-file packages/web-rest/tests/stress/stress_test.drift \
+      --target-word-bits 64
+
 # Compile-only check for REST (no execution).
 rest-compile-check FILE="packages/web-rest/src/lib.drift":
     @tools/drift_test_parallel_runner.sh compile \
