@@ -602,6 +602,245 @@ fn scenario_large_headers() nothrow -> Int {
 	return 0;
 }
 
+// --- Scenario 5: Malformed request matrix (500-range) ---
+//
+// Sends a variety of malformed HTTP payloads and verifies proper error
+// responses. Each sub-case uses a single server with max_requests = 1 to
+// keep lifecycle clean. The server must stay alive and respond to every one.
+//
+// Tags allowed per sub-case:
+//   1. empty connect-close: read-failed or empty-request
+//   2. blank request line (\r\n\r\n): malformed-http
+//   3. no path (GET\r\n\r\n): malformed-http
+//   4. Content-Length but no body: incomplete-body
+//   5. binary garbage + \r\n\r\n: malformed-http
+//   6. truncated body: incomplete-body
+//   7. no HTTP version (GET /health\r\n\r\n): malformed-http
+
+// Raw send+recv: connect, optionally write raw bytes, read whatever comes back.
+// If payload is empty string, connects then immediately closes write direction
+// by closing the stream, but we still need to read response before that.
+// For empty-connect, we connect, send nothing, and wait for server to respond
+// (server sees EOF or read error).
+fn _raw_send_recv(port: Int, payload: &String, timeout: conc.Duration) nothrow -> core.Result<String, Int> {
+	var addr = net.socket_addr("127.0.0.1", port);
+	match net.connect(&addr, timeout) {
+		core.Result::Err(_) => { return core.Result::Err(1); },
+		core.Result::Ok(conn) => {
+			var stream = move conn;
+			// Write payload if non-empty
+			if payload.byte_length() > 0 {
+				val req_bytes = _to_bytes(payload);
+				var wbuf = io.buffer(req_bytes.len);
+				var i = 0;
+				while i < req_bytes.len {
+					io.buffer_write(&mut wbuf, i, req_bytes[i]);
+					i = i + 1;
+				}
+				match stream.write(&wbuf, timeout) {
+					core.Result::Err(_) => {
+						val _ = stream.close(timeout);
+						return core.Result::Err(2);
+					},
+					core.Result::Ok(_) => {}
+				}
+			}
+			// Read response
+			var collected: Array<Byte> = [];
+			var done = false;
+			while !done {
+				var rbuf = io.buffer(4096);
+				match stream.read(&mut rbuf, timeout) {
+					core.Result::Err(_) => { done = true; },
+					core.Result::Ok(n) => {
+						if n == 0 {
+							done = true;
+						} else {
+							var j = 0;
+							while j < n {
+								collected.push(io.buffer_read(&mut rbuf, j));
+								j = j + 1;
+							}
+						}
+					}
+				}
+			}
+			val _ = stream.close(timeout);
+			if collected.len == 0 {
+				return core.Result::Err(3);
+			}
+			return core.Result::Ok(_bytes_to_string(&collected));
+		}
+	}
+}
+
+// Run one malformed sub-case: build app, listen, serve with max_requests=1,
+// send the payload, check response against expected status line and allowed tags.
+// allowed_tag1 and allowed_tag2: at least one must appear in the response body.
+// Pass empty string for allowed_tag2 if only one tag is acceptable.
+// server_timeout: used for the server's I/O (controls how fast it times out on
+//   missing body bytes).
+// client_timeout: used for the client's connect/write/read (should be longer
+//   than server_timeout so client outlives server's error path).
+fn _malformed_subcase(payload: &String, expected_status: &String, allowed_tag1: &String, allowed_tag2: &String, server_timeout: conc.Duration, client_timeout: conc.Duration) nothrow -> Int {
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+				core.Result::Err(_) => { return 2; },
+				core.Result::Ok(_) => {}
+			}
+			match rest.listen_app(&app, client_timeout) {
+				core.Result::Err(_) => { return 3; },
+				core.Result::Ok(lst) => {
+					var listener = move lst;
+					val port = listener.local_port();
+					var handle = rest.new_server_handle();
+					handle.max_requests = 1;
+					var caller_handle = rest.clone_handle(&handle);
+					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy server_timeout) => {
+						return _run_serve(move app, move listener, move handle, server_timeout);
+					});
+
+					match _raw_send_recv(port, payload, client_timeout) {
+						core.Result::Err(_) => {
+							rest.stop(&caller_handle);
+							val _ = sv.join();
+							return 4;
+						},
+						core.Result::Ok(resp_str) => {
+							rest.stop(&caller_handle);
+							match sv.join() {
+								core.Result::Err(_) => { return 5; },
+								core.Result::Ok(exit_code) => {
+									if exit_code != 0 { return 6; }
+								}
+							}
+
+							if !_starts_with(&resp_str, expected_status) { return 7; }
+
+							// Check that at least one allowed tag appears
+							val has_tag1 = _contains(&resp_str, allowed_tag1);
+							if allowed_tag2.byte_length() == 0 {
+								if !has_tag1 { return 8; }
+							} else {
+								val has_tag2 = _contains(&resp_str, allowed_tag2);
+								if !has_tag1 {
+									if !has_tag2 { return 8; }
+								}
+							}
+							return 0;
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+fn scenario_malformed_matrix() nothrow -> Int {
+	val timeout = conc.Duration(millis = 5000);
+	// For truncated-body cases: server uses short timeout so it times out fast
+	// on the missing body bytes, client uses longer timeout so it outlives the
+	// server's error path and reads the response.
+	val srv_short = conc.Duration(millis = 1000);
+	val cli_long = conc.Duration(millis = 5000);
+	val s_400 = "HTTP/1.1 400 Bad Request";
+	val t_read_failed = "read-failed";
+	val t_empty = "empty-request";
+	val t_malformed = "malformed-http";
+	val t_incomplete = "incomplete-body";
+	val empty = "";
+
+	// Sub 1: empty connect-close — server sees EOF/error, stays alive.
+	// Client connects then immediately closes. Server gets read-failed or
+	// empty-request, writes error response (may fail — client is gone), and
+	// proceeds. We verify the server VT exits cleanly.
+	var b1 = rest.new_app_builder();
+	rest.bind(&mut b1, "127.0.0.1", 0);
+	match rest.build_app(move b1) {
+		core.Result::Err(_) => { return 501; },
+		core.Result::Ok(a1) => {
+			var app1 = move a1;
+			match rest_app.add_route(&mut app1, "GET", "/health", core.callback2(_health_handler)) {
+				core.Result::Err(_) => { return 502; },
+				core.Result::Ok(_) => {}
+			}
+			match rest.listen_app(&app1, timeout) {
+				core.Result::Err(_) => { return 503; },
+				core.Result::Ok(lst1) => {
+					var listener1 = move lst1;
+					val port1 = listener1.local_port();
+					var handle1 = rest.new_server_handle();
+					handle1.max_requests = 1;
+					var caller1 = rest.clone_handle(&handle1);
+					var sv1 = conc.spawn_cb(| | captures(move app1, move listener1, move handle1, copy timeout) => {
+						return _run_serve(move app1, move listener1, move handle1, timeout);
+					});
+
+					// Connect and immediately close
+					var addr1 = net.socket_addr("127.0.0.1", port1);
+					match net.connect(&addr1, timeout) {
+						core.Result::Err(_) => {
+							rest.stop(&caller1);
+							val _ = sv1.join();
+							return 504;
+						},
+						core.Result::Ok(conn1) => {
+							var s1 = move conn1;
+							val _ = s1.close(timeout);
+						}
+					}
+
+					// Server processes the empty connection then stops
+					rest.stop(&caller1);
+					match sv1.join() {
+						core.Result::Err(_) => { return 505; },
+						core.Result::Ok(exit_code) => {
+							if exit_code != 0 { return 506; }
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Sub 2: blank request line (\r\n\r\n only)
+	val p2 = "\r\n\r\n";
+	val r2 = _malformed_subcase(&p2, &s_400, &t_malformed, &empty, timeout, timeout);
+	if r2 != 0 { return 510 + r2; }
+
+	// Sub 3: no path (GET\r\n\r\n)
+	val p3 = "GET\r\n\r\n";
+	val r3 = _malformed_subcase(&p3, &s_400, &t_malformed, &empty, timeout, timeout);
+	if r3 != 0 { return 520 + r3; }
+
+	// Sub 4: Content-Length declared but no body (server read times out)
+	val p4 = "GET / HTTP/1.1\r\nContent-Length: 100\r\n\r\n";
+	val r4 = _malformed_subcase(&p4, &s_400, &t_incomplete, &empty, srv_short, cli_long);
+	if r4 != 0 { return 530 + r4; }
+
+	// Sub 5: binary garbage + \r\n\r\n
+	var p5 = "~~~~~~~~~~~~~~~~~~~~\r\n\r\n";
+	val r5 = _malformed_subcase(&p5, &s_400, &t_malformed, &empty, timeout, timeout);
+	if r5 != 0 { return 540 + r5; }
+
+	// Sub 6: truncated body (Content-Length: 5, only 2 bytes sent; server read times out)
+	val p6 = "POST /health HTTP/1.1\r\nContent-Length: 5\r\n\r\nAB";
+	val r6 = _malformed_subcase(&p6, &s_400, &t_incomplete, &empty, srv_short, cli_long);
+	if r6 != 0 { return 550 + r6; }
+
+	// Sub 7: no HTTP version (GET /health\r\n\r\n)
+	val p7 = "GET /health\r\n\r\n";
+	val r7 = _malformed_subcase(&p7, &s_400, &t_malformed, &empty, timeout, timeout);
+	if r7 != 0 { return 560 + r7; }
+
+	return 0;
+}
+
 fn main() nothrow -> Int {
 	val a = scenario_many_sequential_mixed();
 	if a != 0 { return a; }
@@ -611,5 +850,7 @@ fn main() nothrow -> Int {
 	if c != 0 { return c; }
 	val d = scenario_large_headers();
 	if d != 0 { return d; }
+	val e = scenario_malformed_matrix();
+	if e != 0 { return e; }
 	return 0;
 }
