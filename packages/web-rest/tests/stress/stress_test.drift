@@ -519,6 +519,89 @@ fn scenario_start_stop_cycles() nothrow -> Int {
 	return 0;
 }
 
+// --- Scenario 4: Large headers near limit (400-range) ---
+//
+// Two sub-cases: safely under 8192-byte MAX_HEADER_SIZE (200 OK) and
+// safely over (400 header-too-large). No exact-boundary pinning.
+
+// Build a GET /health request padded to approximately
+// 41 + pad_count * 109 bytes (request line + host + N pad headers + terminator).
+fn _padded_request(pad_count: Int) nothrow -> String {
+	// 100-byte pad value via doubling
+	var pad = "AAAAAAAAAA"; // 10
+	pad = pad + pad; // 20
+	pad = pad + pad; // 40
+	pad = pad + pad; // 80
+	pad = pad + "AAAAAAAAAAAAAAAAAAAA"; // 100
+
+	var req = "GET /health HTTP/1.1\r\nHost: localhost\r\n"; // 39 bytes
+	var i = 0;
+	while i < pad_count {
+		req = req + "X-Pad: " + pad + "\r\n"; // 109 bytes each
+		i = i + 1;
+	}
+	req = req + "\r\n"; // 2 bytes
+	return req;
+}
+
+fn scenario_large_headers() nothrow -> Int {
+	val timeout = conc.Duration(millis = 5000);
+
+	// Sub 1: safely under limit — 63 pad headers → ~6908 bytes total → 200 OK
+	var b1 = rest.new_app_builder();
+	rest.bind(&mut b1, "127.0.0.1", 0);
+	match rest.build_app(move b1) {
+		core.Result::Err(_) => { return 401; },
+		core.Result::Ok(a1) => {
+			var app1 = move a1;
+			match rest_app.add_route(&mut app1, "GET", "/health", core.callback2(_health_handler)) {
+				core.Result::Err(_) => { return 402; },
+				core.Result::Ok(_) => {}
+			}
+			var reqs1: Array<String> = [];
+			var r1 = _padded_request(63);
+			reqs1.push(move r1);
+			match _multi_roundtrip(move app1, &reqs1, timeout) {
+				core.Result::Err(_) => { return 403; },
+				core.Result::Ok(resps1) => {
+					val s_200 = "HTTP/1.1 200 OK";
+					if !_starts_with(&resps1[0], &s_200) { return 404; }
+					val m_health = "{\"ok\":true}";
+					if !_contains(&resps1[0], &m_health) { return 405; }
+				}
+			}
+		}
+	}
+
+	// Sub 2: safely over limit — 92 pad headers → ~10069 bytes total → 400
+	var b2 = rest.new_app_builder();
+	rest.bind(&mut b2, "127.0.0.1", 0);
+	match rest.build_app(move b2) {
+		core.Result::Err(_) => { return 410; },
+		core.Result::Ok(a2) => {
+			var app2 = move a2;
+			match rest_app.add_route(&mut app2, "GET", "/health", core.callback2(_health_handler)) {
+				core.Result::Err(_) => { return 411; },
+				core.Result::Ok(_) => {}
+			}
+			var reqs2: Array<String> = [];
+			var r2 = _padded_request(92);
+			reqs2.push(move r2);
+			match _multi_roundtrip(move app2, &reqs2, timeout) {
+				core.Result::Err(_) => { return 412; },
+				core.Result::Ok(resps2) => {
+					val s_400 = "HTTP/1.1 400 Bad Request";
+					if !_starts_with(&resps2[0], &s_400) { return 413; }
+					val m_tag = "header-too-large";
+					if !_contains(&resps2[0], &m_tag) { return 414; }
+				}
+			}
+		}
+	}
+
+	return 0;
+}
+
 fn main() nothrow -> Int {
 	val a = scenario_many_sequential_mixed();
 	if a != 0 { return a; }
@@ -526,5 +609,7 @@ fn main() nothrow -> Int {
 	if b != 0 { return b; }
 	val c = scenario_start_stop_cycles();
 	if c != 0 { return c; }
+	val d = scenario_large_headers();
+	if d != 0 { return d; }
 	return 0;
 }
