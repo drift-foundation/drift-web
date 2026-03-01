@@ -841,6 +841,137 @@ fn scenario_malformed_matrix() nothrow -> Int {
 	return 0;
 }
 
+// --- Scenario 6: Partial/slow client (600-range) ---
+//
+// Client sends a valid request in two TCP writes with a 500ms sleep between
+// them. Validates that read_request_bytes() correctly accumulates partial
+// reads across multiple stream.read() calls without treating a partial
+// header as complete. Server timeout (5s) is well above the 500ms delay.
+
+fn _slow_roundtrip(port: Int, part1: &String, part2: &String, timeout: conc.Duration) nothrow -> core.Result<String, Int> {
+	var addr = net.socket_addr("127.0.0.1", port);
+	match net.connect(&addr, timeout) {
+		core.Result::Err(_) => { return core.Result::Err(1); },
+		core.Result::Ok(conn) => {
+			var stream = move conn;
+
+			// Write first part
+			val b1 = _to_bytes(part1);
+			var wbuf1 = io.buffer(b1.len);
+			var i = 0;
+			while i < b1.len {
+				io.buffer_write(&mut wbuf1, i, b1[i]);
+				i = i + 1;
+			}
+			match stream.write(&wbuf1, timeout) {
+				core.Result::Err(_) => {
+					val _ = stream.close(timeout);
+					return core.Result::Err(2);
+				},
+				core.Result::Ok(_) => {}
+			}
+
+			// Sleep 500ms between writes
+			conc.sleep(conc.Duration(millis = 500));
+
+			// Write second part
+			val b2 = _to_bytes(part2);
+			var wbuf2 = io.buffer(b2.len);
+			var j = 0;
+			while j < b2.len {
+				io.buffer_write(&mut wbuf2, j, b2[j]);
+				j = j + 1;
+			}
+			match stream.write(&wbuf2, timeout) {
+				core.Result::Err(_) => {
+					val _ = stream.close(timeout);
+					return core.Result::Err(3);
+				},
+				core.Result::Ok(_) => {}
+			}
+
+			// Read response
+			var collected: Array<Byte> = [];
+			var done = false;
+			while !done {
+				var rbuf = io.buffer(4096);
+				match stream.read(&mut rbuf, timeout) {
+					core.Result::Err(_) => { done = true; },
+					core.Result::Ok(n) => {
+						if n == 0 {
+							done = true;
+						} else {
+							var k = 0;
+							while k < n {
+								collected.push(io.buffer_read(&mut rbuf, k));
+								k = k + 1;
+							}
+						}
+					}
+				}
+			}
+			val _ = stream.close(timeout);
+			return core.Result::Ok(_bytes_to_string(&collected));
+		}
+	}
+}
+
+fn scenario_partial_slow_client() nothrow -> Int {
+	val timeout = conc.Duration(millis = 5000);
+
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 601; },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+				core.Result::Err(_) => { return 602; },
+				core.Result::Ok(_) => {}
+			}
+			match rest.listen_app(&app, timeout) {
+				core.Result::Err(_) => { return 603; },
+				core.Result::Ok(lst) => {
+					var listener = move lst;
+					val port = listener.local_port();
+					var handle = rest.new_server_handle();
+					handle.max_requests = 1;
+					var caller_handle = rest.clone_handle(&handle);
+					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
+						return _run_serve(move app, move listener, move handle, timeout);
+					});
+
+					// Split request: request line in part 1, host header + terminator in part 2
+					val part1 = "GET /health HTTP/1.1\r\n";
+					val part2 = "Host: localhost\r\n\r\n";
+					match _slow_roundtrip(port, &part1, &part2, timeout) {
+						core.Result::Err(_) => {
+							rest.stop(&caller_handle);
+							val _ = sv.join();
+							return 604;
+						},
+						core.Result::Ok(resp_str) => {
+							rest.stop(&caller_handle);
+							match sv.join() {
+								core.Result::Err(_) => { return 605; },
+								core.Result::Ok(exit_code) => {
+									if exit_code != 0 { return 606; }
+								}
+							}
+
+							val s_200 = "HTTP/1.1 200 OK";
+							if !_starts_with(&resp_str, &s_200) { return 607; }
+							val m_health = "{\"ok\":true}";
+							if !_contains(&resp_str, &m_health) { return 608; }
+							return 0;
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
 fn main() nothrow -> Int {
 	val a = scenario_many_sequential_mixed();
 	if a != 0 { return a; }
@@ -852,5 +983,7 @@ fn main() nothrow -> Int {
 	if d != 0 { return d; }
 	val e = scenario_malformed_matrix();
 	if e != 0 { return e; }
+	val f = scenario_partial_slow_client();
+	if f != 0 { return f; }
 	return 0;
 }
