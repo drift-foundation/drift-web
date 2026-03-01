@@ -460,10 +460,71 @@ fn scenario_concurrent_clients() nothrow -> Int {
 	}
 }
 
+// --- Scenario 3: Repeated start/stop cycles (300-range) ---
+//
+// 5 full lifecycles: build app → listen → spawn serve → roundtrip → stop → join.
+// Each cycle is a fresh server instance on port 0. Catches leaked fds,
+// listener handles, or Arc refcounts across lifecycles. Memcheck pins
+// leaked allocations.
+
+fn _start_stop_cycle(timeout: conc.Duration) nothrow -> Int {
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+				core.Result::Err(_) => { return 2; },
+				core.Result::Ok(_) => {}
+			}
+			match rest.listen_app(&app, timeout) {
+				core.Result::Err(_) => { return 3; },
+				core.Result::Ok(lst) => {
+					var listener = move lst;
+					val port = listener.local_port();
+					var handle = rest.new_server_handle();
+					handle.max_requests = 1;
+					var caller_handle = rest.clone_handle(&handle);
+					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
+						return _run_serve(move app, move listener, move handle, timeout);
+					});
+
+					val result = _client_health_check(port, timeout);
+
+					rest.stop(&caller_handle);
+					match sv.join() {
+						core.Result::Err(_) => { return 4; },
+						core.Result::Ok(exit_code) => {
+							if exit_code != 0 { return 5; }
+						}
+					}
+
+					if result != 0 { return 6; }
+					return 0;
+				}
+			}
+		}
+	}
+}
+
+fn scenario_start_stop_cycles() nothrow -> Int {
+	val timeout = conc.Duration(millis = 5000);
+	var i = 0;
+	while i < 5 {
+		val result = _start_stop_cycle(timeout);
+		if result != 0 { return 300 + result; }
+		i = i + 1;
+	}
+	return 0;
+}
+
 fn main() nothrow -> Int {
 	val a = scenario_many_sequential_mixed();
 	if a != 0 { return a; }
 	val b = scenario_concurrent_clients();
 	if b != 0 { return b; }
+	val c = scenario_start_stop_cycles();
+	if c != 0 { return c; }
 	return 0;
 }
