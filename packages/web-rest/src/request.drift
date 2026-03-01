@@ -14,11 +14,9 @@ export {
 	query_param,
 	require_query_param,
 	body_json,
-	require_body_json,
 	add_path_param,
 	clear_path_params,
-	path_param,
-	require_path_param
+	path_param
 };
 
 pub struct Request {
@@ -143,10 +141,6 @@ pub fn body_json(req: &Request) nothrow -> core.Result<json.JsonNode, errors.Res
 	}
 }
 
-pub fn require_body_json(req: &Request) nothrow -> core.Result<json.JsonNode, errors.RestError> {
-	return body_json(req);
-}
-
 pub fn add_path_param(req: &mut Request, key: String, value: String) nothrow -> Void {
 	req.path_param_keys.push(move key);
 	req.path_param_values.push(move value);
@@ -172,6 +166,3 @@ pub fn path_param(req: &Request, name: &String) nothrow -> core.Result<String, e
 	return core.Result::Err(errors.rest_error(404, "not-found", "missing-path-param", "missing required path parameter"));
 }
 
-pub fn require_path_param(req: &Request, name: &String) nothrow -> core.Result<String, errors.RestError> {
-	return path_param(req, name);
-}

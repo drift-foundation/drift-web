@@ -11,8 +11,6 @@ import web.rest.response as response;
 import web.rest.context as context;
 import web.rest.request as request;
 import web.rest.jwt_guard as jwt_guard;
-import web.rest.router as router;
-import web.rest.http as http;
 import web.rest.server as server;
 import web.rest.app as app;
 
@@ -54,10 +52,8 @@ export {
 	query_param,
 	require_query_param,
 	body_json,
-	require_body_json,
 	add_path_param,
 	path_param,
-	require_path_param,
 	new_jwt_guard_config,
 	jwt_guard_apply,
 	new_app_builder,
@@ -69,18 +65,12 @@ export {
 	add_throws_route,
 	add_group_throws_route,
 	dispatch,
-	split_path,
-	parse_route_pattern,
-	match_route,
-	extract_path_params,
 	ServerHandle,
 	new_server_handle,
 	clone_handle,
 	stop,
 	listen_app,
-	serve,
-	parse_request,
-	serialize_response
+	serve
 };
 
 pub type RestError = errors.RestError;
@@ -175,20 +165,12 @@ pub fn body_json(req: &Request) nothrow -> core.Result<json.JsonNode, RestError>
 	return request.body_json(req);
 }
 
-pub fn require_body_json(req: &Request) nothrow -> core.Result<json.JsonNode, RestError> {
-	return request.require_body_json(req);
-}
-
 pub fn add_path_param(req: &mut Request, key: String, value: String) nothrow -> Void {
 	return request.add_path_param(req, key, value);
 }
 
 pub fn path_param(req: &Request, name: &String) nothrow -> core.Result<String, RestError> {
 	return request.path_param(req, name);
-}
-
-pub fn require_path_param(req: &Request, name: &String) nothrow -> core.Result<String, RestError> {
-	return request.require_path_param(req, name);
 }
 
 pub fn new_jwt_guard_config(secret: Array<Byte>, policy: jwt.JwtVerifyPolicy) nothrow -> JwtGuardConfig {
@@ -235,22 +217,6 @@ pub fn dispatch(a: &App, req: &mut Request, ctx: &mut Context) nothrow -> core.R
 	return app.dispatch(a, req, ctx);
 }
 
-pub fn split_path(path: &String) nothrow -> Array<String> {
-	return router.split_path(path);
-}
-
-pub fn parse_route_pattern(path: &String) nothrow -> core.Result<router.RoutePattern, RestError> {
-	return router.parse_route_pattern(path);
-}
-
-pub fn match_route(pattern: &router.RoutePattern, segments: &Array<String>) nothrow -> Bool {
-	return router.match_route(pattern, segments);
-}
-
-pub fn extract_path_params(pattern: &router.RoutePattern, segments: &Array<String>, req: &mut Request) nothrow -> Void {
-	return router.extract_path_params(pattern, segments, req);
-}
-
 pub type ServerHandle = server.ServerHandle;
 
 pub fn new_server_handle() nothrow -> ServerHandle {
@@ -271,12 +237,4 @@ pub fn listen_app(a: &App, timeout: conc.Duration) nothrow -> core.Result<net.Tc
 
 pub fn serve(a: App, listener: net.TcpListener, handle: ServerHandle, timeout: conc.Duration) nothrow -> core.Result<Void, RestError> {
 	return server.serve(move a, move listener, move handle, timeout);
-}
-
-pub fn parse_request(raw: &Array<Byte>) nothrow -> core.Result<Request, RestError> {
-	return http.parse_request(raw);
-}
-
-pub fn serialize_response(resp: &Response) nothrow -> Array<Byte> {
-	return http.serialize_response(resp);
 }

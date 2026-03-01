@@ -60,7 +60,7 @@ fn scenario_optional_query_param_missing() nothrow -> Int {
 
 fn scenario_empty_body_rejected() nothrow -> Int {
 	val req = rest.new_request("POST", "/v1/users");
-	match rest.require_body_json(&req) {
+	match rest.body_json(&req) {
 		core.Result::Ok(_) => { return 401; },
 		core.Result::Err(e) => {
 			if e.status != 400 { return 402; }
@@ -76,7 +76,7 @@ fn scenario_empty_body_rejected() nothrow -> Int {
 fn scenario_malformed_json_rejected() nothrow -> Int {
 	var req = rest.new_request("POST", "/v1/users");
 	req.body = "not json {{{";
-	match rest.require_body_json(&req) {
+	match rest.body_json(&req) {
 		core.Result::Ok(_) => { return 501; },
 		core.Result::Err(e) => {
 			if e.status != 400 { return 502; }
@@ -92,7 +92,7 @@ fn scenario_malformed_json_rejected() nothrow -> Int {
 fn scenario_valid_json_body_accepted() nothrow -> Int {
 	var req = rest.new_request("POST", "/v1/users");
 	req.body = "{\"name\":\"alice\",\"age\":30}";
-	match rest.require_body_json(&req) {
+	match rest.body_json(&req) {
 		core.Result::Ok(node) => {
 			val name_key = "name";
 			match node.get(&name_key) {

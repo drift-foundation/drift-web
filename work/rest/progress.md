@@ -131,10 +131,15 @@ All 14 JWT error tags mapped per plan.md contract:
 | `jwt-header-typ-mismatch` | 400 | request-invalid |
 | Unknown/future tags | 401 | unauthorized (fail-closed) |
 
-## Compiler Bug Found During Implementation
+## API Polish (Post-Implementation)
 
-`CORE_BUG-return-fwd-mut-ref.md` — `return void_fn(&mut ref, ...)` corrupted &mut state.
-Reported to compiler team, resolved. Repro retained as regression test.
+Facade cleanup applied to `lib.drift`:
+
+- Removed router internals from public API: `split_path`, `parse_route_pattern`, `match_route`, `extract_path_params` (dispatch machinery, never called by consumers)
+- Removed HTTP internals: `parse_request`, `serialize_response` (server-internal; tests import `web.rest.http` directly)
+- Removed redundant aliases: `require_body_json` (identical to `body_json`), `require_path_param` (identical to `path_param`) — removed from both `lib.drift` and `request.drift`
+- Removed dead imports: `web.rest.router`, `web.rest.http` (no longer referenced by facade)
+- Result-style route registration (`add_route`, `add_group_route`) remains internal to `app.drift` only — public API is throws-style per MVP decision
 
 ## HTTP Listener Limitations (MVP)
 
@@ -150,10 +155,16 @@ Reported to compiler team, resolved. Repro retained as regression test.
 - **Server shutdown uses `Arc<AtomicBool>` shared stop flag.** `ServerHandle.stopped` is `conc.Arc<sync.AtomicBool>`. `clone_handle()` clones the Arc so caller retains a handle while `serve()` owns another. `stop()` takes `&ServerHandle` and atomically sets the flag. The accept loop checks the flag with `Acquire` ordering between iterations (200ms accept timeout bounds responsiveness).
 - `ServerHandle.max_requests` provides optional bounded exit (0 = unlimited, >0 = exit after N connections) — useful as a test helper but not the primary shutdown mechanism
 
+## Compiler Bugs Found During Implementation
+
+1. `CORE_BUG-return-fwd-mut-ref.md` — `return void_fn(&mut ref, ...)` corrupted &mut state. Resolved.
+2. `CORE_BUG-arc-struct-field-drop-leak.md` — Arc-in-struct drop not emitted after `.get()` borrow through struct field. Resolved.
+
 ## Verification
 
-- [x] `just rest-check-par` — all 7 test files pass (as of 2026-02-28)
-- [x] `just test` — full suite (JWT + REST) passes (13 tests total) (as of 2026-02-28)
+- [x] `just rest-check-par` — all 8 test files pass (as of 2026-02-28)
+- [x] `just test` — full suite (JWT + REST) passes (14 tests total) (as of 2026-02-28)
+- [x] `DRIFT_MEMCHECK=1 just test` — 0 leaks, 0 errors under valgrind (as of 2026-02-28)
 - [x] Query string parsing: request target split on `?`, path routed without query, params populated
 - [x] Truncated body: Content-Length mismatch returns 400 `incomplete-body`
 - [x] Real lifecycle test: `listen_app()` → `clone_handle()` → spawn `serve()` → roundtrip → `stop()` → `join()` clean exit

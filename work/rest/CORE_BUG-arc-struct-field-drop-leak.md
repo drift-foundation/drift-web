@@ -2,6 +2,7 @@
 
 **Severity:** Medium (memory leak, not crash)
 **Discovered:** 2026-02-28
+**Status:** RESOLVED — compiler fix landed, `DRIFT_MEMCHECK=1 just test` passes clean (0 leaks)
 **Subsystem:** Codegen / struct destructor emission / borrow-through-field liveness
 **Repro file:** `packages/web-rest/tests/unit/repro_arc_struct_drop.drift`
 

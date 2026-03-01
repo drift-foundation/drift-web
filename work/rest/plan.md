@@ -246,13 +246,12 @@ Request parsing/cache behavior (pinned):
 Request accessor API direction (pinned):
 - `req.path_param(name)` -> `core.Result<String, RestError>`
 - `req.query_param(name)` -> `Optional<String>`
-- `req.require_path_param(name)` -> throws typed REST event on missing/invalid
-- `req.require_query_param(name)` -> throws typed REST event on missing/invalid
+- `req.require_query_param(name)` -> `core.Result<String, RestError>` (adds field info on missing)
 - `req.body_json()` -> `core.Result<json.JsonNode, RestError>`
-- `req.require_body_json()` -> throws typed REST event on missing/invalid JSON
 
-`require_*` throw policy (pinned):
-- `require_*` accessors throw `RestBadRequest` on missing/invalid user input.
+Note: `require_body_json` and `require_path_param` were removed — they were identical
+to `body_json` and `path_param` (no additional behavior). `require_query_param` remains
+because it adds structured field info to the error.
 
 Path matching/canonicalization policy (pinned):
 - route matching is case-sensitive.

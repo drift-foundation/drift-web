@@ -85,17 +85,10 @@ This style remains documented for contract continuity, but public route registra
 
 ## Request Accessors
 
-Result-based:
 - `req.path_param(name) -> core.Result<String, rest.RestError>`
 - `req.query_param(name) -> Optional<String>`
+- `req.require_query_param(name) -> core.Result<String, rest.RestError>` (adds field info on missing)
 - `req.body_json() -> core.Result<json.JsonNode, rest.RestError>`
-
-Throwing convenience:
-- `req.require_path_param(name)`
-- `req.require_query_param(name)`
-- `req.require_body_json()`
-
-`require_*` accessors throw `RestBadRequest` for missing/invalid user input.
 
 ## Error Envelope (Pinned)
 
