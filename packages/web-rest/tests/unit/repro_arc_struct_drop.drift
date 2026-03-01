@@ -1,0 +1,115 @@
+module web.rest.tests.unit.repro_arc_struct_drop
+
+import std.core as core;
+import std.concurrent as conc;
+import std.sync as sync;
+
+// Reproducer: Arc-in-struct drop not emitted after field borrow via .get().
+// See work/rest/CORE_BUG-arc-struct-field-drop-leak.md for details.
+//
+// Run: DRIFT_MEMCHECK=1 just rest-check-unit packages/web-rest/tests/unit/repro_arc_struct_drop.drift
+// Expected (bug present): exit 97 (valgrind reports 16 bytes leaked in scenario_leak_struct_get)
+// Expected (bug fixed):   exit 0 (0 leaks)
+
+struct Handle {
+	stopped: conc.Arc<sync.AtomicBool>,
+	value: Int
+}
+
+fn _new_handle() nothrow -> Handle {
+	return Handle(stopped = conc.arc(sync.atomic_bool(false)), value = 0);
+}
+
+fn _clone_handle(h: &Handle) nothrow -> Handle {
+	return Handle(stopped = h.stopped.clone(), value = h.value);
+}
+
+fn _wait_on(handle: Handle) nothrow -> Int {
+	val flag = handle.stopped.get();
+	while !flag.load(sync.MemoryOrder::Acquire()) {
+		conc.sleep(conc.Duration(millis = 10));
+	}
+	return 0;
+}
+
+fn _consume(handle: Handle) nothrow -> Int {
+	val flag = handle.stopped.get();
+	if flag.load(sync.MemoryOrder::Acquire()) {
+		return 1;
+	}
+	return 0;
+}
+
+// --- PASS: struct dropped without .get() on Arc field — no leak ---
+fn scenario_no_leak_no_get() nothrow -> Int {
+	var h = _new_handle();
+	var caller = _clone_handle(&h);
+	var sv = conc.spawn_cb(| | captures(move h) => {
+		return _consume(move h);
+	});
+	match sv.join() {
+		core.Result::Err(_) => { return 101; },
+		core.Result::Ok(code) => {
+			if code != 0 { return 102; }
+		}
+	}
+	// caller dropped — Arc refcount 2→1→0, freed. No leak.
+	return 0;
+}
+
+// --- PASS: bare Arc (no struct), clone, spawn, caller calls .get() — no leak ---
+fn _wait_on_bare(a: conc.Arc<sync.AtomicBool>) nothrow -> Int {
+	val flag = a.get();
+	while !flag.load(sync.MemoryOrder::Acquire()) {
+		conc.sleep(conc.Duration(millis = 10));
+	}
+	return 0;
+}
+
+fn scenario_no_leak_bare_arc() nothrow -> Int {
+	var a = conc.arc(sync.atomic_bool(false));
+	var a2 = a.clone();
+	var sv = conc.spawn_cb(| | captures(move a) => {
+		return _wait_on_bare(move a);
+	});
+	val flag = a2.get();
+	flag.store(true, sync.MemoryOrder::Release());
+	match sv.join() {
+		core.Result::Err(_) => { return 201; },
+		core.Result::Ok(code) => {
+			if code != 0 { return 202; }
+		}
+	}
+	// a2 dropped — Arc freed. No leak.
+	return 0;
+}
+
+// --- BUG: Arc-in-struct, caller calls .get() on struct field — LEAKS ---
+fn scenario_leak_struct_get() nothrow -> Int {
+	var h = _new_handle();
+	var caller = _clone_handle(&h);
+	var sv = conc.spawn_cb(| | captures(move h) => {
+		return _wait_on(move h);
+	});
+	// Access Arc through struct field — prevents drop codegen
+	val flag = caller.stopped.get();
+	flag.store(true, sync.MemoryOrder::Release());
+	match sv.join() {
+		core.Result::Err(_) => { return 301; },
+		core.Result::Ok(code) => {
+			if code != 0 { return 302; }
+		}
+	}
+	// caller goes out of scope — destructor NOT emitted, Arc leaked
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	val a = scenario_no_leak_no_get();
+	if a != 0 { return a; }
+	val b = scenario_no_leak_bare_arc();
+	if b != 0 { return b; }
+	val c = scenario_leak_struct_get();
+	if c != 0 { return c; }
+	return 0;
+}

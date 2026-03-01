@@ -2,6 +2,8 @@ module web.rest
 
 import std.core as core;
 import std.json as json;
+import std.net as net;
+import std.concurrent as conc;
 import web.jwt as jwt;
 import web.rest.errors as errors;
 import web.rest.events as events;
@@ -10,6 +12,8 @@ import web.rest.context as context;
 import web.rest.request as request;
 import web.rest.jwt_guard as jwt_guard;
 import web.rest.router as router;
+import web.rest.http as http;
+import web.rest.server as server;
 import web.rest.app as app;
 
 export {
@@ -68,7 +72,15 @@ export {
 	split_path,
 	parse_route_pattern,
 	match_route,
-	extract_path_params
+	extract_path_params,
+	ServerHandle,
+	new_server_handle,
+	clone_handle,
+	stop,
+	listen_app,
+	serve,
+	parse_request,
+	serialize_response
 };
 
 pub type RestError = errors.RestError;
@@ -237,4 +249,34 @@ pub fn match_route(pattern: &router.RoutePattern, segments: &Array<String>) noth
 
 pub fn extract_path_params(pattern: &router.RoutePattern, segments: &Array<String>, req: &mut Request) nothrow -> Void {
 	return router.extract_path_params(pattern, segments, req);
+}
+
+pub type ServerHandle = server.ServerHandle;
+
+pub fn new_server_handle() nothrow -> ServerHandle {
+	return server.new_server_handle();
+}
+
+pub fn clone_handle(handle: &ServerHandle) nothrow -> ServerHandle {
+	return server.clone_handle(handle);
+}
+
+pub fn stop(handle: &ServerHandle) nothrow -> Void {
+	return server.stop(handle);
+}
+
+pub fn listen_app(a: &App, timeout: conc.Duration) nothrow -> core.Result<net.TcpListener, RestError> {
+	return server.listen_app(a, timeout);
+}
+
+pub fn serve(a: App, listener: net.TcpListener, handle: ServerHandle, timeout: conc.Duration) nothrow -> core.Result<Void, RestError> {
+	return server.serve(move a, move listener, move handle, timeout);
+}
+
+pub fn parse_request(raw: &Array<Byte>) nothrow -> core.Result<Request, RestError> {
+	return http.parse_request(raw);
+}
+
+pub fn serialize_response(resp: &Response) nothrow -> Array<Byte> {
+	return http.serialize_response(resp);
 }

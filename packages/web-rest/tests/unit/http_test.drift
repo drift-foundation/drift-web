@@ -1,0 +1,278 @@
+module web.rest.tests.unit.http_test
+
+import std.core as core;
+import std.io as io;
+import web.rest.http as http;
+import web.rest.response as response;
+
+// Unit tests for HTTP/1.1 parser and serializer.
+// No TCP — feed raw byte arrays to parse_request, assert fields.
+
+fn _to_bytes(s: &String) nothrow -> Array<Byte> {
+	var out: Array<Byte> = [];
+	var i = 0;
+	val n = s.byte_length();
+	while i < n {
+		out.push(core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return move out;
+}
+
+fn _dup_string(s: &String) nothrow -> String {
+	val n = s.byte_length();
+	var b = io.buffer(n);
+	var i = 0;
+	while i < n {
+		io.buffer_write(&mut b, i, core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&b), n);
+}
+
+// --- Scenario: parse GET /health request ---
+fn scenario_parse_get_request() nothrow -> Int {
+	val raw_str = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
+	var raw = _to_bytes(&raw_str);
+	match http.parse_request(&raw) {
+		core.Result::Err(_) => { return 101; },
+		core.Result::Ok(req) => {
+			if req.method != "GET" { return 102; }
+			if req.path != "/health" { return 103; }
+			if req.body != "" { return 104; }
+			return 0;
+		}
+	}
+}
+
+// --- Scenario: parse POST with body ---
+fn scenario_parse_post_with_body() nothrow -> Int {
+	val raw_str = "POST /users HTTP/1.1\r\nContent-Length: 14\r\n\r\n{\"name\":\"bob\"}";
+	var raw = _to_bytes(&raw_str);
+	match http.parse_request(&raw) {
+		core.Result::Err(_) => { return 201; },
+		core.Result::Ok(req) => {
+			if req.method != "POST" { return 202; }
+			if req.path != "/users" { return 203; }
+			if req.body != "{\"name\":\"bob\"}" { return 204; }
+			return 0;
+		}
+	}
+}
+
+// --- Scenario: parse multiple headers ---
+fn scenario_parse_headers() nothrow -> Int {
+	val raw_str = "GET /me HTTP/1.1\r\nAuthorization: Bearer tok123\r\nAccept: application/json\r\n\r\n";
+	var raw = _to_bytes(&raw_str);
+	match http.parse_request(&raw) {
+		core.Result::Err(_) => { return 301; },
+		core.Result::Ok(req) => {
+			if req.method != "GET" { return 302; }
+			if req.path != "/me" { return 303; }
+			// Check headers were parsed
+			if req.header_keys.len < 2 { return 304; }
+			// Find Authorization header
+			var found_auth = false;
+			var i = 0;
+			while i < req.header_keys.len {
+				if req.header_keys[i] == "Authorization" {
+					if req.header_values[i] != "Bearer tok123" { return 305; }
+					found_auth = true;
+				}
+				i = i + 1;
+			}
+			if !found_auth { return 306; }
+			return 0;
+		}
+	}
+}
+
+// --- Scenario: parse empty body (no Content-Length) ---
+fn scenario_parse_empty_body() nothrow -> Int {
+	val raw_str = "DELETE /items/5 HTTP/1.1\r\nHost: localhost\r\n\r\n";
+	var raw = _to_bytes(&raw_str);
+	match http.parse_request(&raw) {
+		core.Result::Err(_) => { return 401; },
+		core.Result::Ok(req) => {
+			if req.method != "DELETE" { return 402; }
+			if req.path != "/items/5" { return 403; }
+			if req.body != "" { return 404; }
+			return 0;
+		}
+	}
+}
+
+// --- Scenario: parse malformed request line ---
+fn scenario_parse_malformed_request_line() nothrow -> Int {
+	val raw_str = "GARBAGE\r\n\r\n";
+	var raw = _to_bytes(&raw_str);
+	match http.parse_request(&raw) {
+		core.Result::Ok(_) => { return 501; },
+		core.Result::Err(e) => {
+			if e.status != 400 { return 502; }
+			if e.tag != "malformed-http" { return 503; }
+			return 0;
+		}
+	}
+}
+
+// --- Scenario: parse request with query string ---
+fn scenario_parse_query_string() nothrow -> Int {
+	val raw_str = "GET /health?x=1&y=2 HTTP/1.1\r\nHost: localhost\r\n\r\n";
+	var raw = _to_bytes(&raw_str);
+	match http.parse_request(&raw) {
+		core.Result::Err(_) => { return 801; },
+		core.Result::Ok(req) => {
+			// Path should be /health without query string
+			if req.path != "/health" { return 802; }
+			// Two query params should be populated
+			if req.param_keys.len != 2 { return 803; }
+			if req.param_keys[0] != "x" { return 804; }
+			if req.param_values[0] != "1" { return 805; }
+			if req.param_keys[1] != "y" { return 806; }
+			if req.param_values[1] != "2" { return 807; }
+			return 0;
+		}
+	}
+}
+
+// --- Scenario: parse request with query string, no value ---
+fn scenario_parse_query_no_value() nothrow -> Int {
+	val raw_str = "GET /search?q HTTP/1.1\r\nHost: localhost\r\n\r\n";
+	var raw = _to_bytes(&raw_str);
+	match http.parse_request(&raw) {
+		core.Result::Err(_) => { return 901; },
+		core.Result::Ok(req) => {
+			if req.path != "/search" { return 902; }
+			if req.param_keys.len != 1 { return 903; }
+			if req.param_keys[0] != "q" { return 904; }
+			if req.param_values[0] != "" { return 905; }
+			return 0;
+		}
+	}
+}
+
+// --- Scenario: parse request with no query string keeps path intact ---
+fn scenario_parse_no_query_string() nothrow -> Int {
+	val raw_str = "GET /users/42 HTTP/1.1\r\nHost: localhost\r\n\r\n";
+	var raw = _to_bytes(&raw_str);
+	match http.parse_request(&raw) {
+		core.Result::Err(_) => { return 1001; },
+		core.Result::Ok(req) => {
+			if req.path != "/users/42" { return 1002; }
+			if req.param_keys.len != 0 { return 1003; }
+			return 0;
+		}
+	}
+}
+
+// --- Scenario: parse truncated body → error ---
+fn scenario_parse_truncated_body() nothrow -> Int {
+	// Content-Length says 100, but only 5 body bytes present
+	val raw_str = "POST /data HTTP/1.1\r\nContent-Length: 100\r\n\r\nhello";
+	var raw = _to_bytes(&raw_str);
+	match http.parse_request(&raw) {
+		core.Result::Ok(_) => { return 1101; },
+		core.Result::Err(e) => {
+			if e.status != 400 { return 1102; }
+			if e.tag != "incomplete-body" { return 1103; }
+			return 0;
+		}
+	}
+}
+
+// --- Scenario: exact Content-Length body is accepted ---
+fn scenario_parse_exact_body() nothrow -> Int {
+	val raw_str = "POST /data HTTP/1.1\r\nContent-Length: 5\r\n\r\nhello";
+	var raw = _to_bytes(&raw_str);
+	match http.parse_request(&raw) {
+		core.Result::Err(_) => { return 1201; },
+		core.Result::Ok(req) => {
+			if req.body != "hello" { return 1202; }
+			return 0;
+		}
+	}
+}
+
+// --- Scenario: serialize 200 response ---
+fn scenario_serialize_200() nothrow -> Int {
+	val resp = response.json_response(200, "{\"ok\":true}");
+	val bytes = http.serialize_response(&resp);
+	// Convert back to string for checking
+	var b = io.buffer(bytes.len);
+	var i = 0;
+	while i < bytes.len {
+		io.buffer_write(&mut b, i, bytes[i]);
+		i = i + 1;
+	}
+	val result = core.string_from_utf8_bytes(io.buffer_ptr(&b), bytes.len);
+	// Check status line
+	val expected_start = "HTTP/1.1 200 OK\r\n";
+	var j = 0;
+	val es_len = expected_start.byte_length();
+	if result.byte_length() < es_len { return 601; }
+	while j < es_len {
+		if core.string_byte_at(&result, j) != core.string_byte_at(&expected_start, j) { return 602; }
+		j = j + 1;
+	}
+	// Check body appears at end
+	val expected_body = "{\"ok\":true}";
+	val body_len = expected_body.byte_length();
+	val result_len = result.byte_length();
+	var k = 0;
+	while k < body_len {
+		if core.string_byte_at(&result, result_len - body_len + k) != core.string_byte_at(&expected_body, k) { return 603; }
+		k = k + 1;
+	}
+	return 0;
+}
+
+// --- Scenario: serialize 401 response ---
+fn scenario_serialize_401() nothrow -> Int {
+	val resp = response.json_response(401, "{\"event\":\"unauthorized\"}");
+	val bytes = http.serialize_response(&resp);
+	var b = io.buffer(bytes.len);
+	var i = 0;
+	while i < bytes.len {
+		io.buffer_write(&mut b, i, bytes[i]);
+		i = i + 1;
+	}
+	val result = core.string_from_utf8_bytes(io.buffer_ptr(&b), bytes.len);
+	val expected_start = "HTTP/1.1 401 Unauthorized\r\n";
+	var j = 0;
+	val es_len = expected_start.byte_length();
+	if result.byte_length() < es_len { return 701; }
+	while j < es_len {
+		if core.string_byte_at(&result, j) != core.string_byte_at(&expected_start, j) { return 702; }
+		j = j + 1;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	val a = scenario_parse_get_request();
+	if a != 0 { return a; }
+	val b = scenario_parse_post_with_body();
+	if b != 0 { return b; }
+	val c = scenario_parse_headers();
+	if c != 0 { return c; }
+	val d = scenario_parse_empty_body();
+	if d != 0 { return d; }
+	val e = scenario_parse_malformed_request_line();
+	if e != 0 { return e; }
+	val f = scenario_serialize_200();
+	if f != 0 { return f; }
+	val g = scenario_serialize_401();
+	if g != 0 { return g; }
+	val h = scenario_parse_query_string();
+	if h != 0 { return h; }
+	val i = scenario_parse_query_no_value();
+	if i != 0 { return i; }
+	val j = scenario_parse_no_query_string();
+	if j != 0 { return j; }
+	val k = scenario_parse_truncated_body();
+	if k != 0 { return k; }
+	val l = scenario_parse_exact_body();
+	if l != 0 { return l; }
+	return 0;
+}

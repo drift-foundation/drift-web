@@ -1,0 +1,464 @@
+module web.rest.http
+
+import std.core as core;
+import std.io as io;
+import std.net as net;
+import std.concurrent as conc;
+import std.format as fmt;
+import std.parse as parse;
+import web.rest.errors as errors;
+import web.rest.request as request;
+import web.rest.response as response;
+
+export {
+	parse_request,
+	serialize_response,
+	read_request_bytes,
+	write_response
+};
+
+const MAX_HEADER_SIZE: Int = 8192;
+
+// --- Helpers ---
+
+fn _dup_string(s: &String) nothrow -> String {
+	val n = s.byte_length();
+	var b = io.buffer(n);
+	var i = 0;
+	while i < n {
+		io.buffer_write(&mut b, i, core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&b), n);
+}
+
+fn _bytes_to_string(raw: &Array<Byte>, start: Int, end: Int) nothrow -> String {
+	val n = end - start;
+	if n <= 0 {
+		return "";
+	}
+	var b = io.buffer(n);
+	var i = 0;
+	while i < n {
+		io.buffer_write(&mut b, i, raw[start + i]);
+		i = i + 1;
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&b), n);
+}
+
+fn _string_to_bytes(s: &String) nothrow -> Array<Byte> {
+	var out: Array<Byte> = [];
+	var i = 0;
+	val n = s.byte_length();
+	while i < n {
+		out.push(core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return move out;
+}
+
+fn _ascii_lower_byte(b: Byte) nothrow -> Byte {
+	val v = cast<Int>(b);
+	if v >= 65 {
+		if v <= 90 {
+			return cast<Byte>(v + 32);
+		}
+	}
+	return b;
+}
+
+fn _ascii_eq_lower(raw: &Array<Byte>, start: Int, end: Int, target: &String) nothrow -> Bool {
+	val n = end - start;
+	if n != target.byte_length() {
+		return false;
+	}
+	var i = 0;
+	while i < n {
+		if _ascii_lower_byte(raw[start + i]) != core.string_byte_at(target, i) {
+			return false;
+		}
+		i = i + 1;
+	}
+	return true;
+}
+
+// --- Scan helpers ---
+
+fn _find_header_end(raw: &Array<Byte>) nothrow -> Int {
+	val len = raw.len;
+	if len < 4 {
+		return -1;
+	}
+	var i = 0;
+	val limit = len - 3;
+	while i < limit {
+		if raw[i] == cast<Byte>(13) {
+			if raw[i + 1] == cast<Byte>(10) {
+				if raw[i + 2] == cast<Byte>(13) {
+					if raw[i + 3] == cast<Byte>(10) {
+						return i + 4;
+					}
+				}
+			}
+		}
+		i = i + 1;
+	}
+	return -1;
+}
+
+fn _find_byte(raw: &Array<Byte>, pos: Int, target: Byte) nothrow -> Int {
+	var i = pos;
+	while i < raw.len {
+		if raw[i] == target {
+			return i;
+		}
+		i = i + 1;
+	}
+	return -1;
+}
+
+fn _find_crlf(raw: &Array<Byte>, pos: Int, limit: Int) nothrow -> Int {
+	var i = pos;
+	val end = limit - 1;
+	while i < end {
+		if raw[i] == cast<Byte>(13) {
+			if raw[i + 1] == cast<Byte>(10) {
+				return i;
+			}
+		}
+		i = i + 1;
+	}
+	return -1;
+}
+
+// Skip leading spaces after colon in header value.
+// Returns index of first non-space byte, or line_end if all spaces.
+fn _skip_ows(raw: &Array<Byte>, start: Int, line_end: Int) nothrow -> Int {
+	var i = start;
+	var scanning = true;
+	while scanning {
+		if i >= line_end {
+			scanning = false;
+		} else {
+			if raw[i] == cast<Byte>(32) {
+				i = i + 1;
+			} else {
+				scanning = false;
+			}
+		}
+	}
+	return i;
+}
+
+// Find byte in raw within range [start, end). Returns -1 if not found.
+fn _find_byte_range(raw: &Array<Byte>, start: Int, end: Int, target: Byte) nothrow -> Int {
+	var i = start;
+	while i < end {
+		if raw[i] == target {
+			return i;
+		}
+		i = i + 1;
+	}
+	return -1;
+}
+
+// Find byte in string. Returns index or -1.
+fn _find_char(s: &String, target: Byte) nothrow -> Int {
+	var i = 0;
+	val n = s.byte_length();
+	while i < n {
+		if core.string_byte_at(s, i) == target {
+			return i;
+		}
+		i = i + 1;
+	}
+	return -1;
+}
+
+fn _substring(s: &String, start: Int, end: Int) nothrow -> String {
+	val n = end - start;
+	if n <= 0 {
+		return "";
+	}
+	var b = io.buffer(n);
+	var i = 0;
+	while i < n {
+		io.buffer_write(&mut b, i, core.string_byte_at(s, start + i));
+		i = i + 1;
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&b), n);
+}
+
+// Parse "key1=val1&key2=val2" into query params on Request.
+fn _parse_query_string(qs: &String, req: &mut request.Request) nothrow -> Void {
+	val len = qs.byte_length();
+	var seg_start = 0;
+	var i = 0;
+	while i <= len {
+		var at_delim = false;
+		if i == len {
+			at_delim = true;
+		} else {
+			if core.string_byte_at(qs, i) == cast<Byte>(38) {
+				at_delim = true;
+			}
+		}
+		if at_delim {
+			if i > seg_start {
+				val seg = _substring(qs, seg_start, i);
+				val eq = _find_char(&seg, cast<Byte>(61));
+				if eq == -1 {
+					request.add_query_param(req, _dup_string(&seg), "");
+				} else {
+					val key = _substring(&seg, 0, eq);
+					val value = _substring(&seg, eq + 1, seg.byte_length());
+					request.add_query_param(req, key, value);
+				}
+			}
+			seg_start = i + 1;
+		}
+		i = i + 1;
+	}
+	return core.void_value();
+}
+
+// --- Parse ---
+
+pub fn parse_request(raw: &Array<Byte>) nothrow -> core.Result<request.Request, errors.RestError> {
+	val header_end = _find_header_end(raw);
+	if header_end == -1 {
+		return core.Result::Err(errors.rest_error(400, "request-invalid", "malformed-http", "missing header terminator"));
+	}
+
+	val first_line_end = _find_crlf(raw, 0, header_end);
+	if first_line_end == -1 {
+		return core.Result::Err(errors.rest_error(400, "request-invalid", "malformed-http", "missing request line"));
+	}
+
+	val sp1 = _find_byte(raw, 0, cast<Byte>(32));
+	if sp1 == -1 {
+		return core.Result::Err(errors.rest_error(400, "request-invalid", "malformed-http", "invalid request line"));
+	}
+	if sp1 >= first_line_end {
+		return core.Result::Err(errors.rest_error(400, "request-invalid", "malformed-http", "invalid request line"));
+	}
+	val sp2 = _find_byte(raw, sp1 + 1, cast<Byte>(32));
+	if sp2 == -1 {
+		return core.Result::Err(errors.rest_error(400, "request-invalid", "malformed-http", "invalid request line"));
+	}
+	if sp2 >= first_line_end {
+		return core.Result::Err(errors.rest_error(400, "request-invalid", "malformed-http", "invalid request line"));
+	}
+
+	val method = _bytes_to_string(raw, 0, sp1);
+
+	// Split request target on '?' into path and query string
+	val qmark = _find_byte_range(raw, sp1 + 1, sp2, cast<Byte>(63));
+	var path = "";
+	var query_str = "";
+	if qmark == -1 {
+		path = _bytes_to_string(raw, sp1 + 1, sp2);
+	} else {
+		path = _bytes_to_string(raw, sp1 + 1, qmark);
+		query_str = _bytes_to_string(raw, qmark + 1, sp2);
+	}
+
+	var req = request.new_request(method, path);
+
+	// Parse query string into key=value pairs
+	if query_str.byte_length() > 0 {
+		_parse_query_string(&query_str, &mut req);
+	}
+
+	var hdr_pos = first_line_end + 2;
+	val hdr_limit = header_end - 2;
+	var content_length = -1;
+
+	while hdr_pos < hdr_limit {
+		val line_end = _find_crlf(raw, hdr_pos, header_end);
+		if line_end == -1 {
+			hdr_pos = hdr_limit;
+		} else {
+			if line_end == hdr_pos {
+				hdr_pos = hdr_limit;
+			} else {
+				val colon = _find_byte(raw, hdr_pos, cast<Byte>(58));
+				if colon != -1 {
+					if colon < line_end {
+						val hdr_name = _bytes_to_string(raw, hdr_pos, colon);
+						val value_start = _skip_ows(raw, colon + 1, line_end);
+						val hdr_value = _bytes_to_string(raw, value_start, line_end);
+						request.add_header(&mut req, hdr_name, _dup_string(&hdr_value));
+
+						val cl_key = "content-length";
+						if _ascii_eq_lower(raw, hdr_pos, colon, &cl_key) {
+							match parse.parse_int(_dup_string(&hdr_value)) {
+								core.Result::Ok(n) => { content_length = n; },
+								core.Result::Err(_) => {}
+							}
+						}
+					}
+				}
+				hdr_pos = line_end + 2;
+			}
+		}
+	}
+
+	if content_length > 0 {
+		val body_start = header_end;
+		val body_end = body_start + content_length;
+		val body_available = raw.len - body_start;
+		if body_available < content_length {
+			return core.Result::Err(errors.rest_error(400, "request-invalid", "incomplete-body", "request body is shorter than Content-Length"));
+		}
+		req.body = _bytes_to_string(raw, body_start, body_end);
+	}
+
+	return core.Result::Ok(move req);
+}
+
+// --- Serialize ---
+
+fn _reason_phrase(status: Int) nothrow -> String {
+	if status == 200 { return "OK"; }
+	if status == 201 { return "Created"; }
+	if status == 204 { return "No Content"; }
+	if status == 400 { return "Bad Request"; }
+	if status == 401 { return "Unauthorized"; }
+	if status == 403 { return "Forbidden"; }
+	if status == 404 { return "Not Found"; }
+	if status == 409 { return "Conflict"; }
+	if status == 500 { return "Internal Server Error"; }
+	return "Unknown";
+}
+
+pub fn serialize_response(resp: &response.Response) nothrow -> Array<Byte> {
+	val status_str = fmt.format_int(resp.status);
+	val reason = _reason_phrase(resp.status);
+	val body_len_str = fmt.format_int(resp.body.byte_length());
+	var line = "HTTP/1.1 " + status_str + " " + reason + "\r\nContent-Type: application/json\r\nContent-Length: " + body_len_str + "\r\nConnection: close\r\n\r\n" + resp.body;
+	return _string_to_bytes(&line);
+}
+
+// --- TCP I/O ---
+
+pub fn read_request_bytes(stream: &net.TcpStream, timeout: conc.Duration) nothrow -> core.Result<Array<Byte>, errors.RestError> {
+	var collected: Array<Byte> = [];
+	var header_found = false;
+	var content_length = -1;
+	var header_end_pos = -1;
+
+	while !header_found {
+		if collected.len >= MAX_HEADER_SIZE {
+			return core.Result::Err(errors.rest_error(400, "request-invalid", "header-too-large", "request header exceeds 8192 bytes"));
+		}
+		var buf = io.buffer(4096);
+		match stream.read(&mut buf, timeout) {
+			core.Result::Err(_) => {
+				if collected.len == 0 {
+					return core.Result::Err(errors.rest_error(400, "request-invalid", "read-failed", "failed to read from connection"));
+				}
+				header_found = true;
+			},
+			core.Result::Ok(n) => {
+				if n == 0 {
+					if collected.len == 0 {
+						return core.Result::Err(errors.rest_error(400, "request-invalid", "empty-request", "no data received"));
+					}
+					header_found = true;
+				} else {
+					var j = 0;
+					while j < n {
+						collected.push(io.buffer_read(&mut buf, j));
+						j = j + 1;
+					}
+					header_end_pos = _find_header_end(&collected);
+					if header_end_pos != -1 {
+						header_found = true;
+						content_length = _scan_content_length(&collected, header_end_pos);
+					}
+				}
+			}
+		}
+	}
+
+	if content_length > 0 {
+		if header_end_pos > 0 {
+			val body_have = collected.len - header_end_pos;
+			var body_need = content_length - body_have;
+			var body_err = false;
+			while body_need > 0 {
+				var buf = io.buffer(4096);
+				match stream.read(&mut buf, timeout) {
+					core.Result::Err(_) => {
+						body_err = true;
+						body_need = 0;
+					},
+					core.Result::Ok(n) => {
+						if n == 0 {
+							body_err = true;
+							body_need = 0;
+						} else {
+							var j = 0;
+							while j < n {
+								collected.push(io.buffer_read(&mut buf, j));
+								j = j + 1;
+							}
+							body_need = body_need - n;
+						}
+					}
+				}
+			}
+			if body_err {
+				return core.Result::Err(errors.rest_error(400, "request-invalid", "incomplete-body", "connection closed before full body received"));
+			}
+		}
+	}
+
+	return core.Result::Ok(move collected);
+}
+
+fn _scan_content_length(raw: &Array<Byte>, header_end: Int) nothrow -> Int {
+	val cl_key = "content-length";
+	var pos = 0;
+	while pos < header_end {
+		val line_end = _find_crlf(raw, pos, header_end);
+		if line_end == -1 {
+			return -1;
+		}
+		val colon = _find_byte(raw, pos, cast<Byte>(58));
+		if colon != -1 {
+			if colon < line_end {
+				if _ascii_eq_lower(raw, pos, colon, &cl_key) {
+					val val_start = _skip_ows(raw, colon + 1, line_end);
+					val val_str = _bytes_to_string(raw, val_start, line_end);
+					match parse.parse_int(_dup_string(&val_str)) {
+						core.Result::Ok(n) => { return n; },
+						core.Result::Err(_) => { return -1; }
+					}
+				}
+			}
+		}
+		pos = line_end + 2;
+	}
+	return -1;
+}
+
+pub fn write_response(stream: &net.TcpStream, resp: &response.Response, timeout: conc.Duration) nothrow -> core.Result<Void, errors.RestError> {
+	val bytes = serialize_response(resp);
+	val total = bytes.len;
+	var buf = io.buffer(total);
+	var i = 0;
+	while i < total {
+		io.buffer_write(&mut buf, i, bytes[i]);
+		i = i + 1;
+	}
+	match stream.write(&buf, timeout) {
+		core.Result::Err(_) => {
+			return core.Result::Err(errors.rest_error(500, "internal", "write-failed", "failed to write response"));
+		},
+		core.Result::Ok(_) => {
+			return core.Result::Ok(core.void_value());
+		}
+	}
+}

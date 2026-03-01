@@ -1,0 +1,440 @@
+module web.rest.tests.unit.server_test
+
+import std.core as core;
+import std.io as io;
+import std.net as net;
+import std.concurrent as conc;
+import std.format as fmt;
+import std.time as time;
+import web.jwt as jwt;
+import web.rest as rest;
+import web.rest.app as rest_app;
+
+// Integration tests for HTTP listener.
+// Each scenario: build app, listen on port 0, spawn server VT, send raw HTTP, assert response.
+
+// --- Helpers ---
+
+fn _to_bytes(s: &String) nothrow -> Array<Byte> {
+	var out: Array<Byte> = [];
+	var i = 0;
+	val n = s.byte_length();
+	while i < n {
+		out.push(core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return move out;
+}
+
+fn _bytes_to_string(raw: &Array<Byte>) nothrow -> String {
+	val n = raw.len;
+	if n == 0 {
+		return "";
+	}
+	var b = io.buffer(n);
+	var i = 0;
+	while i < n {
+		io.buffer_write(&mut b, i, raw[i]);
+		i = i + 1;
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&b), n);
+}
+
+fn _test_secret() nothrow -> Array<Byte> {
+	// "secret" in bytes
+	var out: Array<Byte> = [cast<Byte>(115), cast<Byte>(101), cast<Byte>(99), cast<Byte>(114), cast<Byte>(101), cast<Byte>(116)];
+	return move out;
+}
+
+fn _build_policy() nothrow -> jwt.JwtVerifyPolicy {
+	var pb = jwt.new_verify_policy_builder();
+	pb.require_typ_jwt = false;
+	match jwt.build_verify_policy(move pb) {
+		core.Result::Ok(v) => { return v; },
+		core.Result::Err(_) => {
+			return jwt.JwtVerifyPolicy(skew_sec = 0, max_future_iat_sec = 0, require_typ_jwt = false);
+		}
+	}
+}
+
+// Send raw HTTP request string to port, read response, return raw response string.
+fn _http_roundtrip(port: Int, raw_request: &String, timeout: conc.Duration) nothrow -> core.Result<String, Int> {
+	var addr = net.socket_addr("127.0.0.1", port);
+	match net.connect(&addr, timeout) {
+		core.Result::Err(_) => { return core.Result::Err(1); },
+		core.Result::Ok(conn) => {
+			var stream = move conn;
+			val req_bytes = _to_bytes(raw_request);
+			var wbuf = io.buffer(req_bytes.len);
+			var i = 0;
+			while i < req_bytes.len {
+				io.buffer_write(&mut wbuf, i, req_bytes[i]);
+				i = i + 1;
+			}
+			match stream.write(&wbuf, timeout) {
+				core.Result::Err(_) => {
+					val _ = stream.close(timeout);
+					return core.Result::Err(2);
+				},
+				core.Result::Ok(_) => {}
+			}
+			var collected: Array<Byte> = [];
+			var done = false;
+			while !done {
+				var rbuf = io.buffer(4096);
+				match stream.read(&mut rbuf, timeout) {
+					core.Result::Err(_) => { done = true; },
+					core.Result::Ok(n) => {
+						if n == 0 {
+							done = true;
+						} else {
+							var j = 0;
+							while j < n {
+								collected.push(io.buffer_read(&mut rbuf, j));
+								j = j + 1;
+							}
+						}
+					}
+				}
+			}
+			val _ = stream.close(timeout);
+			return core.Result::Ok(_bytes_to_string(&collected));
+		}
+	}
+}
+
+// Wrapper for spawning serve() — avoids match-in-lambda compiler issue
+fn _run_serve(a: rest.App, listener: net.TcpListener, handle: rest.ServerHandle, timeout: conc.Duration) nothrow -> Int {
+	match rest.serve(move a, move listener, move handle, timeout) {
+		core.Result::Ok(_) => { return 0; },
+		core.Result::Err(_) => { return 1; }
+	}
+}
+
+// --- Handlers ---
+
+fn _health_handler(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	return core.Result::Ok(rest.json_response(200, "{\"ok\":true}"));
+}
+
+fn _me_handler(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	match rest.get_principal(c) {
+		Optional::Some(p) => {
+			val body = "{\"sub\":\"" + p.sub + "\"}";
+			return core.Result::Ok(rest.json_response(200, body));
+		},
+		Optional::None => {
+			return core.Result::Err(rest.rest_error(401, "unauthorized", "missing-principal", "no principal"));
+		}
+	}
+}
+
+// --- Check helpers ---
+
+fn _contains(haystack: &String, needle: &String) nothrow -> Bool {
+	val h_len = haystack.byte_length();
+	val n_len = needle.byte_length();
+	if n_len > h_len {
+		return false;
+	}
+	var i = 0;
+	val limit = h_len - n_len + 1;
+	while i < limit {
+		var matched = true;
+		var j = 0;
+		while j < n_len {
+			if core.string_byte_at(haystack, i + j) != core.string_byte_at(needle, j) {
+				matched = false;
+				j = n_len;
+			} else {
+				j = j + 1;
+			}
+		}
+		if matched {
+			return true;
+		}
+		i = i + 1;
+	}
+	return false;
+}
+
+fn _starts_with(s: &String, prefix: &String) nothrow -> Bool {
+	val p_len = prefix.byte_length();
+	if s.byte_length() < p_len {
+		return false;
+	}
+	var i = 0;
+	while i < p_len {
+		if core.string_byte_at(s, i) != core.string_byte_at(prefix, i) {
+			return false;
+		}
+		i = i + 1;
+	}
+	return true;
+}
+
+// Full lifecycle helper: listen_app → clone handle → spawn serve → roundtrip → stop → join.
+// All scenarios go through the real serve() path.
+fn _roundtrip(app: rest.App, raw_request: &String, timeout: conc.Duration) nothrow -> core.Result<String, Int> {
+	match rest.listen_app(&app, timeout) {
+		core.Result::Err(_) => { return core.Result::Err(1); },
+		core.Result::Ok(lst) => {
+			var listener = move lst;
+			val port = listener.local_port();
+			var handle = rest.new_server_handle();
+			var caller_handle = rest.clone_handle(&handle);
+			var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
+				return _run_serve(move app, move listener, move handle, timeout);
+			});
+			match _http_roundtrip(port, raw_request, timeout) {
+				core.Result::Err(code) => {
+					rest.stop(&caller_handle);
+					val _ = sv.join();
+					return core.Result::Err(code + 10);
+				},
+				core.Result::Ok(resp_str) => {
+					rest.stop(&caller_handle);
+					match sv.join() {
+						core.Result::Err(_) => { return core.Result::Err(2); },
+						core.Result::Ok(exit_code) => {
+							if exit_code != 0 { return core.Result::Err(3); }
+						}
+					}
+					return core.Result::Ok(move resp_str);
+				}
+			}
+		}
+	}
+}
+
+// --- Scenarios ---
+
+// Scenario: GET /health → 200 {"ok":true}
+fn scenario_health_endpoint() nothrow -> Int {
+	val timeout = conc.Duration(millis = 5000);
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 101; },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+				core.Result::Err(_) => { return 102; },
+				core.Result::Ok(_) => {}
+			}
+			val raw_req = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
+			match _roundtrip(move app, &raw_req, timeout) {
+				core.Result::Err(_) => { return 103; },
+				core.Result::Ok(resp_str) => {
+					val status_line = "HTTP/1.1 200 OK";
+					if !_starts_with(&resp_str, &status_line) { return 104; }
+					val body = "{\"ok\":true}";
+					if !_contains(&resp_str, &body) { return 105; }
+					return 0;
+				}
+			}
+		}
+	}
+}
+
+// JWT guard that uses moved (owned) config
+fn _jwt_guard_owned(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Result<Void, rest.RestError> {
+	var config = rest.new_jwt_guard_config(_test_secret(), _build_policy());
+	config.now_unix = time.utc_unix_seconds_now();
+	return rest.jwt_guard_apply(&config, req, c);
+}
+
+// Scenario: GET /v1/me with valid JWT → 200 {"sub":"..."}
+fn scenario_jwt_authorized() nothrow -> Int {
+	val timeout = conc.Duration(millis = 5000);
+	val now = time.utc_unix_seconds_now();
+
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 201; },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest.add_group(&mut app, "/v1") {
+				core.Result::Err(_) => { return 202; },
+				core.Result::Ok(group) => {
+					rest.add_group_guard(&mut app, &group, core.callback2(_jwt_guard_owned));
+					match rest_app.add_group_route(&mut app, &group, "GET", "/me", core.callback2(_me_handler)) {
+						core.Result::Err(_) => { return 203; },
+						core.Result::Ok(_) => {}
+					}
+				}
+			}
+
+			// Sign a JWT token
+			val header = "{\"alg\":\"HS256\"}";
+			val payload = "{\"sub\":\"user-42\",\"iat\":" + fmt.format_int(now) + "}";
+			var sign_secret = _test_secret();
+			var opts = jwt.new_sign_options();
+			opts.enforce_typ_jwt = false;
+			match jwt.sign_hs256(&header, &payload, &sign_secret, &opts) {
+				core.Result::Err(_) => { return 204; },
+				core.Result::Ok(token) => {
+					val raw_req = "GET /v1/me HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer " + token + "\r\n\r\n";
+					match _roundtrip(move app, &raw_req, timeout) {
+						core.Result::Err(_) => { return 205; },
+						core.Result::Ok(resp_str) => {
+							val status_line = "HTTP/1.1 200 OK";
+							if !_starts_with(&resp_str, &status_line) { return 206; }
+							val sub_marker = "\"sub\":\"user-42\"";
+							if !_contains(&resp_str, &sub_marker) { return 207; }
+							return 0;
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// Scenario: GET /v1/me without token → 401 unauthorized envelope
+fn scenario_jwt_unauthorized() nothrow -> Int {
+	val timeout = conc.Duration(millis = 5000);
+
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 301; },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest.add_group(&mut app, "/v1") {
+				core.Result::Err(_) => { return 302; },
+				core.Result::Ok(group) => {
+					rest.add_group_guard(&mut app, &group, core.callback2(_jwt_guard_owned));
+					match rest_app.add_group_route(&mut app, &group, "GET", "/me", core.callback2(_me_handler)) {
+						core.Result::Err(_) => { return 303; },
+						core.Result::Ok(_) => {}
+					}
+				}
+			}
+			val raw_req = "GET /v1/me HTTP/1.1\r\nHost: localhost\r\n\r\n";
+			match _roundtrip(move app, &raw_req, timeout) {
+				core.Result::Err(_) => { return 304; },
+				core.Result::Ok(resp_str) => {
+					val status_line = "HTTP/1.1 401 Unauthorized";
+					if !_starts_with(&resp_str, &status_line) { return 305; }
+					val unauth_marker = "\"event\":\"unauthorized\"";
+					if !_contains(&resp_str, &unauth_marker) { return 306; }
+					return 0;
+				}
+			}
+		}
+	}
+}
+
+// Scenario: GET /nonexistent → 404 not-found envelope
+fn scenario_not_found() nothrow -> Int {
+	val timeout = conc.Duration(millis = 5000);
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 401; },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+				core.Result::Err(_) => { return 402; },
+				core.Result::Ok(_) => {}
+			}
+			val raw_req = "GET /nonexistent HTTP/1.1\r\nHost: localhost\r\n\r\n";
+			match _roundtrip(move app, &raw_req, timeout) {
+				core.Result::Err(_) => { return 403; },
+				core.Result::Ok(resp_str) => {
+					val status_line = "HTTP/1.1 404 Not Found";
+					if !_starts_with(&resp_str, &status_line) { return 404; }
+					val nf_marker = "\"event\":\"not-found\"";
+					if !_contains(&resp_str, &nf_marker) { return 405; }
+					return 0;
+				}
+			}
+		}
+	}
+}
+
+// Scenario: garbage input → 400 malformed
+fn scenario_malformed_request() nothrow -> Int {
+	val timeout = conc.Duration(millis = 5000);
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 501; },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+				core.Result::Err(_) => { return 502; },
+				core.Result::Ok(_) => {}
+			}
+			val raw_req = "GARBAGE\r\n\r\n";
+			match _roundtrip(move app, &raw_req, timeout) {
+				core.Result::Err(_) => { return 503; },
+				core.Result::Ok(resp_str) => {
+					val status_line = "HTTP/1.1 400 Bad Request";
+					if !_starts_with(&resp_str, &status_line) { return 504; }
+					return 0;
+				}
+			}
+		}
+	}
+}
+
+// Handler that echoes query params
+fn _echo_query_handler(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	val name = "q";
+	match rest.query_param(req, &name) {
+		Optional::Some(v) => {
+			val body = "{\"q\":\"" + v + "\"}";
+			return core.Result::Ok(rest.json_response(200, body));
+		},
+		Optional::None => {
+			return core.Result::Ok(rest.json_response(200, "{\"q\":null}"));
+		}
+	}
+}
+
+// Scenario: GET /search?q=hello routes correctly and query params are available
+fn scenario_query_string_routing() nothrow -> Int {
+	val timeout = conc.Duration(millis = 5000);
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 601; },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest_app.add_route(&mut app, "GET", "/search", core.callback2(_echo_query_handler)) {
+				core.Result::Err(_) => { return 602; },
+				core.Result::Ok(_) => {}
+			}
+			val raw_req = "GET /search?q=hello HTTP/1.1\r\nHost: localhost\r\n\r\n";
+			match _roundtrip(move app, &raw_req, timeout) {
+				core.Result::Err(_) => { return 603; },
+				core.Result::Ok(resp_str) => {
+					val status_line = "HTTP/1.1 200 OK";
+					if !_starts_with(&resp_str, &status_line) { return 604; }
+					val body_marker = "\"q\":\"hello\"";
+					if !_contains(&resp_str, &body_marker) { return 605; }
+					return 0;
+				}
+			}
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	val a = scenario_health_endpoint();
+	if a != 0 { return a; }
+	val b = scenario_jwt_authorized();
+	if b != 0 { return b; }
+	val c = scenario_jwt_unauthorized();
+	if c != 0 { return c; }
+	val d = scenario_not_found();
+	if d != 0 { return d; }
+	val e = scenario_malformed_request();
+	if e != 0 { return e; }
+	val f = scenario_query_string_routing();
+	if f != 0 { return f; }
+	return 0;
+}

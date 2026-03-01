@@ -1,16 +1,13 @@
-# REST UX Acceptance Tests — Progress
+# REST Framework — Progress
 
 Status: verified, all tests passing
-Date: 2026-02-26
+Date: 2026-02-28
 
 ## Scope
 
-Acceptance tests derived from `docs/effective-web-rest.md` UX spec and `work/rest/plan.md` design.
-Tests exercise UX contract only — no server, router, or builder machinery.
+Full REST framework with router, dispatch pipeline, HTTP parser/serializer, and TCP server.
 
-## Framework Skeleton
-
-Minimal `packages/web-rest/src/` created to support test compilation:
+## Framework Source
 
 | File | Purpose |
 |------|---------|
@@ -18,10 +15,13 @@ Minimal `packages/web-rest/src/` created to support test compilation:
 | `errors.drift` | `RestError` struct, event constants, `StringPair` for fields |
 | `response.drift` | `Response` struct, `json_response()`, `error_envelope()` |
 | `context.drift` | `Context`, `Principal`, get/set principal |
-| `request.drift` | `Request`, `QueryParam`, query/body accessors |
+| `request.drift` | `Request`, `QueryParam`, query/body/header/path-param accessors |
 | `jwt_guard.drift` | JWT tag → RestError mapping (plan.md contract) |
-
-No server, router, builder, middleware chain, or HTTP listener implemented.
+| `router.drift` | Route pattern parsing, path matching, path param extraction |
+| `app.drift` | AppBuilder, App, Group, route/filter/guard registration, dispatch |
+| `events.drift` | Exception types for throws-handler adapter |
+| `http.drift` | HTTP/1.1 request parser + response serializer |
+| `server.drift` | ServerHandle, listen_app, serve (TCP accept loop), handle_connection |
 
 ## Test Files
 
@@ -74,6 +74,37 @@ No server, router, builder, middleware chain, or HTTP listener implemented.
 | `scenario_error_envelope_with_fields` | Envelope with email=invalid-format, age=out-of-range |
 | `scenario_error_envelope_empty_fields` | Envelope with empty fields object |
 
+### Dispatch: `packages/web-rest/tests/unit/dispatch_test.drift`
+- Router, path params, filters, guards, throws adapter
+- 20 scenarios (100–2000 range)
+
+### HTTP Parser: `packages/web-rest/tests/unit/http_test.drift`
+- HTTP/1.1 request parsing and response serialization
+- 7 scenarios (100–700 range)
+
+| Scenario | Asserts |
+|----------|---------|
+| `scenario_parse_get_request` | GET /health → method, path, empty body |
+| `scenario_parse_post_with_body` | POST with Content-Length → body extracted |
+| `scenario_parse_headers` | Multiple headers parsed, Authorization found |
+| `scenario_parse_empty_body` | No Content-Length → empty body |
+| `scenario_parse_malformed_request_line` | Garbage → 400 malformed-http |
+| `scenario_serialize_200` | Response(200) → HTTP/1.1 200 OK status line + body |
+| `scenario_serialize_401` | Response(401) → HTTP/1.1 401 Unauthorized status line |
+
+### Server Integration: `packages/web-rest/tests/unit/server_test.drift`
+- Full TCP lifecycle: listen → accept → parse → dispatch → serialize → respond
+- Spawned server VT, real TCP connections via port 0
+- 5 scenarios (100–500 range)
+
+| Scenario | Asserts |
+|----------|---------|
+| `scenario_health_endpoint` | GET /health → 200 `{"ok":true}` over TCP |
+| `scenario_jwt_authorized` | GET /v1/me + Bearer token → 200 `{"sub":"user-42"}` |
+| `scenario_jwt_unauthorized` | GET /v1/me without token → 401 unauthorized envelope |
+| `scenario_not_found` | GET /nonexistent → 404 not-found envelope |
+| `scenario_malformed_request` | Garbage TCP data → 400 Bad Request |
+
 ## Justfile Recipes Added
 
 - `rest-check-par`: parallel compile + serial run of all REST unit tests
@@ -105,8 +136,24 @@ All 14 JWT error tags mapped per plan.md contract:
 `CORE_BUG-return-fwd-mut-ref.md` — `return void_fn(&mut ref, ...)` corrupted &mut state.
 Reported to compiler team, resolved. Repro retained as regression test.
 
+## HTTP Listener Limitations (MVP)
+
+- HTTP/1.1 only, version not validated
+- No chunked transfer encoding — Content-Length only
+- No keep-alive — one request per connection, `Connection: close` always sent
+- Max header size: 8192 bytes
+- No percent-decoding of URL path
+- No Host header validation
+- Response always `Content-Type: application/json`
+- `event_id` is counter-based (`evt-N`), not globally unique
+- Connections handled synchronously (one at a time) — `serve()` takes owned `App` to enable spawning in VTs (Drift closure borrow restriction)
+- **Server shutdown uses `Arc<AtomicBool>` shared stop flag.** `ServerHandle.stopped` is `conc.Arc<sync.AtomicBool>`. `clone_handle()` clones the Arc so caller retains a handle while `serve()` owns another. `stop()` takes `&ServerHandle` and atomically sets the flag. The accept loop checks the flag with `Acquire` ordering between iterations (200ms accept timeout bounds responsiveness).
+- `ServerHandle.max_requests` provides optional bounded exit (0 = unlimited, >0 = exit after N connections) — useful as a test helper but not the primary shutdown mechanism
+
 ## Verification
 
-- [x] `just rest-check-par` — all 4 test files pass (3 stories + 1 repro) (as of 2026-02-26)
-- [x] `just test` — full suite (JWT + REST) passes (10 tests total) (as of 2026-02-26)
-- [ ] Blocked: driftc 0.8.0-dev stdlib regression breaks all compilation (std.json/regex internals). Upstream fix required. Old code on main also fails — not caused by our changes.
+- [x] `just rest-check-par` — all 7 test files pass (as of 2026-02-28)
+- [x] `just test` — full suite (JWT + REST) passes (13 tests total) (as of 2026-02-28)
+- [x] Query string parsing: request target split on `?`, path routed without query, params populated
+- [x] Truncated body: Content-Length mismatch returns 400 `incomplete-body`
+- [x] Real lifecycle test: `listen_app()` → `clone_handle()` → spawn `serve()` → roundtrip → `stop()` → `join()` clean exit

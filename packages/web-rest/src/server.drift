@@ -1,0 +1,128 @@
+module web.rest.server
+
+import std.core as core;
+import std.io as io;
+import std.net as net;
+import std.concurrent as conc;
+import std.sync as sync;
+import std.format as fmt;
+import web.rest.errors as errors;
+import web.rest.response as response;
+import web.rest.context as context;
+import web.rest.request as request;
+import web.rest.app as app;
+import web.rest.http as http;
+
+export {
+	ServerHandle,
+	new_server_handle,
+	clone_handle,
+	stop,
+	listen_app,
+	serve
+};
+
+pub struct ServerHandle {
+	pub stopped: conc.Arc<sync.AtomicBool>,
+	pub max_requests: Int
+}
+
+pub fn new_server_handle() nothrow -> ServerHandle {
+	return ServerHandle(stopped = conc.arc(sync.atomic_bool(false)), max_requests = 0);
+}
+
+pub fn clone_handle(handle: &ServerHandle) nothrow -> ServerHandle {
+	return ServerHandle(stopped = handle.stopped.clone(), max_requests = handle.max_requests);
+}
+
+pub fn stop(handle: &ServerHandle) nothrow -> Void {
+	val flag = handle.stopped.get();
+	flag.store(true, sync.MemoryOrder::Release());
+	return core.void_value();
+}
+
+fn _is_stopped(handle: &ServerHandle) nothrow -> Bool {
+	val flag = handle.stopped.get();
+	return flag.load(sync.MemoryOrder::Acquire());
+}
+
+pub fn listen_app(a: &app.App, timeout: conc.Duration) nothrow -> core.Result<net.TcpListener, errors.RestError> {
+	if a.bind_hosts.len == 0 {
+		return core.Result::Err(errors.rest_error(500, "internal", "no-bind-address", "app has no bind addresses"));
+	}
+	val host = a.bind_hosts[0];
+	val port = a.bind_ports[0];
+	var addr = net.socket_addr(host, port);
+	match net.listen(&addr, timeout) {
+		core.Result::Ok(listener) => {
+			return core.Result::Ok(move listener);
+		},
+		core.Result::Err(_) => {
+			return core.Result::Err(errors.rest_error(500, "internal", "listen-failed", "failed to bind TCP listener"));
+		}
+	}
+}
+
+pub fn serve(a: app.App, listener: net.TcpListener, handle: ServerHandle, timeout: conc.Duration) nothrow -> core.Result<Void, errors.RestError> {
+	val accept_timeout = conc.Duration(millis = 200);
+	var requests_served = 0;
+	var event_counter = 0;
+	while !_is_stopped(&handle) {
+		if handle.max_requests > 0 {
+			if requests_served >= handle.max_requests {
+				stop(&handle);
+			}
+		}
+		if !_is_stopped(&handle) {
+			match listener.accept(accept_timeout) {
+				core.Result::Ok(stream) => {
+					var s = move stream;
+					event_counter = event_counter + 1;
+					val eid = "evt-" + fmt.format_int(event_counter);
+					val _ = _handle_connection(&a, move s, timeout, &eid);
+					requests_served = requests_served + 1;
+				},
+				core.Result::Err(_) => {}
+			}
+		}
+	}
+	return core.Result::Ok(core.void_value());
+}
+
+fn _handle_connection(a: &app.App, var stream: net.TcpStream, timeout: conc.Duration, event_id: &String) nothrow -> Int {
+	match http.read_request_bytes(&stream, timeout) {
+		core.Result::Err(read_err) => {
+			val err_resp = response.error_envelope(&read_err, event_id);
+			val _ = http.write_response(&stream, &err_resp, timeout);
+			val _ = stream.close(timeout);
+			return 1;
+		},
+		core.Result::Ok(raw) => {
+			match http.parse_request(&raw) {
+				core.Result::Err(parse_err) => {
+					val err_resp = response.error_envelope(&parse_err, event_id);
+					val _ = http.write_response(&stream, &err_resp, timeout);
+					val _ = stream.close(timeout);
+					return 2;
+				},
+				core.Result::Ok(req) => {
+					var mut_req = move req;
+					var ctx = context.new_context();
+					match app.dispatch(a, &mut mut_req, &mut ctx) {
+						core.Result::Ok(resp) => {
+							val _ = http.write_response(&stream, &resp, timeout);
+							val _ = stream.close(timeout);
+							return 0;
+						},
+						core.Result::Err(dispatch_err) => {
+							val err_resp = response.error_envelope(&dispatch_err, event_id);
+							val _ = http.write_response(&stream, &err_resp, timeout);
+							val _ = stream.close(timeout);
+							return 3;
+						}
+					}
+				}
+			}
+		}
+	}
+}
