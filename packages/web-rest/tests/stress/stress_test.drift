@@ -260,7 +260,7 @@ fn _me_handler(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Result<
 // --- Shared client VT helper ---
 
 fn _client_health_check(port: Int, timeout: conc.Duration) nothrow -> Int {
-	val raw_req = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
+	val raw_req = "GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
 	match _http_roundtrip(port, &raw_req, timeout) {
 		core.Result::Err(_) => { return 1; },
 		core.Result::Ok(resp_str) => {
@@ -319,15 +319,15 @@ fn scenario_many_sequential_mixed() nothrow -> Int {
 			var requests: Array<String> = [];
 			var cycle = 0;
 			while cycle < 10 {
-				var r0 = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
+				var r0 = "GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
 				requests.push(move r0);
-				var r1 = "GET /v1/echo?key=stress HTTP/1.1\r\nHost: localhost\r\n\r\n";
+				var r1 = "GET /v1/echo?key=stress HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
 				requests.push(move r1);
-				var r2 = "POST /v1/echo HTTP/1.1\r\nHost: localhost\r\nContent-Length: 15\r\n\r\n{\"test\":\"body\"}";
+				var r2 = "POST /v1/echo HTTP/1.1\r\nHost: localhost\r\nContent-Length: 15\r\nConnection: close\r\n\r\n{\"test\":\"body\"}";
 				requests.push(move r2);
-				var r3 = "GET /nonexistent HTTP/1.1\r\nHost: localhost\r\n\r\n";
+				var r3 = "GET /nonexistent HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
 				requests.push(move r3);
-				var r4 = "GET /v1/me HTTP/1.1\r\nHost: localhost\r\n\r\n";
+				var r4 = "GET /v1/me HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
 				requests.push(move r4);
 				cycle = cycle + 1;
 			}
@@ -535,7 +535,7 @@ fn _padded_request(pad_count: Int) nothrow -> String {
 	pad = pad + pad; // 80
 	pad = pad + "AAAAAAAAAAAAAAAAAAAA"; // 100
 
-	var req = "GET /health HTTP/1.1\r\nHost: localhost\r\n"; // 39 bytes
+	var req = "GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n"; // 57 bytes
 	var i = 0;
 	while i < pad_count {
 		req = req + "X-Pad: " + pad + "\r\n"; // 109 bytes each
@@ -947,7 +947,7 @@ fn scenario_partial_slow_client() nothrow -> Int {
 
 					// Split request: request line in part 1, host header + terminator in part 2
 					val part1 = "GET /health HTTP/1.1\r\n";
-					val part2 = "Host: localhost\r\n\r\n";
+					val part2 = "Host: localhost\r\nConnection: close\r\n\r\n";
 					match _slow_roundtrip(port, &part1, &part2, timeout) {
 						core.Result::Err(_) => {
 							rest.stop(&caller_handle);
@@ -1112,7 +1112,7 @@ fn scenario_large_response() nothrow -> Int {
 			}
 
 			var reqs: Array<String> = [];
-			var r = "GET /v1/large HTTP/1.1\r\nHost: localhost\r\n\r\n";
+			var r = "GET /v1/large HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
 			reqs.push(move r);
 			match _multi_roundtrip(move app, &reqs, timeout) {
 				core.Result::Err(_) => { return 703; },
@@ -1159,6 +1159,325 @@ fn scenario_large_response() nothrow -> Int {
 	}
 }
 
+// --- Keep-alive TCP helpers ---
+
+fn _find_header_end_bytes(raw: &Array<Byte>) nothrow -> Int {
+	val len = raw.len;
+	if len < 4 {
+		return -1;
+	}
+	var i = 0;
+	val limit = len - 3;
+	while i < limit {
+		if raw[i] == cast<Byte>(13) {
+			if raw[i + 1] == cast<Byte>(10) {
+				if raw[i + 2] == cast<Byte>(13) {
+					if raw[i + 3] == cast<Byte>(10) {
+						return i + 4;
+					}
+				}
+			}
+		}
+		i = i + 1;
+	}
+	return -1;
+}
+
+fn _scan_cl_from_bytes(raw: &Array<Byte>, header_end: Int) nothrow -> Int {
+	val marker = "Content-Length: ";
+	val m_len = marker.byte_length();
+	if header_end < m_len {
+		return -1;
+	}
+	var i = 0;
+	val limit = header_end - m_len;
+	while i < limit {
+		var matched = true;
+		var j = 0;
+		while j < m_len {
+			if raw[i + j] != core.string_byte_at(marker, j) {
+				matched = false;
+				j = m_len;
+			} else {
+				j = j + 1;
+			}
+		}
+		if matched {
+			val val_start = i + m_len;
+			var val_end = val_start;
+			var scanning = true;
+			while scanning {
+				if val_end >= header_end {
+					scanning = false;
+				} else {
+					if raw[val_end] == cast<Byte>(13) {
+						scanning = false;
+					} else {
+						val_end = val_end + 1;
+					}
+				}
+			}
+			var result = 0;
+			var k = val_start;
+			while k < val_end {
+				val d = cast<Int>(raw[k]) - 48;
+				if d < 0 { return -1; }
+				if d > 9 { return -1; }
+				result = result * 10 + d;
+				k = k + 1;
+			}
+			return result;
+		}
+		i = i + 1;
+	}
+	return -1;
+}
+
+fn _bytes_to_string_range(raw: &Array<Byte>, start: Int, end: Int) nothrow -> String {
+	val n = end - start;
+	if n <= 0 {
+		return "";
+	}
+	var b = io.buffer(n);
+	var i = 0;
+	while i < n {
+		io.buffer_write(&mut b, i, raw[start + i]);
+		i = i + 1;
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&b), n);
+}
+
+// Write raw bytes to a stream.
+fn _write_raw(stream: &net.TcpStream, s: &String, timeout: conc.Duration) nothrow -> core.Result<Void, Int> {
+	val bytes = _to_bytes(s);
+	var wbuf = io.buffer(bytes.len);
+	var i = 0;
+	while i < bytes.len {
+		io.buffer_write(&mut wbuf, i, bytes[i]);
+		i = i + 1;
+	}
+	match stream.write(&wbuf, timeout) {
+		core.Result::Err(_) => { return core.Result::Err(1); },
+		core.Result::Ok(_) => { return core.Result::Ok(core.void_value()); }
+	}
+}
+
+// Read one complete HTTP response from keep-alive connection.
+fn _read_one_response(stream: &net.TcpStream, buf: &mut Array<Byte>, timeout: conc.Duration) nothrow -> core.Result<String, Int> {
+	var header_end = -1;
+	var content_length = -1;
+	var done = false;
+
+	while !done {
+		if header_end == -1 {
+			header_end = _find_header_end_bytes(buf);
+			if header_end != -1 {
+				content_length = _scan_cl_from_bytes(buf, header_end);
+			}
+		}
+		if header_end != -1 {
+			if content_length <= 0 {
+				done = true;
+			} else {
+				val body_available = buf.len - header_end;
+				if body_available >= content_length {
+					done = true;
+				}
+			}
+		}
+
+		if !done {
+			var rbuf = io.buffer(4096);
+			match stream.read(&mut rbuf, timeout) {
+				core.Result::Err(_) => { return core.Result::Err(1); },
+				core.Result::Ok(n) => {
+					if n == 0 {
+						return core.Result::Err(2);
+					}
+					var j = 0;
+					while j < n {
+						buf.push(io.buffer_read(&mut rbuf, j));
+						j = j + 1;
+					}
+				}
+			}
+		}
+	}
+
+	var total = header_end;
+	if content_length > 0 {
+		total = header_end + content_length;
+	}
+	val resp_str = _bytes_to_string_range(buf, 0, total);
+
+	if total < buf.len {
+		var new_buf: Array<Byte> = [];
+		var k = total;
+		while k < buf.len {
+			new_buf.push(buf[k]);
+			k = k + 1;
+		}
+		*buf = move new_buf;
+	} else {
+		var empty: Array<Byte> = [];
+		*buf = move empty;
+	}
+
+	return core.Result::Ok(move resp_str);
+}
+
+// --- Scenario 8: Keep-alive sustained load (800-range) ---
+//
+// One TCP connection, 50 requests cycling through 5 types:
+// health, echo query, echo body, 404, health again.
+// All sent sequentially on the same keep-alive connection.
+// Validates correct response for each. Final request uses Connection: close.
+
+fn scenario_keepalive_sustained() nothrow -> Int {
+	val timeout = conc.Duration(millis = 10000);
+	val total_n = 50;
+
+	var bld = rest.new_app_builder();
+	rest.bind(&mut bld, "127.0.0.1", 0);
+	match rest.build_app(move bld) {
+		core.Result::Err(_) => { return 801; },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+				core.Result::Err(_) => { return 802; },
+				core.Result::Ok(_) => {}
+			}
+			match rest_app.add_route(&mut app, "GET", "/v1/echo", core.callback2(_echo_query_handler)) {
+				core.Result::Err(_) => { return 803; },
+				core.Result::Ok(_) => {}
+			}
+			match rest_app.add_route(&mut app, "POST", "/v1/echo", core.callback2(_echo_body_handler)) {
+				core.Result::Err(_) => { return 804; },
+				core.Result::Ok(_) => {}
+			}
+
+			match rest.listen_app(&app, timeout) {
+				core.Result::Err(_) => { return 805; },
+				core.Result::Ok(lst) => {
+					var listener = move lst;
+					val port = listener.local_port();
+					var handle = rest.new_server_handle();
+					handle.max_requests = total_n;
+					var caller_handle = rest.clone_handle(&handle);
+					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
+						return _run_serve(move app, move listener, move handle, timeout);
+					});
+
+					var addr = net.socket_addr("127.0.0.1", port);
+					match net.connect(&addr, timeout) {
+						core.Result::Err(_) => {
+							rest.stop(&caller_handle);
+							val _ = sv.join();
+							return 806;
+						},
+						core.Result::Ok(conn) => {
+							var stream = move conn;
+							var read_buf: Array<Byte> = [];
+							var ok = true;
+							var i = 0;
+
+							val s_200 = "HTTP/1.1 200 OK";
+							val s_404 = "HTTP/1.1 404 Not Found";
+							val m_health = "{\"ok\":true}";
+							val m_key = "\"key\":\"stress\"";
+							val m_echo = "\"echo\":true";
+							val m_notfound = "\"event\":\"not-found\"";
+
+							while i < total_n {
+								if ok {
+									val kind = i - ((i / 5) * 5);
+									var req = "";
+									if kind == 0 {
+										req = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
+									}
+									if kind == 1 {
+										req = "GET /v1/echo?key=stress HTTP/1.1\r\nHost: localhost\r\n\r\n";
+									}
+									if kind == 2 {
+										req = "POST /v1/echo HTTP/1.1\r\nHost: localhost\r\nContent-Length: 15\r\n\r\n{\"test\":\"body\"}";
+									}
+									if kind == 3 {
+										req = "GET /nonexistent HTTP/1.1\r\nHost: localhost\r\n\r\n";
+									}
+									if kind == 4 {
+										// Last cycle gets Connection: close on final request
+										if i == total_n - 1 {
+											req = "GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+										} else {
+											req = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
+										}
+									}
+
+									match _write_raw(&stream, &req, timeout) {
+										core.Result::Err(_) => { ok = false; },
+										core.Result::Ok(_) => {}
+									}
+
+									if ok {
+										match _read_one_response(&stream, &mut read_buf, timeout) {
+											core.Result::Err(_) => { ok = false; },
+											core.Result::Ok(resp) => {
+												if kind == 0 {
+													if !_starts_with(&resp, &s_200) { ok = false; }
+													if ok {
+														if !_contains(&resp, &m_health) { ok = false; }
+													}
+												}
+												if kind == 1 {
+													if !_starts_with(&resp, &s_200) { ok = false; }
+													if ok {
+														if !_contains(&resp, &m_key) { ok = false; }
+													}
+												}
+												if kind == 2 {
+													if !_starts_with(&resp, &s_200) { ok = false; }
+													if ok {
+														if !_contains(&resp, &m_echo) { ok = false; }
+													}
+												}
+												if kind == 3 {
+													if !_starts_with(&resp, &s_404) { ok = false; }
+													if ok {
+														if !_contains(&resp, &m_notfound) { ok = false; }
+													}
+												}
+												if kind == 4 {
+													if !_starts_with(&resp, &s_200) { ok = false; }
+													if ok {
+														if !_contains(&resp, &m_health) { ok = false; }
+													}
+												}
+											}
+										}
+									}
+								}
+								i = i + 1;
+							}
+
+							val _ = stream.close(timeout);
+							rest.stop(&caller_handle);
+							match sv.join() {
+								core.Result::Err(_) => { return 810; },
+								core.Result::Ok(exit_code) => {
+									if exit_code != 0 { return 811; }
+								}
+							}
+
+							if !ok { return 820; }
+							return 0;
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
 fn main() nothrow -> Int {
 	val a = scenario_many_sequential_mixed();
 	if a != 0 { return a; }
@@ -1174,5 +1493,7 @@ fn main() nothrow -> Int {
 	if f != 0 { return f; }
 	val g = scenario_large_response();
 	if g != 0 { return g; }
+	val h = scenario_keepalive_sustained();
+	if h != 0 { return h; }
 	return 0;
 }

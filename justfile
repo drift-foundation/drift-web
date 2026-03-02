@@ -63,6 +63,15 @@ rest-stress:
       --test-file packages/web-rest/tests/stress/stress_test.drift \
       --target-word-bits 64
 
+# REST perf benchmarks (separate gate, not in default test target).
+# Do not run under DRIFT_MEMCHECK or DRIFT_ASAN.
+rest-perf:
+    tools/drift_test_parallel_runner.sh run-one \
+      --src-root packages/web-jwt/src \
+      --src-root packages/web-rest/src \
+      --test-file packages/web-rest/tests/perf/perf_test.drift \
+      --target-word-bits 64
+
 # Compile-only check for REST (no execution).
 rest-compile-check FILE="packages/web-rest/src/lib.drift":
     @tools/drift_test_parallel_runner.sh compile \

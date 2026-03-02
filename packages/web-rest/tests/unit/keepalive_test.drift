@@ -1,0 +1,1094 @@
+module web.rest.tests.unit.keepalive_test
+
+import std.core as core;
+import std.io as io;
+import std.net as net;
+import std.concurrent as conc;
+import std.format as fmt;
+import web.rest as rest;
+import web.rest.app as rest_app;
+
+// Keep-alive unit tests for HTTP/1.1 persistent connections.
+// All tests use real TCP loopback to exercise the full server path.
+
+// --- Byte/string helpers (duplicated; Drift has no cross-test imports) ---
+
+fn _to_bytes(s: &String) nothrow -> Array<Byte> {
+	var out: Array<Byte> = [];
+	var i = 0;
+	val n = s.byte_length();
+	while i < n {
+		out.push(core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return move out;
+}
+
+fn _bytes_to_string(raw: &Array<Byte>) nothrow -> String {
+	val n = raw.len;
+	if n == 0 {
+		return "";
+	}
+	var b = io.buffer(n);
+	var i = 0;
+	while i < n {
+		io.buffer_write(&mut b, i, raw[i]);
+		i = i + 1;
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&b), n);
+}
+
+fn _starts_with(s: &String, prefix: &String) nothrow -> Bool {
+	val p_len = prefix.byte_length();
+	if s.byte_length() < p_len {
+		return false;
+	}
+	var i = 0;
+	while i < p_len {
+		if core.string_byte_at(s, i) != core.string_byte_at(prefix, i) {
+			return false;
+		}
+		i = i + 1;
+	}
+	return true;
+}
+
+fn _contains(haystack: &String, needle: &String) nothrow -> Bool {
+	val h_len = haystack.byte_length();
+	val n_len = needle.byte_length();
+	if n_len > h_len {
+		return false;
+	}
+	var i = 0;
+	val limit = h_len - n_len + 1;
+	while i < limit {
+		var matched = true;
+		var j = 0;
+		while j < n_len {
+			if core.string_byte_at(haystack, i + j) != core.string_byte_at(needle, j) {
+				matched = false;
+				j = n_len;
+			} else {
+				j = j + 1;
+			}
+		}
+		if matched {
+			return true;
+		}
+		i = i + 1;
+	}
+	return false;
+}
+
+// --- Server lifecycle ---
+
+fn _run_serve(a: rest.App, listener: net.TcpListener, handle: rest.ServerHandle, timeout: conc.Duration) nothrow -> Int {
+	match rest.serve(move a, move listener, move handle, timeout) {
+		core.Result::Ok(_) => { return 0; },
+		core.Result::Err(_) => { return 1; }
+	}
+}
+
+// --- Handler ---
+
+fn _health_handler(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	return core.Result::Ok(rest.json_response(200, "{\"ok\":true}"));
+}
+
+// Build a ~4KB JSON body for large response tests.
+fn _build_large_body() nothrow -> String {
+	var blk = "XXXXXXXXXX"; // 10
+	blk = blk + blk; // 20
+	blk = blk + blk; // 40
+	blk = blk + blk; // 80
+	blk = blk + "XXXXXXXXXXXXXXXXXXXX"; // 100
+	var payload = "";
+	var i = 0;
+	while i < 40 {
+		payload = payload + blk;
+		i = i + 1;
+	}
+	return "{\"data\":\"" + payload + "\"}";
+}
+
+fn _large_handler(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	val body = _build_large_body();
+	return core.Result::Ok(rest.json_response(200, body));
+}
+
+// --- TCP helpers ---
+
+// Write raw bytes to a stream.
+fn _write_raw(stream: &net.TcpStream, s: &String, timeout: conc.Duration) nothrow -> core.Result<Void, Int> {
+	val bytes = _to_bytes(s);
+	var wbuf = io.buffer(bytes.len);
+	var i = 0;
+	while i < bytes.len {
+		io.buffer_write(&mut wbuf, i, bytes[i]);
+		i = i + 1;
+	}
+	match stream.write(&wbuf, timeout) {
+		core.Result::Err(_) => { return core.Result::Err(1); },
+		core.Result::Ok(_) => { return core.Result::Ok(core.void_value()); }
+	}
+}
+
+// Read one HTTP response from a keep-alive connection.
+// Reads until we have complete headers + Content-Length body.
+// Returns the raw response string.
+fn _read_one_response(stream: &net.TcpStream, buf: &mut Array<Byte>, timeout: conc.Duration) nothrow -> core.Result<String, Int> {
+	// Accumulate bytes until we find \r\n\r\n and have the full body.
+	var header_end = -1;
+	var content_length = -1;
+	var done = false;
+
+	while !done {
+		// Check existing buffer for complete response.
+		if header_end == -1 {
+			header_end = _find_header_end(buf);
+			if header_end != -1 {
+				content_length = _extract_content_length_from_bytes(buf, header_end);
+			}
+		}
+		if header_end != -1 {
+			if content_length <= 0 {
+				done = true;
+			} else {
+				val body_available = buf.len - header_end;
+				if body_available >= content_length {
+					done = true;
+				}
+			}
+		}
+
+		if !done {
+			var rbuf = io.buffer(4096);
+			match stream.read(&mut rbuf, timeout) {
+				core.Result::Err(_) => { return core.Result::Err(1); },
+				core.Result::Ok(n) => {
+					if n == 0 {
+						return core.Result::Err(2);
+					}
+					var j = 0;
+					while j < n {
+						buf.push(io.buffer_read(&mut rbuf, j));
+						j = j + 1;
+					}
+				}
+			}
+		}
+	}
+
+	// Extract the response: headers + body.
+	var total = header_end;
+	if content_length > 0 {
+		total = header_end + content_length;
+	}
+	val resp_str = _bytes_to_string_range(buf, 0, total);
+
+	// Remove consumed bytes from buffer.
+	if total < buf.len {
+		var new_buf: Array<Byte> = [];
+		var k = total;
+		while k < buf.len {
+			new_buf.push(buf[k]);
+			k = k + 1;
+		}
+		*buf = move new_buf;
+	} else {
+		var empty: Array<Byte> = [];
+		*buf = move empty;
+	}
+
+	return core.Result::Ok(move resp_str);
+}
+
+fn _bytes_to_string_range(raw: &Array<Byte>, start: Int, end: Int) nothrow -> String {
+	val n = end - start;
+	if n <= 0 {
+		return "";
+	}
+	var b = io.buffer(n);
+	var i = 0;
+	while i < n {
+		io.buffer_write(&mut b, i, raw[start + i]);
+		i = i + 1;
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&b), n);
+}
+
+fn _find_header_end(raw: &Array<Byte>) nothrow -> Int {
+	val len = raw.len;
+	if len < 4 {
+		return -1;
+	}
+	var i = 0;
+	val limit = len - 3;
+	while i < limit {
+		if raw[i] == cast<Byte>(13) {
+			if raw[i + 1] == cast<Byte>(10) {
+				if raw[i + 2] == cast<Byte>(13) {
+					if raw[i + 3] == cast<Byte>(10) {
+						return i + 4;
+					}
+				}
+			}
+		}
+		i = i + 1;
+	}
+	return -1;
+}
+
+// Scan header bytes for Content-Length value.
+fn _extract_content_length_from_bytes(raw: &Array<Byte>, header_end: Int) nothrow -> Int {
+	// Look for "Content-Length: " pattern in header bytes.
+	val marker = "Content-Length: ";
+	val m_len = marker.byte_length();
+	if header_end < m_len {
+		return -1;
+	}
+	var i = 0;
+	val limit = header_end - m_len;
+	while i < limit {
+		var matched = true;
+		var j = 0;
+		while j < m_len {
+			if raw[i + j] != core.string_byte_at(marker, j) {
+				matched = false;
+				j = m_len;
+			} else {
+				j = j + 1;
+			}
+		}
+		if matched {
+			// Read digits until CR.
+			val val_start = i + m_len;
+			var val_end = val_start;
+			var scanning = true;
+			while scanning {
+				if val_end >= header_end {
+					scanning = false;
+				} else {
+					if raw[val_end] == cast<Byte>(13) {
+						scanning = false;
+					} else {
+						val_end = val_end + 1;
+					}
+				}
+			}
+			// Parse the digit string manually.
+			var result = 0;
+			var k = val_start;
+			while k < val_end {
+				val d = cast<Int>(raw[k]) - 48;
+				if d < 0 { return -1; }
+				if d > 9 { return -1; }
+				result = result * 10 + d;
+				k = k + 1;
+			}
+			return result;
+		}
+		i = i + 1;
+	}
+	return -1;
+}
+
+// Read until stream EOF or error. Returns all bytes as string.
+fn _read_until_eof(stream: &net.TcpStream, timeout: conc.Duration) nothrow -> String {
+	var collected: Array<Byte> = [];
+	var done = false;
+	while !done {
+		var rbuf = io.buffer(4096);
+		match stream.read(&mut rbuf, timeout) {
+			core.Result::Err(_) => { done = true; },
+			core.Result::Ok(n) => {
+				if n == 0 {
+					done = true;
+				} else {
+					var j = 0;
+					while j < n {
+						collected.push(io.buffer_read(&mut rbuf, j));
+						j = j + 1;
+					}
+				}
+			}
+		}
+	}
+	return _bytes_to_string(&collected);
+}
+
+// --- Test 1: Two requests on one TCP connection → two valid responses ---
+// Proves basic keep-alive works: one TCP connection, two sequential requests.
+
+fn scenario_two_requests_one_connection() nothrow -> Int {
+	val timeout = conc.Duration(millis = 5000);
+
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 101; },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+				core.Result::Err(_) => { return 102; },
+				core.Result::Ok(_) => {}
+			}
+			match rest.listen_app(&app, timeout) {
+				core.Result::Err(_) => { return 103; },
+				core.Result::Ok(lst) => {
+					var listener = move lst;
+					val port = listener.local_port();
+					var handle = rest.new_server_handle();
+					handle.max_requests = 2;
+					var caller_handle = rest.clone_handle(&handle);
+					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
+						return _run_serve(move app, move listener, move handle, timeout);
+					});
+
+					// Open one TCP connection.
+					var addr = net.socket_addr("127.0.0.1", port);
+					match net.connect(&addr, timeout) {
+						core.Result::Err(_) => {
+							rest.stop(&caller_handle);
+							val _ = sv.join();
+							return 104;
+						},
+						core.Result::Ok(conn) => {
+							var stream = move conn;
+							var read_buf: Array<Byte> = [];
+
+							// Request 1 (keep-alive, no Connection: close)
+							val req1 = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
+							match _write_raw(&stream, &req1, timeout) {
+								core.Result::Err(_) => {
+									val _ = stream.close(timeout);
+									rest.stop(&caller_handle);
+									val _ = sv.join();
+									return 105;
+								},
+								core.Result::Ok(_) => {}
+							}
+							match _read_one_response(&stream, &mut read_buf, timeout) {
+								core.Result::Err(_) => {
+									val _ = stream.close(timeout);
+									rest.stop(&caller_handle);
+									val _ = sv.join();
+									return 106;
+								},
+								core.Result::Ok(resp1) => {
+									val s_200 = "HTTP/1.1 200 OK";
+									if !_starts_with(&resp1, &s_200) {
+										val _ = stream.close(timeout);
+										rest.stop(&caller_handle);
+										val _ = sv.join();
+										return 107;
+									}
+									val m_health = "{\"ok\":true}";
+									if !_contains(&resp1, &m_health) {
+										val _ = stream.close(timeout);
+										rest.stop(&caller_handle);
+										val _ = sv.join();
+										return 108;
+									}
+									val m_keepalive = "Connection: keep-alive";
+									if !_contains(&resp1, &m_keepalive) {
+										val _ = stream.close(timeout);
+										rest.stop(&caller_handle);
+										val _ = sv.join();
+										return 109;
+									}
+								}
+							}
+
+							// Request 2 on same connection (with Connection: close)
+							val req2 = "GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+							match _write_raw(&stream, &req2, timeout) {
+								core.Result::Err(_) => {
+									val _ = stream.close(timeout);
+									rest.stop(&caller_handle);
+									val _ = sv.join();
+									return 110;
+								},
+								core.Result::Ok(_) => {}
+							}
+							match _read_one_response(&stream, &mut read_buf, timeout) {
+								core.Result::Err(_) => {
+									val _ = stream.close(timeout);
+									rest.stop(&caller_handle);
+									val _ = sv.join();
+									return 111;
+								},
+								core.Result::Ok(resp2) => {
+									val s_200 = "HTTP/1.1 200 OK";
+									if !_starts_with(&resp2, &s_200) {
+										val _ = stream.close(timeout);
+										rest.stop(&caller_handle);
+										val _ = sv.join();
+										return 112;
+									}
+									val m_health = "{\"ok\":true}";
+									if !_contains(&resp2, &m_health) {
+										val _ = stream.close(timeout);
+										rest.stop(&caller_handle);
+										val _ = sv.join();
+										return 113;
+									}
+									val m_close = "Connection: close";
+									if !_contains(&resp2, &m_close) {
+										val _ = stream.close(timeout);
+										rest.stop(&caller_handle);
+										val _ = sv.join();
+										return 114;
+									}
+								}
+							}
+
+							val _ = stream.close(timeout);
+							rest.stop(&caller_handle);
+							match sv.join() {
+								core.Result::Err(_) => { return 115; },
+								core.Result::Ok(exit_code) => {
+									if exit_code != 0 { return 116; }
+								}
+							}
+							return 0;
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// --- Test 2: Back-to-back requests written before reading any response ---
+// Proves remainder buffer preservation: both requests sent in one write,
+// both responses come back correctly.
+
+fn scenario_back_to_back_requests() nothrow -> Int {
+	val timeout = conc.Duration(millis = 5000);
+
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 201; },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+				core.Result::Err(_) => { return 202; },
+				core.Result::Ok(_) => {}
+			}
+			match rest.listen_app(&app, timeout) {
+				core.Result::Err(_) => { return 203; },
+				core.Result::Ok(lst) => {
+					var listener = move lst;
+					val port = listener.local_port();
+					var handle = rest.new_server_handle();
+					handle.max_requests = 2;
+					var caller_handle = rest.clone_handle(&handle);
+					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
+						return _run_serve(move app, move listener, move handle, timeout);
+					});
+
+					var addr = net.socket_addr("127.0.0.1", port);
+					match net.connect(&addr, timeout) {
+						core.Result::Err(_) => {
+							rest.stop(&caller_handle);
+							val _ = sv.join();
+							return 204;
+						},
+						core.Result::Ok(conn) => {
+							var stream = move conn;
+							var read_buf: Array<Byte> = [];
+
+							// Write BOTH requests in a single write — back to back.
+							val both = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\nGET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+							match _write_raw(&stream, &both, timeout) {
+								core.Result::Err(_) => {
+									val _ = stream.close(timeout);
+									rest.stop(&caller_handle);
+									val _ = sv.join();
+									return 205;
+								},
+								core.Result::Ok(_) => {}
+							}
+
+							// Read response 1
+							match _read_one_response(&stream, &mut read_buf, timeout) {
+								core.Result::Err(_) => {
+									val _ = stream.close(timeout);
+									rest.stop(&caller_handle);
+									val _ = sv.join();
+									return 206;
+								},
+								core.Result::Ok(resp1) => {
+									val s_200 = "HTTP/1.1 200 OK";
+									if !_starts_with(&resp1, &s_200) {
+										val _ = stream.close(timeout);
+										rest.stop(&caller_handle);
+										val _ = sv.join();
+										return 207;
+									}
+								}
+							}
+
+							// Read response 2
+							match _read_one_response(&stream, &mut read_buf, timeout) {
+								core.Result::Err(_) => {
+									val _ = stream.close(timeout);
+									rest.stop(&caller_handle);
+									val _ = sv.join();
+									return 208;
+								},
+								core.Result::Ok(resp2) => {
+									val s_200 = "HTTP/1.1 200 OK";
+									if !_starts_with(&resp2, &s_200) {
+										val _ = stream.close(timeout);
+										rest.stop(&caller_handle);
+										val _ = sv.join();
+										return 209;
+									}
+								}
+							}
+
+							val _ = stream.close(timeout);
+							rest.stop(&caller_handle);
+							match sv.join() {
+								core.Result::Err(_) => { return 210; },
+								core.Result::Ok(exit_code) => {
+									if exit_code != 0 { return 211; }
+								}
+							}
+							return 0;
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// --- Test 3: Connection: close opt-out ---
+// Client sends Connection: close on first request. Server responds and closes.
+// Subsequent read on the socket returns EOF/error.
+
+fn scenario_connection_close_opt_out() nothrow -> Int {
+	val timeout = conc.Duration(millis = 5000);
+
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 301; },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+				core.Result::Err(_) => { return 302; },
+				core.Result::Ok(_) => {}
+			}
+			match rest.listen_app(&app, timeout) {
+				core.Result::Err(_) => { return 303; },
+				core.Result::Ok(lst) => {
+					var listener = move lst;
+					val port = listener.local_port();
+					var handle = rest.new_server_handle();
+					handle.max_requests = 2;
+					var caller_handle = rest.clone_handle(&handle);
+					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
+						return _run_serve(move app, move listener, move handle, timeout);
+					});
+
+					var addr = net.socket_addr("127.0.0.1", port);
+					match net.connect(&addr, timeout) {
+						core.Result::Err(_) => {
+							rest.stop(&caller_handle);
+							val _ = sv.join();
+							return 304;
+						},
+						core.Result::Ok(conn) => {
+							var stream = move conn;
+							var read_buf: Array<Byte> = [];
+
+							// Send request with Connection: close
+							val req = "GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+							match _write_raw(&stream, &req, timeout) {
+								core.Result::Err(_) => {
+									val _ = stream.close(timeout);
+									rest.stop(&caller_handle);
+									val _ = sv.join();
+									return 305;
+								},
+								core.Result::Ok(_) => {}
+							}
+							match _read_one_response(&stream, &mut read_buf, timeout) {
+								core.Result::Err(_) => {
+									val _ = stream.close(timeout);
+									rest.stop(&caller_handle);
+									val _ = sv.join();
+									return 306;
+								},
+								core.Result::Ok(resp) => {
+									val s_200 = "HTTP/1.1 200 OK";
+									if !_starts_with(&resp, &s_200) {
+										val _ = stream.close(timeout);
+										rest.stop(&caller_handle);
+										val _ = sv.join();
+										return 307;
+									}
+									// Response must have Connection: close
+									val m_close = "Connection: close";
+									if !_contains(&resp, &m_close) {
+										val _ = stream.close(timeout);
+										rest.stop(&caller_handle);
+										val _ = sv.join();
+										return 308;
+									}
+								}
+							}
+
+							// Server should have closed. Verify: reading more yields EOF/error.
+							var rbuf = io.buffer(4096);
+							match stream.read(&mut rbuf, timeout) {
+								core.Result::Err(_) => {
+									// Expected — connection closed by server.
+								},
+								core.Result::Ok(n) => {
+									if n != 0 {
+										val _ = stream.close(timeout);
+										rest.stop(&caller_handle);
+										val _ = sv.join();
+										return 309;
+									}
+								}
+							}
+
+							val _ = stream.close(timeout);
+							rest.stop(&caller_handle);
+							match sv.join() {
+								core.Result::Err(_) => { return 310; },
+								core.Result::Ok(exit_code) => {
+									if exit_code != 0 { return 311; }
+								}
+							}
+							return 0;
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// --- Test 4: Idle timeout closes silent keep-alive connection ---
+// Client sends one request, gets response, then goes silent.
+// Server idle timeout fires and closes the connection.
+// We use a short idle timeout (200ms) to avoid slow tests.
+
+fn scenario_idle_timeout() nothrow -> Int {
+	val timeout = conc.Duration(millis = 5000);
+
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 401; },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+				core.Result::Err(_) => { return 402; },
+				core.Result::Ok(_) => {}
+			}
+			match rest.listen_app(&app, timeout) {
+				core.Result::Err(_) => { return 403; },
+				core.Result::Ok(lst) => {
+					var listener = move lst;
+					val port = listener.local_port();
+					var handle = rest.new_server_handle();
+					handle.max_requests = 10;
+					handle.idle_timeout_ms = 200;
+					var caller_handle = rest.clone_handle(&handle);
+					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
+						return _run_serve(move app, move listener, move handle, timeout);
+					});
+
+					var addr = net.socket_addr("127.0.0.1", port);
+					match net.connect(&addr, timeout) {
+						core.Result::Err(_) => {
+							rest.stop(&caller_handle);
+							val _ = sv.join();
+							return 404;
+						},
+						core.Result::Ok(conn) => {
+							var stream = move conn;
+							var read_buf: Array<Byte> = [];
+
+							// Send one request (no Connection: close — keep alive)
+							val req = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
+							match _write_raw(&stream, &req, timeout) {
+								core.Result::Err(_) => {
+									val _ = stream.close(timeout);
+									rest.stop(&caller_handle);
+									val _ = sv.join();
+									return 405;
+								},
+								core.Result::Ok(_) => {}
+							}
+							match _read_one_response(&stream, &mut read_buf, timeout) {
+								core.Result::Err(_) => {
+									val _ = stream.close(timeout);
+									rest.stop(&caller_handle);
+									val _ = sv.join();
+									return 406;
+								},
+								core.Result::Ok(resp) => {
+									val s_200 = "HTTP/1.1 200 OK";
+									if !_starts_with(&resp, &s_200) {
+										val _ = stream.close(timeout);
+										rest.stop(&caller_handle);
+										val _ = sv.join();
+										return 407;
+									}
+								}
+							}
+
+							// Don't send anything else. Wait for server idle timeout.
+							// After ~200ms, server should close the connection.
+							// We read and expect EOF/error.
+							var rbuf = io.buffer(4096);
+							match stream.read(&mut rbuf, conc.Duration(millis = 2000)) {
+								core.Result::Err(_) => {
+									// Expected — idle timeout closed.
+								},
+								core.Result::Ok(n) => {
+									if n != 0 {
+										// Server sent something unexpected.
+										val _ = stream.close(timeout);
+										rest.stop(&caller_handle);
+										val _ = sv.join();
+										return 408;
+									}
+									// n == 0: EOF, also expected.
+								}
+							}
+
+							val _ = stream.close(timeout);
+							rest.stop(&caller_handle);
+							match sv.join() {
+								core.Result::Err(_) => { return 409; },
+								core.Result::Ok(exit_code) => {
+									if exit_code != 0 { return 410; }
+								}
+							}
+							return 0;
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// --- Test 5: Malformed request on keep-alive → closes that connection, server lives ---
+// Client sends a valid request, then a malformed one on the same connection.
+// Server writes error response for the malformed request, closes connection.
+// Then a new client can still connect and get a valid response.
+
+fn scenario_error_isolation() nothrow -> Int {
+	val timeout = conc.Duration(millis = 5000);
+
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 501; },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+				core.Result::Err(_) => { return 502; },
+				core.Result::Ok(_) => {}
+			}
+			match rest.listen_app(&app, timeout) {
+				core.Result::Err(_) => { return 503; },
+				core.Result::Ok(lst) => {
+					var listener = move lst;
+					val port = listener.local_port();
+					var handle = rest.new_server_handle();
+					handle.max_requests = 3;
+					var caller_handle = rest.clone_handle(&handle);
+					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
+						return _run_serve(move app, move listener, move handle, timeout);
+					});
+
+					// Connection 1: valid request, then malformed.
+					var addr = net.socket_addr("127.0.0.1", port);
+					match net.connect(&addr, timeout) {
+						core.Result::Err(_) => {
+							rest.stop(&caller_handle);
+							val _ = sv.join();
+							return 504;
+						},
+						core.Result::Ok(conn1) => {
+							var s1 = move conn1;
+							var rb1: Array<Byte> = [];
+
+							// First: valid request
+							val req1 = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
+							match _write_raw(&s1, &req1, timeout) {
+								core.Result::Err(_) => {
+									val _ = s1.close(timeout);
+									rest.stop(&caller_handle);
+									val _ = sv.join();
+									return 505;
+								},
+								core.Result::Ok(_) => {}
+							}
+							match _read_one_response(&s1, &mut rb1, timeout) {
+								core.Result::Err(_) => {
+									val _ = s1.close(timeout);
+									rest.stop(&caller_handle);
+									val _ = sv.join();
+									return 506;
+								},
+								core.Result::Ok(resp1) => {
+									val s_200 = "HTTP/1.1 200 OK";
+									if !_starts_with(&resp1, &s_200) {
+										val _ = s1.close(timeout);
+										rest.stop(&caller_handle);
+										val _ = sv.join();
+										return 507;
+									}
+								}
+							}
+
+							// Second: malformed request on same connection
+							val bad_req = "GARBAGE\r\n\r\n";
+							match _write_raw(&s1, &bad_req, timeout) {
+								core.Result::Err(_) => {
+									val _ = s1.close(timeout);
+									rest.stop(&caller_handle);
+									val _ = sv.join();
+									return 508;
+								},
+								core.Result::Ok(_) => {}
+							}
+							// Read error response — server should send 400 and close.
+							val err_resp = _read_until_eof(&s1, timeout);
+							val s_400 = "HTTP/1.1 400 Bad Request";
+							if !_starts_with(&err_resp, &s_400) {
+								val _ = s1.close(timeout);
+								rest.stop(&caller_handle);
+								val _ = sv.join();
+								return 509;
+							}
+							val _ = s1.close(timeout);
+						}
+					}
+
+					// Connection 2: fresh connection should work.
+					match net.connect(&addr, timeout) {
+						core.Result::Err(_) => {
+							rest.stop(&caller_handle);
+							val _ = sv.join();
+							return 510;
+						},
+						core.Result::Ok(conn2) => {
+							var s2 = move conn2;
+							var rb2: Array<Byte> = [];
+
+							val req2 = "GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+							match _write_raw(&s2, &req2, timeout) {
+								core.Result::Err(_) => {
+									val _ = s2.close(timeout);
+									rest.stop(&caller_handle);
+									val _ = sv.join();
+									return 511;
+								},
+								core.Result::Ok(_) => {}
+							}
+							match _read_one_response(&s2, &mut rb2, timeout) {
+								core.Result::Err(_) => {
+									val _ = s2.close(timeout);
+									rest.stop(&caller_handle);
+									val _ = sv.join();
+									return 512;
+								},
+								core.Result::Ok(resp2) => {
+									val s_200 = "HTTP/1.1 200 OK";
+									if !_starts_with(&resp2, &s_200) {
+										val _ = s2.close(timeout);
+										rest.stop(&caller_handle);
+										val _ = sv.join();
+										return 513;
+									}
+								}
+							}
+							val _ = s2.close(timeout);
+						}
+					}
+
+					rest.stop(&caller_handle);
+					match sv.join() {
+						core.Result::Err(_) => { return 514; },
+						core.Result::Ok(exit_code) => {
+							if exit_code != 0 { return 515; }
+						}
+					}
+					return 0;
+				}
+			}
+		}
+	}
+}
+
+// --- Test 6: Large response + keep-alive, then another request ---
+// Proves short-write fix + connection survives large payload.
+
+fn scenario_large_response_keepalive() nothrow -> Int {
+	val timeout = conc.Duration(millis = 5000);
+
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 601; },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest_app.add_route(&mut app, "GET", "/large", core.callback2(_large_handler)) {
+				core.Result::Err(_) => { return 602; },
+				core.Result::Ok(_) => {}
+			}
+			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+				core.Result::Err(_) => { return 603; },
+				core.Result::Ok(_) => {}
+			}
+			match rest.listen_app(&app, timeout) {
+				core.Result::Err(_) => { return 604; },
+				core.Result::Ok(lst) => {
+					var listener = move lst;
+					val port = listener.local_port();
+					var handle = rest.new_server_handle();
+					handle.max_requests = 2;
+					var caller_handle = rest.clone_handle(&handle);
+					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
+						return _run_serve(move app, move listener, move handle, timeout);
+					});
+
+					var addr = net.socket_addr("127.0.0.1", port);
+					match net.connect(&addr, timeout) {
+						core.Result::Err(_) => {
+							rest.stop(&caller_handle);
+							val _ = sv.join();
+							return 605;
+						},
+						core.Result::Ok(conn) => {
+							var stream = move conn;
+							var read_buf: Array<Byte> = [];
+
+							// Request 1: large response (~4KB body)
+							val req1 = "GET /large HTTP/1.1\r\nHost: localhost\r\n\r\n";
+							match _write_raw(&stream, &req1, timeout) {
+								core.Result::Err(_) => {
+									val _ = stream.close(timeout);
+									rest.stop(&caller_handle);
+									val _ = sv.join();
+									return 606;
+								},
+								core.Result::Ok(_) => {}
+							}
+							match _read_one_response(&stream, &mut read_buf, timeout) {
+								core.Result::Err(_) => {
+									val _ = stream.close(timeout);
+									rest.stop(&caller_handle);
+									val _ = sv.join();
+									return 607;
+								},
+								core.Result::Ok(resp1) => {
+									val s_200 = "HTTP/1.1 200 OK";
+									if !_starts_with(&resp1, &s_200) {
+										val _ = stream.close(timeout);
+										rest.stop(&caller_handle);
+										val _ = sv.join();
+										return 608;
+									}
+									// Check body contains expected data
+									val m_data = "\"data\":\"XXXX";
+									if !_contains(&resp1, &m_data) {
+										val _ = stream.close(timeout);
+										rest.stop(&caller_handle);
+										val _ = sv.join();
+										return 609;
+									}
+								}
+							}
+
+							// Request 2: small request on same connection
+							val req2 = "GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+							match _write_raw(&stream, &req2, timeout) {
+								core.Result::Err(_) => {
+									val _ = stream.close(timeout);
+									rest.stop(&caller_handle);
+									val _ = sv.join();
+									return 610;
+								},
+								core.Result::Ok(_) => {}
+							}
+							match _read_one_response(&stream, &mut read_buf, timeout) {
+								core.Result::Err(_) => {
+									val _ = stream.close(timeout);
+									rest.stop(&caller_handle);
+									val _ = sv.join();
+									return 611;
+								},
+								core.Result::Ok(resp2) => {
+									val s_200 = "HTTP/1.1 200 OK";
+									if !_starts_with(&resp2, &s_200) {
+										val _ = stream.close(timeout);
+										rest.stop(&caller_handle);
+										val _ = sv.join();
+										return 612;
+									}
+									val m_health = "{\"ok\":true}";
+									if !_contains(&resp2, &m_health) {
+										val _ = stream.close(timeout);
+										rest.stop(&caller_handle);
+										val _ = sv.join();
+										return 613;
+									}
+								}
+							}
+
+							val _ = stream.close(timeout);
+							rest.stop(&caller_handle);
+							match sv.join() {
+								core.Result::Err(_) => { return 614; },
+								core.Result::Ok(exit_code) => {
+									if exit_code != 0 { return 615; }
+								}
+							}
+							return 0;
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// --- Test 7: No-pipelining contract ---
+// This test documents that the server processes requests sequentially on a
+// single connection. It does NOT dispatch multiple requests concurrently.
+// The test is implicit in test 2 (back-to-back): both requests written before
+// any response is read, but responses arrive in order — proving sequential
+// processing. No additional code needed beyond documentation here.
+// See plan.md "No pipelining (MVP)" for the full contract.
+
+fn main() nothrow -> Int {
+	val a = scenario_two_requests_one_connection();
+	if a != 0 { return a; }
+	val b = scenario_back_to_back_requests();
+	if b != 0 { return b; }
+	val c = scenario_connection_close_opt_out();
+	if c != 0 { return c; }
+	val d = scenario_idle_timeout();
+	if d != 0 { return d; }
+	val e = scenario_error_isolation();
+	if e != 0 { return e; }
+	val f = scenario_large_response_keepalive();
+	if f != 0 { return f; }
+	return 0;
+}

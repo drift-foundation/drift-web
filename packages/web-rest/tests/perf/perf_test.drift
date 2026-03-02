@@ -1,0 +1,381 @@
+module web.rest.tests.perf.perf_test
+
+import std.core as core;
+import std.io as io;
+import std.net as net;
+import std.concurrent as conc;
+import std.time as time;
+import std.format as fmt;
+import lang.thread as thread;
+import web.rest as rest;
+import web.rest.app as rest_app;
+
+// Performance benchmarks for the REST server.
+// Separate gate: not included in `just test`, `just rest-check-par`, or
+// `just rest-stress`. Run via `just rest-perf`.
+// Do not run under DRIFT_MEMCHECK or DRIFT_ASAN — instrumentation distorts
+// timing measurements.
+
+// --- Byte/string helpers (duplicated; Drift has no cross-test imports) ---
+
+fn _to_bytes(s: &String) nothrow -> Array<Byte> {
+	var out: Array<Byte> = [];
+	var i = 0;
+	val n = s.byte_length();
+	while i < n {
+		out.push(core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return move out;
+}
+
+fn _bytes_to_string(raw: &Array<Byte>) nothrow -> String {
+	val n = raw.len;
+	if n == 0 {
+		return "";
+	}
+	var b = io.buffer(n);
+	var i = 0;
+	while i < n {
+		io.buffer_write(&mut b, i, raw[i]);
+		i = i + 1;
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&b), n);
+}
+
+fn _starts_with(s: &String, prefix: &String) nothrow -> Bool {
+	val p_len = prefix.byte_length();
+	if s.byte_length() < p_len {
+		return false;
+	}
+	var i = 0;
+	while i < p_len {
+		if core.string_byte_at(s, i) != core.string_byte_at(prefix, i) {
+			return false;
+		}
+		i = i + 1;
+	}
+	return true;
+}
+
+// --- Keep-alive TCP helpers ---
+
+fn _find_header_end(raw: &Array<Byte>) nothrow -> Int {
+	val len = raw.len;
+	if len < 4 {
+		return -1;
+	}
+	var i = 0;
+	val limit = len - 3;
+	while i < limit {
+		if raw[i] == cast<Byte>(13) {
+			if raw[i + 1] == cast<Byte>(10) {
+				if raw[i + 2] == cast<Byte>(13) {
+					if raw[i + 3] == cast<Byte>(10) {
+						return i + 4;
+					}
+				}
+			}
+		}
+		i = i + 1;
+	}
+	return -1;
+}
+
+fn _scan_cl(raw: &Array<Byte>, header_end: Int) nothrow -> Int {
+	val marker = "Content-Length: ";
+	val m_len = marker.byte_length();
+	if header_end < m_len {
+		return -1;
+	}
+	var i = 0;
+	val limit = header_end - m_len;
+	while i < limit {
+		var matched = true;
+		var j = 0;
+		while j < m_len {
+			if raw[i + j] != core.string_byte_at(marker, j) {
+				matched = false;
+				j = m_len;
+			} else {
+				j = j + 1;
+			}
+		}
+		if matched {
+			val val_start = i + m_len;
+			var val_end = val_start;
+			var scanning = true;
+			while scanning {
+				if val_end >= header_end {
+					scanning = false;
+				} else {
+					if raw[val_end] == cast<Byte>(13) {
+						scanning = false;
+					} else {
+						val_end = val_end + 1;
+					}
+				}
+			}
+			var result = 0;
+			var k = val_start;
+			while k < val_end {
+				val d = cast<Int>(raw[k]) - 48;
+				if d < 0 { return -1; }
+				if d > 9 { return -1; }
+				result = result * 10 + d;
+				k = k + 1;
+			}
+			return result;
+		}
+		i = i + 1;
+	}
+	return -1;
+}
+
+fn _write_raw(stream: &net.TcpStream, s: &String, timeout: conc.Duration) nothrow -> core.Result<Void, Int> {
+	val bytes = _to_bytes(s);
+	var wbuf = io.buffer(bytes.len);
+	var i = 0;
+	while i < bytes.len {
+		io.buffer_write(&mut wbuf, i, bytes[i]);
+		i = i + 1;
+	}
+	match stream.write(&wbuf, timeout) {
+		core.Result::Err(_) => { return core.Result::Err(1); },
+		core.Result::Ok(_) => { return core.Result::Ok(core.void_value()); }
+	}
+}
+
+// Read one complete HTTP response from keep-alive connection.
+// Consumes the response from buf; remainder stays for next response.
+fn _read_one_response(stream: &net.TcpStream, buf: &mut Array<Byte>, timeout: conc.Duration) nothrow -> core.Result<Void, Int> {
+	var header_end = -1;
+	var content_length = -1;
+	var done = false;
+
+	while !done {
+		if header_end == -1 {
+			header_end = _find_header_end(buf);
+			if header_end != -1 {
+				content_length = _scan_cl(buf, header_end);
+			}
+		}
+		if header_end != -1 {
+			if content_length <= 0 {
+				done = true;
+			} else {
+				val body_available = buf.len - header_end;
+				if body_available >= content_length {
+					done = true;
+				}
+			}
+		}
+
+		if !done {
+			var rbuf = io.buffer(4096);
+			match stream.read(&mut rbuf, timeout) {
+				core.Result::Err(_) => { return core.Result::Err(1); },
+				core.Result::Ok(n) => {
+					if n == 0 {
+						return core.Result::Err(2);
+					}
+					var j = 0;
+					while j < n {
+						buf.push(io.buffer_read(&mut rbuf, j));
+						j = j + 1;
+					}
+				}
+			}
+		}
+	}
+
+	var total = header_end;
+	if content_length > 0 {
+		total = header_end + content_length;
+	}
+
+	// Remove consumed bytes.
+	if total < buf.len {
+		var new_buf: Array<Byte> = [];
+		var k = total;
+		while k < buf.len {
+			new_buf.push(buf[k]);
+			k = k + 1;
+		}
+		*buf = move new_buf;
+	} else {
+		var empty: Array<Byte> = [];
+		*buf = move empty;
+	}
+
+	return core.Result::Ok(core.void_value());
+}
+
+// --- Server lifecycle ---
+
+fn _run_serve(a: rest.App, listener: net.TcpListener, handle: rest.ServerHandle, timeout: conc.Duration) nothrow -> Int {
+	match rest.serve(move a, move listener, move handle, timeout) {
+		core.Result::Ok(_) => { return 0; },
+		core.Result::Err(_) => { return 1; }
+	}
+}
+
+// --- Benchmark output (called only from main, after all benchmarks complete) ---
+
+fn _print_bench(name: String, iters: Int, total_ms: Int) nothrow -> Void {
+	var avg_ms = 0;
+	if iters > 0 {
+		avg_ms = total_ms / iters;
+	}
+	var req_per_sec = 0;
+	if total_ms > 0 {
+		req_per_sec = (iters * 1000) / total_ms;
+	}
+	val line = "[bench] " + name
+		+ "  iters=" + fmt.format_int(iters)
+		+ "  total_ms=" + fmt.format_int(total_ms)
+		+ "  avg_ms=" + fmt.format_int(avg_ms)
+		+ "  req_per_sec=" + fmt.format_int(req_per_sec);
+	thread.console_writeln(line);
+	return core.void_value();
+}
+
+// --- Handler ---
+
+fn _health_handler(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	return core.Result::Ok(rest.json_response(200, "{\"ok\":true}"));
+}
+
+// --- Benchmarks ---
+// Each benchmark returns Ok(elapsed_ms) on success, Err(error_code) on failure.
+// No I/O inside benchmark functions — caller prints results.
+// All benchmarks use keep-alive: one TCP connection for all requests.
+
+// baseline-health: GET /health, no filters, no guards, tiny JSON response.
+// One keep-alive connection. Warmup 20 requests, then measure 500 requests.
+fn bench_baseline_health() nothrow -> core.Result<Int, Int> {
+	val timeout = conc.Duration(millis = 5000);
+	val warmup_n = 20;
+	val measure_n = 500;
+	val total_n = warmup_n + measure_n;
+
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return core.Result::Err(1); },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+				core.Result::Err(_) => { return core.Result::Err(2); },
+				core.Result::Ok(_) => {}
+			}
+			match rest.listen_app(&app, timeout) {
+				core.Result::Err(_) => { return core.Result::Err(3); },
+				core.Result::Ok(lst) => {
+					var listener = move lst;
+					val port = listener.local_port();
+					var handle = rest.new_server_handle();
+					handle.max_requests = total_n;
+					var caller_handle = rest.clone_handle(&handle);
+					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
+						return _run_serve(move app, move listener, move handle, timeout);
+					});
+
+					// Keep-alive request (no Connection: close)
+					val req = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
+
+					var addr = net.socket_addr("127.0.0.1", port);
+					match net.connect(&addr, timeout) {
+						core.Result::Err(_) => {
+							rest.stop(&caller_handle);
+							val _ = sv.join();
+							return core.Result::Err(4);
+						},
+						core.Result::Ok(conn) => {
+							var stream = move conn;
+							var read_buf: Array<Byte> = [];
+
+							// Warmup
+							var wi = 0;
+							while wi < warmup_n {
+								match _write_raw(&stream, &req, timeout) {
+									core.Result::Err(_) => {
+										val _ = stream.close(timeout);
+										rest.stop(&caller_handle);
+										val _ = sv.join();
+										return core.Result::Err(10);
+									},
+									core.Result::Ok(_) => {}
+								}
+								match _read_one_response(&stream, &mut read_buf, timeout) {
+									core.Result::Err(_) => {
+										val _ = stream.close(timeout);
+										rest.stop(&caller_handle);
+										val _ = sv.join();
+										return core.Result::Err(11);
+									},
+									core.Result::Ok(_) => {}
+								}
+								wi = wi + 1;
+							}
+
+							// Measured run
+							val start = time.now_monotonic();
+							var mi = 0;
+							while mi < measure_n {
+								match _write_raw(&stream, &req, timeout) {
+									core.Result::Err(_) => {
+										val _ = stream.close(timeout);
+										rest.stop(&caller_handle);
+										val _ = sv.join();
+										return core.Result::Err(20);
+									},
+									core.Result::Ok(_) => {}
+								}
+								match _read_one_response(&stream, &mut read_buf, timeout) {
+									core.Result::Err(_) => {
+										val _ = stream.close(timeout);
+										rest.stop(&caller_handle);
+										val _ = sv.join();
+										return core.Result::Err(21);
+									},
+									core.Result::Ok(_) => {}
+								}
+								mi = mi + 1;
+							}
+							val elapsed = time.elapsed_ms(&start);
+
+							val _ = stream.close(timeout);
+							rest.stop(&caller_handle);
+							match sv.join() {
+								core.Result::Err(_) => { return core.Result::Err(30); },
+								core.Result::Ok(exit_code) => {
+									if exit_code != 0 { return core.Result::Err(31); }
+								}
+							}
+
+							return core.Result::Ok(elapsed);
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// --- Main: run all benchmarks, then print all results ---
+
+fn main() nothrow -> Int {
+	// Run benchmarks — collect timing data, no I/O.
+	val r_health = bench_baseline_health();
+
+	// Print results.
+	match r_health {
+		core.Result::Err(code) => { return code; },
+		core.Result::Ok(ms) => {
+			_print_bench("baseline-health", 500, ms);
+		}
+	}
+
+	return 0;
+}

@@ -222,7 +222,7 @@ fn scenario_health_endpoint() nothrow -> Int {
 				core.Result::Err(_) => { return 102; },
 				core.Result::Ok(_) => {}
 			}
-			val raw_req = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
+			val raw_req = "GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
 			match _roundtrip(move app, &raw_req, timeout) {
 				core.Result::Err(_) => { return 103; },
 				core.Result::Ok(resp_str) => {
@@ -275,7 +275,7 @@ fn scenario_jwt_authorized() nothrow -> Int {
 			match jwt.sign_hs256(&header, &payload, &sign_secret, &opts) {
 				core.Result::Err(_) => { return 204; },
 				core.Result::Ok(token) => {
-					val raw_req = "GET /v1/me HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer " + token + "\r\n\r\n";
+					val raw_req = "GET /v1/me HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer " + token + "\r\nConnection: close\r\n\r\n";
 					match _roundtrip(move app, &raw_req, timeout) {
 						core.Result::Err(_) => { return 205; },
 						core.Result::Ok(resp_str) => {
@@ -312,7 +312,7 @@ fn scenario_jwt_unauthorized() nothrow -> Int {
 					}
 				}
 			}
-			val raw_req = "GET /v1/me HTTP/1.1\r\nHost: localhost\r\n\r\n";
+			val raw_req = "GET /v1/me HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
 			match _roundtrip(move app, &raw_req, timeout) {
 				core.Result::Err(_) => { return 304; },
 				core.Result::Ok(resp_str) => {
@@ -340,7 +340,7 @@ fn scenario_not_found() nothrow -> Int {
 				core.Result::Err(_) => { return 402; },
 				core.Result::Ok(_) => {}
 			}
-			val raw_req = "GET /nonexistent HTTP/1.1\r\nHost: localhost\r\n\r\n";
+			val raw_req = "GET /nonexistent HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
 			match _roundtrip(move app, &raw_req, timeout) {
 				core.Result::Err(_) => { return 403; },
 				core.Result::Ok(resp_str) => {
@@ -408,7 +408,7 @@ fn scenario_query_string_routing() nothrow -> Int {
 				core.Result::Err(_) => { return 602; },
 				core.Result::Ok(_) => {}
 			}
-			val raw_req = "GET /search?q=hello HTTP/1.1\r\nHost: localhost\r\n\r\n";
+			val raw_req = "GET /search?q=hello HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
 			match _roundtrip(move app, &raw_req, timeout) {
 				core.Result::Err(_) => { return 603; },
 				core.Result::Ok(resp_str) => {

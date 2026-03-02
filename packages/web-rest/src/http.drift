@@ -6,16 +6,25 @@ import std.net as net;
 import std.concurrent as conc;
 import std.format as fmt;
 import std.parse as parse;
+import std.mem as mem;
 import web.rest.errors as errors;
 import web.rest.request as request;
 import web.rest.response as response;
 
 export {
+	ParsedRequest,
 	parse_request,
 	serialize_response,
 	read_request_bytes,
+	read_one_request,
 	write_response
 };
+
+pub struct ParsedRequest {
+	pub req: request.Request,
+	pub consumed: Int,
+	pub conn_close: Bool
+}
 
 const MAX_HEADER_SIZE: Int = 8192;
 
@@ -224,7 +233,9 @@ fn _parse_query_string(qs: &String, req: &mut request.Request) nothrow -> Void {
 
 // --- Parse ---
 
-pub fn parse_request(raw: &Array<Byte>) nothrow -> core.Result<request.Request, errors.RestError> {
+// Internal: parse one HTTP request from raw bytes, reporting consumed count
+// and whether the client sent Connection: close.
+fn _parse_request_full(raw: &Array<Byte>) nothrow -> core.Result<ParsedRequest, errors.RestError> {
 	val header_end = _find_header_end(raw);
 	if header_end == -1 {
 		return core.Result::Err(errors.rest_error(400, "request-invalid", "malformed-http", "missing header terminator"));
@@ -273,6 +284,7 @@ pub fn parse_request(raw: &Array<Byte>) nothrow -> core.Result<request.Request, 
 	var hdr_pos = first_line_end + 2;
 	val hdr_limit = header_end - 2;
 	var content_length = -1;
+	var conn_close = false;
 
 	while hdr_pos < hdr_limit {
 		val line_end = _find_crlf(raw, hdr_pos, header_end);
@@ -297,6 +309,14 @@ pub fn parse_request(raw: &Array<Byte>) nothrow -> core.Result<request.Request, 
 								core.Result::Err(_) => {}
 							}
 						}
+
+						val conn_key = "connection";
+						if _ascii_eq_lower(raw, hdr_pos, colon, &conn_key) {
+							val close_val = "close";
+							if _ascii_eq_lower(raw, value_start, line_end, &close_val) {
+								conn_close = true;
+							}
+						}
 					}
 				}
 				hdr_pos = line_end + 2;
@@ -304,6 +324,7 @@ pub fn parse_request(raw: &Array<Byte>) nothrow -> core.Result<request.Request, 
 		}
 	}
 
+	var consumed = header_end;
 	if content_length > 0 {
 		val body_start = header_end;
 		val body_end = body_start + content_length;
@@ -312,9 +333,24 @@ pub fn parse_request(raw: &Array<Byte>) nothrow -> core.Result<request.Request, 
 			return core.Result::Err(errors.rest_error(400, "request-invalid", "incomplete-body", "request body is shorter than Content-Length"));
 		}
 		req.body = _bytes_to_string(raw, body_start, body_end);
+		consumed = body_end;
 	}
 
-	return core.Result::Ok(move req);
+	return core.Result::Ok(ParsedRequest(req = move req, consumed = consumed, conn_close = conn_close));
+}
+
+// Public backward-compatible wrapper: parse one request, ignore consumed count.
+pub fn parse_request(raw: &Array<Byte>) nothrow -> core.Result<request.Request, errors.RestError> {
+	match _parse_request_full(raw) {
+		core.Result::Ok(parsed) => {
+			var p = move parsed;
+			val req = mem.replace(&mut p.req, request.new_request("", ""));
+			return core.Result::Ok(move req);
+		},
+		core.Result::Err(e) => {
+			return core.Result::Err(move e);
+		}
+	}
 }
 
 // --- Serialize ---
@@ -332,11 +368,15 @@ fn _reason_phrase(status: Int) nothrow -> String {
 	return "Unknown";
 }
 
-pub fn serialize_response(resp: &response.Response) nothrow -> Array<Byte> {
+pub fn serialize_response(resp: &response.Response, conn_close: Bool) nothrow -> Array<Byte> {
 	val status_str = fmt.format_int(resp.status);
 	val reason = _reason_phrase(resp.status);
 	val body_len_str = fmt.format_int(resp.body.byte_length());
-	var line = "HTTP/1.1 " + status_str + " " + reason + "\r\nContent-Type: application/json\r\nContent-Length: " + body_len_str + "\r\nConnection: close\r\n\r\n" + resp.body;
+	var conn_hdr = "keep-alive";
+	if conn_close {
+		conn_hdr = "close";
+	}
+	var line = "HTTP/1.1 " + status_str + " " + reason + "\r\nContent-Type: application/json\r\nContent-Length: " + body_len_str + "\r\nConnection: " + conn_hdr + "\r\n\r\n" + resp.body;
 	return _string_to_bytes(&line);
 }
 
@@ -418,6 +458,118 @@ pub fn read_request_bytes(stream: &net.TcpStream, timeout: conc.Duration) nothro
 	return core.Result::Ok(move collected);
 }
 
+// Buffered reader: reads one complete HTTP request from stream, using
+// conn_buf as the per-connection remainder buffer. On success, consumed
+// bytes are removed from conn_buf (remainder stays for next request).
+// Returns ParsedRequest with the parsed request, consumed count, and
+// Connection: close flag.
+pub fn read_one_request(stream: &net.TcpStream, conn_buf: &mut Array<Byte>, timeout: conc.Duration) nothrow -> core.Result<ParsedRequest, errors.RestError> {
+	// Phase 1: accumulate bytes until we have complete headers + body.
+	var header_end_pos = _find_header_end(conn_buf);
+	var content_length = -1;
+	if header_end_pos != -1 {
+		if header_end_pos > MAX_HEADER_SIZE {
+			return core.Result::Err(errors.rest_error(400, "request-invalid", "header-too-large", "request header exceeds 8192 bytes"));
+		}
+		content_length = _scan_content_length(conn_buf, header_end_pos);
+	}
+
+	var have_full_request = false;
+	if header_end_pos != -1 {
+		if content_length <= 0 {
+			have_full_request = true;
+		} else {
+			val body_available = conn_buf.len - header_end_pos;
+			if body_available >= content_length {
+				have_full_request = true;
+			}
+		}
+	}
+
+	while !have_full_request {
+		if conn_buf.len >= MAX_HEADER_SIZE {
+			if header_end_pos == -1 {
+				return core.Result::Err(errors.rest_error(400, "request-invalid", "header-too-large", "request header exceeds 8192 bytes"));
+			}
+		}
+		var buf = io.buffer(4096);
+		match stream.read(&mut buf, timeout) {
+			core.Result::Err(_) => {
+				if conn_buf.len == 0 {
+					return core.Result::Err(errors.rest_error(400, "request-invalid", "read-failed", "failed to read from connection"));
+				}
+				if header_end_pos != -1 {
+					// Headers complete but body incomplete — read error during body.
+					return core.Result::Err(errors.rest_error(400, "request-invalid", "incomplete-body", "connection error before full body received"));
+				}
+				return core.Result::Err(errors.rest_error(400, "request-invalid", "read-failed", "connection error during request read"));
+			},
+			core.Result::Ok(n) => {
+				if n == 0 {
+					if conn_buf.len == 0 {
+						return core.Result::Err(errors.rest_error(400, "request-invalid", "empty-request", "no data received"));
+					}
+					if header_end_pos != -1 {
+						// Headers complete but body incomplete — client closed early.
+						return core.Result::Err(errors.rest_error(400, "request-invalid", "incomplete-body", "connection closed before full body received"));
+					}
+					// No complete headers yet.
+					return core.Result::Err(errors.rest_error(400, "request-invalid", "incomplete-body", "connection closed before complete request"));
+				}
+				var j = 0;
+				while j < n {
+					conn_buf.push(io.buffer_read(&mut buf, j));
+					j = j + 1;
+				}
+				if header_end_pos == -1 {
+					header_end_pos = _find_header_end(conn_buf);
+					if header_end_pos != -1 {
+						if header_end_pos > MAX_HEADER_SIZE {
+							return core.Result::Err(errors.rest_error(400, "request-invalid", "header-too-large", "request header exceeds 8192 bytes"));
+						}
+						content_length = _scan_content_length(conn_buf, header_end_pos);
+					}
+				}
+				if header_end_pos != -1 {
+					if content_length <= 0 {
+						have_full_request = true;
+					} else {
+						val body_available = conn_buf.len - header_end_pos;
+						if body_available >= content_length {
+							have_full_request = true;
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Phase 2: parse the complete request from conn_buf.
+	match _parse_request_full(conn_buf) {
+		core.Result::Err(e) => {
+			return core.Result::Err(move e);
+		},
+		core.Result::Ok(parsed) => {
+			// Phase 3: remove consumed bytes, retain remainder.
+			val consumed = parsed.consumed;
+			val remaining = conn_buf.len - consumed;
+			if remaining > 0 {
+				var new_buf: Array<Byte> = [];
+				var k = 0;
+				while k < remaining {
+					new_buf.push(conn_buf[consumed + k]);
+					k = k + 1;
+				}
+				*conn_buf = move new_buf;
+			} else {
+				var empty: Array<Byte> = [];
+				*conn_buf = move empty;
+			}
+			return core.Result::Ok(move parsed);
+		}
+	}
+}
+
 fn _scan_content_length(raw: &Array<Byte>, header_end: Int) nothrow -> Int {
 	val cl_key = "content-length";
 	var pos = 0;
@@ -444,21 +596,29 @@ fn _scan_content_length(raw: &Array<Byte>, header_end: Int) nothrow -> Int {
 	return -1;
 }
 
-pub fn write_response(stream: &net.TcpStream, resp: &response.Response, timeout: conc.Duration) nothrow -> core.Result<Void, errors.RestError> {
-	val bytes = serialize_response(resp);
+pub fn write_response(stream: &net.TcpStream, resp: &response.Response, conn_close: Bool, timeout: conc.Duration) nothrow -> core.Result<Void, errors.RestError> {
+	val bytes = serialize_response(resp, conn_close);
 	val total = bytes.len;
-	var buf = io.buffer(total);
-	var i = 0;
-	while i < total {
-		io.buffer_write(&mut buf, i, bytes[i]);
-		i = i + 1;
-	}
-	match stream.write(&buf, timeout) {
-		core.Result::Err(_) => {
-			return core.Result::Err(errors.rest_error(500, "internal", "write-failed", "failed to write response"));
-		},
-		core.Result::Ok(_) => {
-			return core.Result::Ok(core.void_value());
+	var written = 0;
+	while written < total {
+		val remaining = total - written;
+		var buf = io.buffer(remaining);
+		var i = 0;
+		while i < remaining {
+			io.buffer_write(&mut buf, i, bytes[written + i]);
+			i = i + 1;
+		}
+		match stream.write(&buf, timeout) {
+			core.Result::Err(_) => {
+				return core.Result::Err(errors.rest_error(500, "internal", "write-failed", "failed to write response"));
+			},
+			core.Result::Ok(n) => {
+				if n <= 0 {
+					return core.Result::Err(errors.rest_error(500, "internal", "write-failed", "zero-length write"));
+				}
+				written = written + n;
+			}
 		}
 	}
+	return core.Result::Ok(core.void_value());
 }

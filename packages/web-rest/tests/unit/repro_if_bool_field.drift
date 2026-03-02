@@ -1,0 +1,73 @@
+module web.rest.tests.unit.repro_if_bool_field
+
+import std.core as core;
+
+// Minimal reproducer: Bool in `if` condition — compiler defect.
+//
+// DEFECT: `val f = p.flag; if f { ... }` fails with "if condition must be Bool"
+//         when `f` IS Bool (copied from a struct field on a mut var).
+//
+// WORKS:  `if f == true { ... }` — identical semantics, compiles fine.
+// WORKS:  `if p.flag { ... }` where p is a ref parameter — ref field access OK.
+// WORKS:  `if flag { ... }` where flag is a function parameter of type Bool.
+// FAILS:  `val f = p.flag; if f { ... }` where p is a mut var (moved-into).
+//
+// Root cause: compiler does not recognize a val bound from a mut-var struct
+// field as having type Bool for the purpose of if-condition type checking.
+
+pub struct Parsed {
+	pub value: Int,
+	pub flag: Bool
+}
+
+// COMPILES: ref field access in if.
+fn _test_ref_field(p: &Parsed) nothrow -> Int {
+	if p.flag {
+		return 1;
+	}
+	return 0;
+}
+
+// COMPILES: function parameter Bool in if.
+fn _test_param(flag: Bool) nothrow -> Int {
+	if flag {
+		return 1;
+	}
+	return 0;
+}
+
+// FAILS: val from mut-var struct field in if.
+// Uncomment to see: error: if condition must be Bool
+//fn _test_val_from_mut(parsed: Parsed) nothrow -> Int {
+//	var p = move parsed;
+//	val f = p.flag;
+//	if f {
+//		return 1;
+//	}
+//	return 0;
+//}
+
+// WORKAROUND: use == true.
+fn _test_val_from_mut_workaround(parsed: Parsed) nothrow -> Int {
+	var p = move parsed;
+	val f = p.flag == true;
+	if f == true {
+		return 1;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	val p1 = Parsed(value = 42, flag = true);
+	val a = _test_ref_field(&p1);
+	if a != 1 { return 101; }
+
+	val b = _test_param(true);
+	if b != 1 { return 201; }
+
+	val p3 = Parsed(value = 42, flag = true);
+	val c = _test_val_from_mut_workaround(move p3);
+	if c != 1 { return 301; }
+
+	return 0;
+}

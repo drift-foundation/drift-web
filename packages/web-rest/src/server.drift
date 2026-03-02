@@ -6,6 +6,7 @@ import std.net as net;
 import std.concurrent as conc;
 import std.sync as sync;
 import std.format as fmt;
+import std.mem as mem;
 import web.rest.errors as errors;
 import web.rest.response as response;
 import web.rest.context as context;
@@ -24,15 +25,16 @@ export {
 
 pub struct ServerHandle {
 	pub stopped: conc.Arc<sync.AtomicBool>,
-	pub max_requests: Int
+	pub max_requests: Int,
+	pub idle_timeout_ms: Int
 }
 
 pub fn new_server_handle() nothrow -> ServerHandle {
-	return ServerHandle(stopped = conc.arc(sync.atomic_bool(false)), max_requests = 0);
+	return ServerHandle(stopped = conc.arc(sync.atomic_bool(false)), max_requests = 0, idle_timeout_ms = 5000);
 }
 
 pub fn clone_handle(handle: &ServerHandle) nothrow -> ServerHandle {
-	return ServerHandle(stopped = handle.stopped.clone(), max_requests = handle.max_requests);
+	return ServerHandle(stopped = handle.stopped.clone(), max_requests = handle.max_requests, idle_timeout_ms = handle.idle_timeout_ms);
 }
 
 pub fn stop(handle: &ServerHandle) nothrow -> Void {
@@ -77,10 +79,9 @@ pub fn serve(a: app.App, listener: net.TcpListener, handle: ServerHandle, timeou
 			match listener.accept(accept_timeout) {
 				core.Result::Ok(stream) => {
 					var s = move stream;
-					event_counter = event_counter + 1;
-					val eid = "evt-" + fmt.format_int(event_counter);
-					val _ = _handle_connection(&a, move s, timeout, &eid);
-					requests_served = requests_served + 1;
+					val served = _handle_connection(&a, &mut s, timeout, &handle, &mut event_counter);
+					requests_served = requests_served + served;
+					val _ = s.close(timeout);
 				},
 				core.Result::Err(_) => {}
 			}
@@ -89,40 +90,102 @@ pub fn serve(a: app.App, listener: net.TcpListener, handle: ServerHandle, timeou
 	return core.Result::Ok(core.void_value());
 }
 
-fn _handle_connection(a: &app.App, var stream: net.TcpStream, timeout: conc.Duration, event_id: &String) nothrow -> Int {
-	match http.read_request_bytes(&stream, timeout) {
-		core.Result::Err(read_err) => {
-			val err_resp = response.error_envelope(&read_err, event_id);
-			val _ = http.write_response(&stream, &err_resp, timeout);
-			val _ = stream.close(timeout);
-			return 1;
+// Dispatch one request and write the response. Returns:
+//   0 = success, keep connection open
+//   1 = success, close connection (client sent Connection: close)
+//   2 = write error, close connection
+fn _dispatch_and_write(a: &app.App, stream: &mut net.TcpStream, parsed: http.ParsedRequest, timeout: conc.Duration, event_id: &String) nothrow -> Int {
+	var p = move parsed;
+	val conn_close = p.conn_close == true;
+	var mut_req = mem.replace(&mut p.req, request.new_request("", ""));
+
+	var resp_to_write = response.json_response(500, "");
+	var have_resp = false;
+
+	var ctx = context.new_context();
+	match app.dispatch(a, &mut mut_req, &mut ctx) {
+		core.Result::Ok(resp) => {
+			resp_to_write = move resp;
+			have_resp = true;
 		},
-		core.Result::Ok(raw) => {
-			match http.parse_request(&raw) {
-				core.Result::Err(parse_err) => {
-					val err_resp = response.error_envelope(&parse_err, event_id);
-					val _ = http.write_response(&stream, &err_resp, timeout);
-					val _ = stream.close(timeout);
-					return 2;
-				},
-				core.Result::Ok(req) => {
-					var mut_req = move req;
-					var ctx = context.new_context();
-					match app.dispatch(a, &mut mut_req, &mut ctx) {
-						core.Result::Ok(resp) => {
-							val _ = http.write_response(&stream, &resp, timeout);
-							val _ = stream.close(timeout);
-							return 0;
-						},
-						core.Result::Err(dispatch_err) => {
-							val err_resp = response.error_envelope(&dispatch_err, event_id);
-							val _ = http.write_response(&stream, &err_resp, timeout);
-							val _ = stream.close(timeout);
-							return 3;
+		core.Result::Err(dispatch_err) => {
+			resp_to_write = response.error_envelope(&dispatch_err, event_id);
+			have_resp = true;
+		}
+	}
+
+	if !have_resp {
+		return 2;
+	}
+
+	match http.write_response(stream, &resp_to_write, conn_close, timeout) {
+		core.Result::Err(_) => { return 2; },
+		core.Result::Ok(_) => {}
+	}
+	if conn_close == true {
+		return 1;
+	}
+	return 0;
+}
+
+// Per-connection loop: read requests, dispatch, write responses.
+// Returns total number of requests served on this connection.
+// On any read/parse error, discards buffer and closes (error recovery policy).
+// After the first request, uses idle_timeout for reads. If the idle timeout
+// fires on an empty buffer (no partial data), close silently — not an error.
+fn _handle_connection(a: &app.App, stream: &mut net.TcpStream, timeout: conc.Duration, handle: &ServerHandle, event_counter: &mut Int) nothrow -> Int {
+	var conn_buf: Array<Byte> = [];
+	var served = 0;
+	var keep_going = true;
+	val idle_timeout = conc.Duration(millis = handle.idle_timeout_ms);
+
+	while keep_going {
+		if _is_stopped(handle) {
+			keep_going = false;
+		}
+
+		if keep_going {
+			*event_counter = *event_counter + 1;
+			val eid = "evt-" + fmt.format_int(*event_counter);
+
+			// First request uses full timeout; subsequent use idle timeout.
+			var read_timeout = timeout;
+			if served > 0 {
+				read_timeout = idle_timeout;
+			}
+
+			match http.read_one_request(stream, &mut conn_buf, read_timeout) {
+				core.Result::Err(read_err) => {
+					// If idle timeout fired on an empty buffer, close silently.
+					if served > 0 {
+						if conn_buf.len == 0 {
+							keep_going = false;
+						} else {
+							// Partial data arrived then error — write error response.
+							val err_resp = response.error_envelope(&read_err, &eid);
+							val _ = http.write_response(stream, &err_resp, true, timeout);
+							keep_going = false;
 						}
+					} else {
+						// First request error — always write error response.
+						val err_resp = response.error_envelope(&read_err, &eid);
+						val _ = http.write_response(stream, &err_resp, true, timeout);
+						keep_going = false;
+					}
+				},
+				core.Result::Ok(parsed) => {
+					val result = _dispatch_and_write(a, stream, move parsed, timeout, &eid);
+					if result == 0 {
+						served = served + 1;
+					} else {
+						if result == 1 {
+							served = served + 1;
+						}
+						keep_going = false;
 					}
 				}
 			}
 		}
 	}
+	return served;
 }
