@@ -7,6 +7,7 @@ import std.concurrent as conc;
 import std.format as fmt;
 import web.rest as rest;
 import web.rest.app as rest_app;
+import web.rest.server as server;
 
 // Keep-alive unit tests for HTTP/1.1 persistent connections.
 // All tests use real TCP loopback to exercise the full server path.
@@ -82,8 +83,8 @@ fn _contains(haystack: &String, needle: &String) nothrow -> Bool {
 
 // --- Server lifecycle ---
 
-fn _run_serve(a: rest.App, listener: net.TcpListener, handle: rest.ServerHandle, timeout: conc.Duration) nothrow -> Int {
-	match rest.serve(move a, move listener, move handle, timeout) {
+fn _run_serve(a: rest.App, listener: net.TcpListener, handle: server.ServerHandle, timeout: conc.Duration) nothrow -> Int {
+	match server.serve(move a, move listener, move handle, timeout) {
 		core.Result::Ok(_) => { return 0; },
 		core.Result::Err(_) => { return 1; }
 	}
@@ -333,14 +334,14 @@ fn scenario_two_requests_one_connection() nothrow -> Int {
 				core.Result::Err(_) => { return 102; },
 				core.Result::Ok(_) => {}
 			}
-			match rest.listen_app(&app, timeout) {
+			match server.listen_app(&app, timeout) {
 				core.Result::Err(_) => { return 103; },
 				core.Result::Ok(lst) => {
 					var listener = move lst;
 					val port = listener.local_port();
-					var handle = rest.new_server_handle();
+					var handle = server.new_server_handle();
 					handle.max_requests = 2;
-					var caller_handle = rest.clone_handle(&handle);
+					var caller_handle = server.clone_handle(&handle);
 					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
 						return _run_serve(move app, move listener, move handle, timeout);
 					});
@@ -349,7 +350,7 @@ fn scenario_two_requests_one_connection() nothrow -> Int {
 					var addr = net.socket_addr("127.0.0.1", port);
 					match net.connect(&addr, timeout) {
 						core.Result::Err(_) => {
-							rest.stop(&caller_handle);
+							server.stop(&caller_handle);
 							val _ = sv.join();
 							return 104;
 						},
@@ -362,7 +363,7 @@ fn scenario_two_requests_one_connection() nothrow -> Int {
 							match _write_raw(&stream, &req1, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									rest.stop(&caller_handle);
+									server.stop(&caller_handle);
 									val _ = sv.join();
 									return 105;
 								},
@@ -371,7 +372,7 @@ fn scenario_two_requests_one_connection() nothrow -> Int {
 							match _read_one_response(&stream, &mut read_buf, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									rest.stop(&caller_handle);
+									server.stop(&caller_handle);
 									val _ = sv.join();
 									return 106;
 								},
@@ -379,21 +380,21 @@ fn scenario_two_requests_one_connection() nothrow -> Int {
 									val s_200 = "HTTP/1.1 200 OK";
 									if !_starts_with(&resp1, &s_200) {
 										val _ = stream.close(timeout);
-										rest.stop(&caller_handle);
+										server.stop(&caller_handle);
 										val _ = sv.join();
 										return 107;
 									}
 									val m_health = "{\"ok\":true}";
 									if !_contains(&resp1, &m_health) {
 										val _ = stream.close(timeout);
-										rest.stop(&caller_handle);
+										server.stop(&caller_handle);
 										val _ = sv.join();
 										return 108;
 									}
 									val m_keepalive = "Connection: keep-alive";
 									if !_contains(&resp1, &m_keepalive) {
 										val _ = stream.close(timeout);
-										rest.stop(&caller_handle);
+										server.stop(&caller_handle);
 										val _ = sv.join();
 										return 109;
 									}
@@ -405,7 +406,7 @@ fn scenario_two_requests_one_connection() nothrow -> Int {
 							match _write_raw(&stream, &req2, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									rest.stop(&caller_handle);
+									server.stop(&caller_handle);
 									val _ = sv.join();
 									return 110;
 								},
@@ -414,7 +415,7 @@ fn scenario_two_requests_one_connection() nothrow -> Int {
 							match _read_one_response(&stream, &mut read_buf, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									rest.stop(&caller_handle);
+									server.stop(&caller_handle);
 									val _ = sv.join();
 									return 111;
 								},
@@ -422,21 +423,21 @@ fn scenario_two_requests_one_connection() nothrow -> Int {
 									val s_200 = "HTTP/1.1 200 OK";
 									if !_starts_with(&resp2, &s_200) {
 										val _ = stream.close(timeout);
-										rest.stop(&caller_handle);
+										server.stop(&caller_handle);
 										val _ = sv.join();
 										return 112;
 									}
 									val m_health = "{\"ok\":true}";
 									if !_contains(&resp2, &m_health) {
 										val _ = stream.close(timeout);
-										rest.stop(&caller_handle);
+										server.stop(&caller_handle);
 										val _ = sv.join();
 										return 113;
 									}
 									val m_close = "Connection: close";
 									if !_contains(&resp2, &m_close) {
 										val _ = stream.close(timeout);
-										rest.stop(&caller_handle);
+										server.stop(&caller_handle);
 										val _ = sv.join();
 										return 114;
 									}
@@ -444,7 +445,7 @@ fn scenario_two_requests_one_connection() nothrow -> Int {
 							}
 
 							val _ = stream.close(timeout);
-							rest.stop(&caller_handle);
+							server.stop(&caller_handle);
 							match sv.join() {
 								core.Result::Err(_) => { return 115; },
 								core.Result::Ok(exit_code) => {
@@ -477,14 +478,14 @@ fn scenario_back_to_back_requests() nothrow -> Int {
 				core.Result::Err(_) => { return 202; },
 				core.Result::Ok(_) => {}
 			}
-			match rest.listen_app(&app, timeout) {
+			match server.listen_app(&app, timeout) {
 				core.Result::Err(_) => { return 203; },
 				core.Result::Ok(lst) => {
 					var listener = move lst;
 					val port = listener.local_port();
-					var handle = rest.new_server_handle();
+					var handle = server.new_server_handle();
 					handle.max_requests = 2;
-					var caller_handle = rest.clone_handle(&handle);
+					var caller_handle = server.clone_handle(&handle);
 					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
 						return _run_serve(move app, move listener, move handle, timeout);
 					});
@@ -492,7 +493,7 @@ fn scenario_back_to_back_requests() nothrow -> Int {
 					var addr = net.socket_addr("127.0.0.1", port);
 					match net.connect(&addr, timeout) {
 						core.Result::Err(_) => {
-							rest.stop(&caller_handle);
+							server.stop(&caller_handle);
 							val _ = sv.join();
 							return 204;
 						},
@@ -505,7 +506,7 @@ fn scenario_back_to_back_requests() nothrow -> Int {
 							match _write_raw(&stream, &both, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									rest.stop(&caller_handle);
+									server.stop(&caller_handle);
 									val _ = sv.join();
 									return 205;
 								},
@@ -516,7 +517,7 @@ fn scenario_back_to_back_requests() nothrow -> Int {
 							match _read_one_response(&stream, &mut read_buf, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									rest.stop(&caller_handle);
+									server.stop(&caller_handle);
 									val _ = sv.join();
 									return 206;
 								},
@@ -524,7 +525,7 @@ fn scenario_back_to_back_requests() nothrow -> Int {
 									val s_200 = "HTTP/1.1 200 OK";
 									if !_starts_with(&resp1, &s_200) {
 										val _ = stream.close(timeout);
-										rest.stop(&caller_handle);
+										server.stop(&caller_handle);
 										val _ = sv.join();
 										return 207;
 									}
@@ -535,7 +536,7 @@ fn scenario_back_to_back_requests() nothrow -> Int {
 							match _read_one_response(&stream, &mut read_buf, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									rest.stop(&caller_handle);
+									server.stop(&caller_handle);
 									val _ = sv.join();
 									return 208;
 								},
@@ -543,7 +544,7 @@ fn scenario_back_to_back_requests() nothrow -> Int {
 									val s_200 = "HTTP/1.1 200 OK";
 									if !_starts_with(&resp2, &s_200) {
 										val _ = stream.close(timeout);
-										rest.stop(&caller_handle);
+										server.stop(&caller_handle);
 										val _ = sv.join();
 										return 209;
 									}
@@ -551,7 +552,7 @@ fn scenario_back_to_back_requests() nothrow -> Int {
 							}
 
 							val _ = stream.close(timeout);
-							rest.stop(&caller_handle);
+							server.stop(&caller_handle);
 							match sv.join() {
 								core.Result::Err(_) => { return 210; },
 								core.Result::Ok(exit_code) => {
@@ -584,14 +585,14 @@ fn scenario_connection_close_opt_out() nothrow -> Int {
 				core.Result::Err(_) => { return 302; },
 				core.Result::Ok(_) => {}
 			}
-			match rest.listen_app(&app, timeout) {
+			match server.listen_app(&app, timeout) {
 				core.Result::Err(_) => { return 303; },
 				core.Result::Ok(lst) => {
 					var listener = move lst;
 					val port = listener.local_port();
-					var handle = rest.new_server_handle();
+					var handle = server.new_server_handle();
 					handle.max_requests = 2;
-					var caller_handle = rest.clone_handle(&handle);
+					var caller_handle = server.clone_handle(&handle);
 					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
 						return _run_serve(move app, move listener, move handle, timeout);
 					});
@@ -599,7 +600,7 @@ fn scenario_connection_close_opt_out() nothrow -> Int {
 					var addr = net.socket_addr("127.0.0.1", port);
 					match net.connect(&addr, timeout) {
 						core.Result::Err(_) => {
-							rest.stop(&caller_handle);
+							server.stop(&caller_handle);
 							val _ = sv.join();
 							return 304;
 						},
@@ -612,7 +613,7 @@ fn scenario_connection_close_opt_out() nothrow -> Int {
 							match _write_raw(&stream, &req, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									rest.stop(&caller_handle);
+									server.stop(&caller_handle);
 									val _ = sv.join();
 									return 305;
 								},
@@ -621,7 +622,7 @@ fn scenario_connection_close_opt_out() nothrow -> Int {
 							match _read_one_response(&stream, &mut read_buf, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									rest.stop(&caller_handle);
+									server.stop(&caller_handle);
 									val _ = sv.join();
 									return 306;
 								},
@@ -629,7 +630,7 @@ fn scenario_connection_close_opt_out() nothrow -> Int {
 									val s_200 = "HTTP/1.1 200 OK";
 									if !_starts_with(&resp, &s_200) {
 										val _ = stream.close(timeout);
-										rest.stop(&caller_handle);
+										server.stop(&caller_handle);
 										val _ = sv.join();
 										return 307;
 									}
@@ -637,7 +638,7 @@ fn scenario_connection_close_opt_out() nothrow -> Int {
 									val m_close = "Connection: close";
 									if !_contains(&resp, &m_close) {
 										val _ = stream.close(timeout);
-										rest.stop(&caller_handle);
+										server.stop(&caller_handle);
 										val _ = sv.join();
 										return 308;
 									}
@@ -653,7 +654,7 @@ fn scenario_connection_close_opt_out() nothrow -> Int {
 								core.Result::Ok(n) => {
 									if n != 0 {
 										val _ = stream.close(timeout);
-										rest.stop(&caller_handle);
+										server.stop(&caller_handle);
 										val _ = sv.join();
 										return 309;
 									}
@@ -661,7 +662,7 @@ fn scenario_connection_close_opt_out() nothrow -> Int {
 							}
 
 							val _ = stream.close(timeout);
-							rest.stop(&caller_handle);
+							server.stop(&caller_handle);
 							match sv.join() {
 								core.Result::Err(_) => { return 310; },
 								core.Result::Ok(exit_code) => {
@@ -695,15 +696,15 @@ fn scenario_idle_timeout() nothrow -> Int {
 				core.Result::Err(_) => { return 402; },
 				core.Result::Ok(_) => {}
 			}
-			match rest.listen_app(&app, timeout) {
+			match server.listen_app(&app, timeout) {
 				core.Result::Err(_) => { return 403; },
 				core.Result::Ok(lst) => {
 					var listener = move lst;
 					val port = listener.local_port();
-					var handle = rest.new_server_handle();
+					var handle = server.new_server_handle();
 					handle.max_requests = 10;
 					handle.idle_timeout_ms = 200;
-					var caller_handle = rest.clone_handle(&handle);
+					var caller_handle = server.clone_handle(&handle);
 					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
 						return _run_serve(move app, move listener, move handle, timeout);
 					});
@@ -711,7 +712,7 @@ fn scenario_idle_timeout() nothrow -> Int {
 					var addr = net.socket_addr("127.0.0.1", port);
 					match net.connect(&addr, timeout) {
 						core.Result::Err(_) => {
-							rest.stop(&caller_handle);
+							server.stop(&caller_handle);
 							val _ = sv.join();
 							return 404;
 						},
@@ -724,7 +725,7 @@ fn scenario_idle_timeout() nothrow -> Int {
 							match _write_raw(&stream, &req, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									rest.stop(&caller_handle);
+									server.stop(&caller_handle);
 									val _ = sv.join();
 									return 405;
 								},
@@ -733,7 +734,7 @@ fn scenario_idle_timeout() nothrow -> Int {
 							match _read_one_response(&stream, &mut read_buf, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									rest.stop(&caller_handle);
+									server.stop(&caller_handle);
 									val _ = sv.join();
 									return 406;
 								},
@@ -741,7 +742,7 @@ fn scenario_idle_timeout() nothrow -> Int {
 									val s_200 = "HTTP/1.1 200 OK";
 									if !_starts_with(&resp, &s_200) {
 										val _ = stream.close(timeout);
-										rest.stop(&caller_handle);
+										server.stop(&caller_handle);
 										val _ = sv.join();
 										return 407;
 									}
@@ -760,7 +761,7 @@ fn scenario_idle_timeout() nothrow -> Int {
 									if n != 0 {
 										// Server sent something unexpected.
 										val _ = stream.close(timeout);
-										rest.stop(&caller_handle);
+										server.stop(&caller_handle);
 										val _ = sv.join();
 										return 408;
 									}
@@ -769,7 +770,7 @@ fn scenario_idle_timeout() nothrow -> Int {
 							}
 
 							val _ = stream.close(timeout);
-							rest.stop(&caller_handle);
+							server.stop(&caller_handle);
 							match sv.join() {
 								core.Result::Err(_) => { return 409; },
 								core.Result::Ok(exit_code) => {
@@ -803,14 +804,14 @@ fn scenario_error_isolation() nothrow -> Int {
 				core.Result::Err(_) => { return 502; },
 				core.Result::Ok(_) => {}
 			}
-			match rest.listen_app(&app, timeout) {
+			match server.listen_app(&app, timeout) {
 				core.Result::Err(_) => { return 503; },
 				core.Result::Ok(lst) => {
 					var listener = move lst;
 					val port = listener.local_port();
-					var handle = rest.new_server_handle();
+					var handle = server.new_server_handle();
 					handle.max_requests = 3;
-					var caller_handle = rest.clone_handle(&handle);
+					var caller_handle = server.clone_handle(&handle);
 					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
 						return _run_serve(move app, move listener, move handle, timeout);
 					});
@@ -819,7 +820,7 @@ fn scenario_error_isolation() nothrow -> Int {
 					var addr = net.socket_addr("127.0.0.1", port);
 					match net.connect(&addr, timeout) {
 						core.Result::Err(_) => {
-							rest.stop(&caller_handle);
+							server.stop(&caller_handle);
 							val _ = sv.join();
 							return 504;
 						},
@@ -832,7 +833,7 @@ fn scenario_error_isolation() nothrow -> Int {
 							match _write_raw(&s1, &req1, timeout) {
 								core.Result::Err(_) => {
 									val _ = s1.close(timeout);
-									rest.stop(&caller_handle);
+									server.stop(&caller_handle);
 									val _ = sv.join();
 									return 505;
 								},
@@ -841,7 +842,7 @@ fn scenario_error_isolation() nothrow -> Int {
 							match _read_one_response(&s1, &mut rb1, timeout) {
 								core.Result::Err(_) => {
 									val _ = s1.close(timeout);
-									rest.stop(&caller_handle);
+									server.stop(&caller_handle);
 									val _ = sv.join();
 									return 506;
 								},
@@ -849,7 +850,7 @@ fn scenario_error_isolation() nothrow -> Int {
 									val s_200 = "HTTP/1.1 200 OK";
 									if !_starts_with(&resp1, &s_200) {
 										val _ = s1.close(timeout);
-										rest.stop(&caller_handle);
+										server.stop(&caller_handle);
 										val _ = sv.join();
 										return 507;
 									}
@@ -861,7 +862,7 @@ fn scenario_error_isolation() nothrow -> Int {
 							match _write_raw(&s1, &bad_req, timeout) {
 								core.Result::Err(_) => {
 									val _ = s1.close(timeout);
-									rest.stop(&caller_handle);
+									server.stop(&caller_handle);
 									val _ = sv.join();
 									return 508;
 								},
@@ -872,7 +873,7 @@ fn scenario_error_isolation() nothrow -> Int {
 							val s_400 = "HTTP/1.1 400 Bad Request";
 							if !_starts_with(&err_resp, &s_400) {
 								val _ = s1.close(timeout);
-								rest.stop(&caller_handle);
+								server.stop(&caller_handle);
 								val _ = sv.join();
 								return 509;
 							}
@@ -883,7 +884,7 @@ fn scenario_error_isolation() nothrow -> Int {
 					// Connection 2: fresh connection should work.
 					match net.connect(&addr, timeout) {
 						core.Result::Err(_) => {
-							rest.stop(&caller_handle);
+							server.stop(&caller_handle);
 							val _ = sv.join();
 							return 510;
 						},
@@ -895,7 +896,7 @@ fn scenario_error_isolation() nothrow -> Int {
 							match _write_raw(&s2, &req2, timeout) {
 								core.Result::Err(_) => {
 									val _ = s2.close(timeout);
-									rest.stop(&caller_handle);
+									server.stop(&caller_handle);
 									val _ = sv.join();
 									return 511;
 								},
@@ -904,7 +905,7 @@ fn scenario_error_isolation() nothrow -> Int {
 							match _read_one_response(&s2, &mut rb2, timeout) {
 								core.Result::Err(_) => {
 									val _ = s2.close(timeout);
-									rest.stop(&caller_handle);
+									server.stop(&caller_handle);
 									val _ = sv.join();
 									return 512;
 								},
@@ -912,7 +913,7 @@ fn scenario_error_isolation() nothrow -> Int {
 									val s_200 = "HTTP/1.1 200 OK";
 									if !_starts_with(&resp2, &s_200) {
 										val _ = s2.close(timeout);
-										rest.stop(&caller_handle);
+										server.stop(&caller_handle);
 										val _ = sv.join();
 										return 513;
 									}
@@ -922,7 +923,7 @@ fn scenario_error_isolation() nothrow -> Int {
 						}
 					}
 
-					rest.stop(&caller_handle);
+					server.stop(&caller_handle);
 					match sv.join() {
 						core.Result::Err(_) => { return 514; },
 						core.Result::Ok(exit_code) => {
@@ -956,14 +957,14 @@ fn scenario_large_response_keepalive() nothrow -> Int {
 				core.Result::Err(_) => { return 603; },
 				core.Result::Ok(_) => {}
 			}
-			match rest.listen_app(&app, timeout) {
+			match server.listen_app(&app, timeout) {
 				core.Result::Err(_) => { return 604; },
 				core.Result::Ok(lst) => {
 					var listener = move lst;
 					val port = listener.local_port();
-					var handle = rest.new_server_handle();
+					var handle = server.new_server_handle();
 					handle.max_requests = 2;
-					var caller_handle = rest.clone_handle(&handle);
+					var caller_handle = server.clone_handle(&handle);
 					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
 						return _run_serve(move app, move listener, move handle, timeout);
 					});
@@ -971,7 +972,7 @@ fn scenario_large_response_keepalive() nothrow -> Int {
 					var addr = net.socket_addr("127.0.0.1", port);
 					match net.connect(&addr, timeout) {
 						core.Result::Err(_) => {
-							rest.stop(&caller_handle);
+							server.stop(&caller_handle);
 							val _ = sv.join();
 							return 605;
 						},
@@ -984,7 +985,7 @@ fn scenario_large_response_keepalive() nothrow -> Int {
 							match _write_raw(&stream, &req1, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									rest.stop(&caller_handle);
+									server.stop(&caller_handle);
 									val _ = sv.join();
 									return 606;
 								},
@@ -993,7 +994,7 @@ fn scenario_large_response_keepalive() nothrow -> Int {
 							match _read_one_response(&stream, &mut read_buf, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									rest.stop(&caller_handle);
+									server.stop(&caller_handle);
 									val _ = sv.join();
 									return 607;
 								},
@@ -1001,7 +1002,7 @@ fn scenario_large_response_keepalive() nothrow -> Int {
 									val s_200 = "HTTP/1.1 200 OK";
 									if !_starts_with(&resp1, &s_200) {
 										val _ = stream.close(timeout);
-										rest.stop(&caller_handle);
+										server.stop(&caller_handle);
 										val _ = sv.join();
 										return 608;
 									}
@@ -1009,7 +1010,7 @@ fn scenario_large_response_keepalive() nothrow -> Int {
 									val m_data = "\"data\":\"XXXX";
 									if !_contains(&resp1, &m_data) {
 										val _ = stream.close(timeout);
-										rest.stop(&caller_handle);
+										server.stop(&caller_handle);
 										val _ = sv.join();
 										return 609;
 									}
@@ -1021,7 +1022,7 @@ fn scenario_large_response_keepalive() nothrow -> Int {
 							match _write_raw(&stream, &req2, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									rest.stop(&caller_handle);
+									server.stop(&caller_handle);
 									val _ = sv.join();
 									return 610;
 								},
@@ -1030,7 +1031,7 @@ fn scenario_large_response_keepalive() nothrow -> Int {
 							match _read_one_response(&stream, &mut read_buf, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									rest.stop(&caller_handle);
+									server.stop(&caller_handle);
 									val _ = sv.join();
 									return 611;
 								},
@@ -1038,14 +1039,14 @@ fn scenario_large_response_keepalive() nothrow -> Int {
 									val s_200 = "HTTP/1.1 200 OK";
 									if !_starts_with(&resp2, &s_200) {
 										val _ = stream.close(timeout);
-										rest.stop(&caller_handle);
+										server.stop(&caller_handle);
 										val _ = sv.join();
 										return 612;
 									}
 									val m_health = "{\"ok\":true}";
 									if !_contains(&resp2, &m_health) {
 										val _ = stream.close(timeout);
-										rest.stop(&caller_handle);
+										server.stop(&caller_handle);
 										val _ = sv.join();
 										return 613;
 									}
@@ -1053,7 +1054,7 @@ fn scenario_large_response_keepalive() nothrow -> Int {
 							}
 
 							val _ = stream.close(timeout);
-							rest.stop(&caller_handle);
+							server.stop(&caller_handle);
 							match sv.join() {
 								core.Result::Err(_) => { return 614; },
 								core.Result::Ok(exit_code) => {

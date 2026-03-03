@@ -2,6 +2,7 @@ module web.rest.response
 
 import std.core as core;
 import std.io as io;
+import std.text as text;
 import web.rest.errors as errors;
 
 export {
@@ -30,51 +31,65 @@ fn _dup_string(s: &String) nothrow -> String {
 	return core.string_from_utf8_bytes(io.buffer_ptr(&b), n);
 }
 
-fn _escape_json_string(s: &String) nothrow -> String {
-	var out = "\"";
+fn _escape_json_to_sb(sb: &mut text.StringBuilder, s: &String) nothrow -> Void {
+	val q = "\"";
+	text.sb_append_string(sb, &q);
 	var i = 0;
 	val n = s.byte_length();
 	while i < n {
 		val ch = core.string_byte_at(s, i);
 		if ch == cast<Byte>(34) {
-			out = out + "\\\"";
+			val esc = "\\\"";
+			text.sb_append_string(sb, &esc);
 		} else {
 			if ch == cast<Byte>(92) {
-				out = out + "\\\\";
+				val esc = "\\\\";
+				text.sb_append_string(sb, &esc);
 			} else {
 				if ch == cast<Byte>(10) {
-					out = out + "\\n";
+					val esc = "\\n";
+					text.sb_append_string(sb, &esc);
 				} else {
 					var buf = io.buffer(1);
 					io.buffer_write(&mut buf, 0, ch);
-					out = out + core.string_from_utf8_bytes(io.buffer_ptr(&buf), 1);
+					val one = core.string_from_utf8_bytes(io.buffer_ptr(&buf), 1);
+					text.sb_append_string(sb, &one);
 				}
 			}
 		}
 		i = i + 1;
 	}
-	out = out + "\"";
-	return out;
+	text.sb_append_string(sb, &q);
+	return core.void_value();
 }
 
 pub fn error_envelope(err: &errors.RestError, event_id: &String) nothrow -> Response {
-	var body = "{\"event\":";
-	body = body + _escape_json_string(&err.event);
-	body = body + ",\"tag\":";
-	body = body + _escape_json_string(&err.tag);
-	body = body + ",\"event_id\":";
-	body = body + _escape_json_string(event_id);
-	body = body + ",\"fields\":{";
+	var sb = text.string_builder(256);
+	val p1 = "{\"event\":";
+	text.sb_append_string(&mut sb, &p1);
+	_escape_json_to_sb(&mut sb, &err.event);
+	val p2 = ",\"tag\":";
+	text.sb_append_string(&mut sb, &p2);
+	_escape_json_to_sb(&mut sb, &err.tag);
+	val p3 = ",\"event_id\":";
+	text.sb_append_string(&mut sb, &p3);
+	_escape_json_to_sb(&mut sb, event_id);
+	val p4 = ",\"fields\":{";
+	text.sb_append_string(&mut sb, &p4);
 	var fi = 0;
 	while fi < err.field_keys.len {
 		if fi > 0 {
-			body = body + ",";
+			val comma = ",";
+			text.sb_append_string(&mut sb, &comma);
 		}
-		body = body + _escape_json_string(&err.field_keys[fi]);
-		body = body + ":";
-		body = body + _escape_json_string(&err.field_values[fi]);
+		_escape_json_to_sb(&mut sb, &err.field_keys[fi]);
+		val colon = ":";
+		text.sb_append_string(&mut sb, &colon);
+		_escape_json_to_sb(&mut sb, &err.field_values[fi]);
 		fi = fi + 1;
 	}
-	body = body + "}}";
+	val p5 = "}}";
+	text.sb_append_string(&mut sb, &p5);
+	val body = text.sb_build(&mut sb);
 	return Response(status = err.status, body = body);
 }

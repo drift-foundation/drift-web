@@ -7,6 +7,7 @@ import std.concurrent as conc;
 import std.format as fmt;
 import std.parse as parse;
 import std.mem as mem;
+import std.text as text;
 import web.rest.errors as errors;
 import web.rest.request as request;
 import web.rest.response as response;
@@ -304,7 +305,7 @@ fn _parse_request_full(raw: &Array<Byte>) nothrow -> core.Result<ParsedRequest, 
 
 						val cl_key = "content-length";
 						if _ascii_eq_lower(raw, hdr_pos, colon, &cl_key) {
-							match parse.parse_int(_dup_string(&hdr_value)) {
+							match parse.parse_int_bytes(raw, value_start, line_end) {
 								core.Result::Ok(n) => { content_length = n; },
 								core.Result::Err(_) => {}
 							}
@@ -368,15 +369,38 @@ fn _reason_phrase(status: Int) nothrow -> String {
 	return "Unknown";
 }
 
-pub fn serialize_response(resp: &response.Response, conn_close: Bool) nothrow -> Array<Byte> {
+pub fn serialize_response_string(resp: &response.Response, conn_close: Bool) nothrow -> String {
 	val status_str = fmt.format_int(resp.status);
 	val reason = _reason_phrase(resp.status);
 	val body_len_str = fmt.format_int(resp.body.byte_length());
-	var conn_hdr = "keep-alive";
+
+	var sb = text.string_builder(128 + resp.body.byte_length());
+	val http11 = "HTTP/1.1 ";
+	text.sb_append_string(&mut sb, &http11);
+	text.sb_append_string(&mut sb, &status_str);
+	val sp = " ";
+	text.sb_append_string(&mut sb, &sp);
+	text.sb_append_string(&mut sb, &reason);
+	val ct = "\r\nContent-Type: application/json\r\nContent-Length: ";
+	text.sb_append_string(&mut sb, &ct);
+	text.sb_append_string(&mut sb, &body_len_str);
+	val conn = "\r\nConnection: ";
+	text.sb_append_string(&mut sb, &conn);
 	if conn_close {
-		conn_hdr = "close";
+		val c = "close";
+		text.sb_append_string(&mut sb, &c);
+	} else {
+		val ka = "keep-alive";
+		text.sb_append_string(&mut sb, &ka);
 	}
-	var line = "HTTP/1.1 " + status_str + " " + reason + "\r\nContent-Type: application/json\r\nContent-Length: " + body_len_str + "\r\nConnection: " + conn_hdr + "\r\n\r\n" + resp.body;
+	val end = "\r\n\r\n";
+	text.sb_append_string(&mut sb, &end);
+	text.sb_append_string(&mut sb, &resp.body);
+	return text.sb_build(&mut sb);
+}
+
+pub fn serialize_response(resp: &response.Response, conn_close: Bool) nothrow -> Array<Byte> {
+	val line = serialize_response_string(resp, conn_close);
 	return _string_to_bytes(&line);
 }
 
@@ -552,18 +576,10 @@ pub fn read_one_request(stream: &net.TcpStream, conn_buf: &mut Array<Byte>, time
 		core.Result::Ok(parsed) => {
 			// Phase 3: remove consumed bytes, retain remainder.
 			val consumed = parsed.consumed;
-			val remaining = conn_buf.len - consumed;
-			if remaining > 0 {
-				var new_buf: Array<Byte> = [];
-				var k = 0;
-				while k < remaining {
-					new_buf.push(conn_buf[consumed + k]);
-					k = k + 1;
-				}
-				*conn_buf = move new_buf;
+			if consumed >= conn_buf.len {
+				conn_buf.clear();
 			} else {
-				var empty: Array<Byte> = [];
-				*conn_buf = move empty;
+				conn_buf.remove_range(0, consumed);
 			}
 			return core.Result::Ok(move parsed);
 		}
@@ -583,8 +599,7 @@ fn _scan_content_length(raw: &Array<Byte>, header_end: Int) nothrow -> Int {
 			if colon < line_end {
 				if _ascii_eq_lower(raw, pos, colon, &cl_key) {
 					val val_start = _skip_ows(raw, colon + 1, line_end);
-					val val_str = _bytes_to_string(raw, val_start, line_end);
-					match parse.parse_int(_dup_string(&val_str)) {
+					match parse.parse_int_bytes(raw, val_start, line_end) {
 						core.Result::Ok(n) => { return n; },
 						core.Result::Err(_) => { return -1; }
 					}
@@ -597,16 +612,20 @@ fn _scan_content_length(raw: &Array<Byte>, header_end: Int) nothrow -> Int {
 }
 
 pub fn write_response(stream: &net.TcpStream, resp: &response.Response, conn_close: Bool, timeout: conc.Duration) nothrow -> core.Result<Void, errors.RestError> {
-	val bytes = serialize_response(resp, conn_close);
-	val total = bytes.len;
+	val s = serialize_response_string(resp, conn_close);
+	val total = s.byte_length();
 	var written = 0;
 	while written < total {
 		val remaining = total - written;
 		var buf = io.buffer(remaining);
-		var i = 0;
-		while i < remaining {
-			io.buffer_write(&mut buf, i, bytes[written + i]);
-			i = i + 1;
+		if written == 0 {
+			io.buffer_write_string(&mut buf, &s);
+		} else {
+			var i = 0;
+			while i < remaining {
+				io.buffer_write(&mut buf, i, core.string_byte_at(&s, written + i));
+				i = i + 1;
+			}
 		}
 		match stream.write(&buf, timeout) {
 			core.Result::Err(_) => {

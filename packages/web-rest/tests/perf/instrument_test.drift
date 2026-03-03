@@ -1,0 +1,423 @@
+module web.rest.tests.perf.instrument_test
+
+import std.core as core;
+import std.io as io;
+import std.net as net;
+import std.concurrent as conc;
+import std.time as time;
+import std.format as fmt;
+import std.mem as mem;
+import lang.thread as thread;
+import web.rest as rest;
+import web.rest.app as rest_app;
+import web.rest.http as http;
+import web.rest.server as server;
+
+// Instrumented keep-alive benchmark: per-phase timing on server and client.
+// Run via `just rest-instrument`.  Do NOT run under DRIFT_MEMCHECK.
+//
+// Server phases timed:  read_one_request | dispatch | write_response
+// Client phases timed:  _write_raw | _read_one_response
+//
+// Same benchmark shape as perf_test.drift baseline-health.
+
+// --- Byte helpers (same as perf_test.drift) ---
+
+fn _to_bytes(s: &String) nothrow -> Array<Byte> {
+	var out: Array<Byte> = [];
+	var i = 0;
+	val n = s.byte_length();
+	while i < n {
+		out.push(core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return move out;
+}
+
+// --- Client TCP helpers (same as perf_test.drift) ---
+
+fn _find_header_end(raw: &Array<Byte>) nothrow -> Int {
+	val len = raw.len;
+	if len < 4 { return -1; }
+	var i = 0;
+	val limit = len - 3;
+	while i < limit {
+		if raw[i] == cast<Byte>(13) {
+			if raw[i + 1] == cast<Byte>(10) {
+				if raw[i + 2] == cast<Byte>(13) {
+					if raw[i + 3] == cast<Byte>(10) {
+						return i + 4;
+					}
+				}
+			}
+		}
+		i = i + 1;
+	}
+	return -1;
+}
+
+fn _scan_cl(raw: &Array<Byte>, header_end: Int) nothrow -> Int {
+	val marker = "Content-Length: ";
+	val m_len = marker.byte_length();
+	if header_end < m_len { return -1; }
+	var i = 0;
+	val limit = header_end - m_len;
+	while i < limit {
+		var matched = true;
+		var j = 0;
+		while j < m_len {
+			if raw[i + j] != core.string_byte_at(marker, j) {
+				matched = false;
+				j = m_len;
+			} else {
+				j = j + 1;
+			}
+		}
+		if matched {
+			val val_start = i + m_len;
+			var val_end = val_start;
+			var scanning = true;
+			while scanning {
+				if val_end >= header_end {
+					scanning = false;
+				} else {
+					if raw[val_end] == cast<Byte>(13) {
+						scanning = false;
+					} else {
+						val_end = val_end + 1;
+					}
+				}
+			}
+			var result = 0;
+			var k = val_start;
+			while k < val_end {
+				val d = cast<Int>(raw[k]) - 48;
+				if d < 0 { return -1; }
+				if d > 9 { return -1; }
+				result = result * 10 + d;
+				k = k + 1;
+			}
+			return result;
+		}
+		i = i + 1;
+	}
+	return -1;
+}
+
+fn _write_raw(stream: &net.TcpStream, s: &String, timeout: conc.Duration) nothrow -> core.Result<Void, Int> {
+	val bytes = _to_bytes(s);
+	var wbuf = io.buffer(bytes.len);
+	var i = 0;
+	while i < bytes.len {
+		io.buffer_write(&mut wbuf, i, bytes[i]);
+		i = i + 1;
+	}
+	match stream.write(&wbuf, timeout) {
+		core.Result::Err(_) => { return core.Result::Err(1); },
+		core.Result::Ok(_) => { return core.Result::Ok(core.void_value()); }
+	}
+}
+
+fn _read_one_response(stream: &net.TcpStream, buf: &mut Array<Byte>, timeout: conc.Duration) nothrow -> core.Result<Void, Int> {
+	var header_end = -1;
+	var content_length = -1;
+	var done = false;
+	while !done {
+		if header_end == -1 {
+			header_end = _find_header_end(buf);
+			if header_end != -1 {
+				content_length = _scan_cl(buf, header_end);
+			}
+		}
+		if header_end != -1 {
+			if content_length <= 0 {
+				done = true;
+			} else {
+				val body_available = buf.len - header_end;
+				if body_available >= content_length {
+					done = true;
+				}
+			}
+		}
+		if !done {
+			var rbuf = io.buffer(4096);
+			match stream.read(&mut rbuf, timeout) {
+				core.Result::Err(_) => { return core.Result::Err(1); },
+				core.Result::Ok(n) => {
+					if n == 0 { return core.Result::Err(2); }
+					var j = 0;
+					while j < n {
+						buf.push(io.buffer_read(&mut rbuf, j));
+						j = j + 1;
+					}
+				}
+			}
+		}
+	}
+	var total = header_end;
+	if content_length > 0 {
+		total = header_end + content_length;
+	}
+	if total < buf.len {
+		var new_buf: Array<Byte> = [];
+		var k = total;
+		while k < buf.len {
+			new_buf.push(buf[k]);
+			k = k + 1;
+		}
+		*buf = move new_buf;
+	} else {
+		var empty: Array<Byte> = [];
+		*buf = move empty;
+	}
+	return core.Result::Ok(core.void_value());
+}
+
+// --- Handler ---
+
+fn _health_handler(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	return core.Result::Ok(rest.json_response(200, "{\"ok\":true}"));
+}
+
+// --- Instrumented server ---
+// Custom keep-alive loop matching server.drift behavior, with per-phase timing.
+// Handles one accepted connection, serves warmup_n + measure_n requests.
+// Accumulates timing only for the measured portion.
+// Prints server-side timing before returning.
+
+fn _instrumented_serve(a: rest.App, listener: net.TcpListener, warmup_n: Int, measure_n: Int, timeout: conc.Duration) nothrow -> Int {
+	val accept_timeout = conc.Duration(millis = 5000);
+	val total_n = warmup_n + measure_n;
+
+	match listener.accept(accept_timeout) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(conn) => {
+			var stream = move conn;
+			var conn_buf: Array<Byte> = [];
+			var served = 0;
+			var event_counter = 0;
+
+			var read_accum = 0;
+			var dispatch_accum = 0;
+			var write_accum = 0;
+
+			var keep_going = true;
+			while keep_going {
+				if served >= total_n {
+					keep_going = false;
+				}
+				if keep_going {
+					event_counter = event_counter + 1;
+					val eid = "evt-" + fmt.format_int(event_counter);
+
+					// --- READ phase ---
+					val t0 = time.now_monotonic();
+					match http.read_one_request(&stream, &mut conn_buf, timeout) {
+						core.Result::Err(e) => {
+							val err_resp = rest.error_envelope(&e, &eid);
+							val _ = http.write_response(&stream, &err_resp, true, timeout);
+							keep_going = false;
+						},
+						core.Result::Ok(parsed) => {
+							val read_ms = time.elapsed_ms(&t0);
+
+							// --- DISPATCH phase ---
+							val t1 = time.now_monotonic();
+							var p = move parsed;
+							val conn_close_flag = p.conn_close == true;
+							var mut_req = mem.replace(&mut p.req, rest.new_request("", ""));
+							var ctx = rest.new_context();
+							var resp = rest.json_response(500, "");
+							match rest.dispatch(&a, &mut mut_req, &mut ctx) {
+								core.Result::Ok(r) => { resp = move r; },
+								core.Result::Err(e) => { resp = rest.error_envelope(&e, &eid); }
+							}
+							val dispatch_ms = time.elapsed_ms(&t1);
+
+							// --- WRITE phase ---
+							val t2 = time.now_monotonic();
+							match http.write_response(&stream, &resp, conn_close_flag, timeout) {
+								core.Result::Err(_) => { keep_going = false; },
+								core.Result::Ok(_) => {}
+							}
+							val write_ms = time.elapsed_ms(&t2);
+
+							// Accumulate only measured requests.
+							if served >= warmup_n {
+								read_accum = read_accum + read_ms;
+								dispatch_accum = dispatch_accum + dispatch_ms;
+								write_accum = write_accum + write_ms;
+							}
+
+							served = served + 1;
+							if conn_close_flag {
+								keep_going = false;
+							}
+						}
+					}
+				}
+			}
+
+			// Print server-side results.
+			val total_accum = read_accum + dispatch_accum + write_accum;
+			var read_avg = 0;
+			var dispatch_avg = 0;
+			var write_avg = 0;
+			var total_avg = 0;
+			if measure_n > 0 {
+				read_avg = (read_accum * 1000) / measure_n;
+				dispatch_avg = (dispatch_accum * 1000) / measure_n;
+				write_avg = (write_accum * 1000) / measure_n;
+				total_avg = (total_accum * 1000) / measure_n;
+			}
+			val line = "[server]  read_avg_us=" + fmt.format_int(read_avg)
+				+ "  dispatch_avg_us=" + fmt.format_int(dispatch_avg)
+				+ "  write_avg_us=" + fmt.format_int(write_avg)
+				+ "  total_server_avg_us=" + fmt.format_int(total_avg)
+				+ "  |  read_ms=" + fmt.format_int(read_accum)
+				+ "  dispatch_ms=" + fmt.format_int(dispatch_accum)
+				+ "  write_ms=" + fmt.format_int(write_accum)
+				+ "  total_ms=" + fmt.format_int(total_accum);
+			thread.console_writeln(line);
+
+			val _ = stream.close(timeout);
+			return 0;
+		}
+	}
+}
+
+// Named wrapper for spawn (avoids match-in-lambda).
+fn _run_instrumented(a: rest.App, listener: net.TcpListener, warmup_n: Int, measure_n: Int, timeout: conc.Duration) nothrow -> Int {
+	return _instrumented_serve(move a, move listener, warmup_n, measure_n, timeout);
+}
+
+// --- Main ---
+
+fn main() nothrow -> Int {
+	val timeout = conc.Duration(millis = 5000);
+	val warmup_n = 20;
+	val measure_n = 500;
+
+	// Build app with /health route.
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+				core.Result::Err(_) => { return 2; },
+				core.Result::Ok(_) => {}
+			}
+			match server.listen_app(&app, timeout) {
+				core.Result::Err(_) => { return 3; },
+				core.Result::Ok(lst) => {
+					var listener = move lst;
+					val port = listener.local_port();
+
+					// Spawn instrumented server.
+					var sv = conc.spawn_cb(| | captures(move app, move listener, copy warmup_n, copy measure_n, copy timeout) => {
+						return _run_instrumented(move app, move listener, warmup_n, measure_n, timeout);
+					});
+
+					val req = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
+					var addr = net.socket_addr("127.0.0.1", port);
+					match net.connect(&addr, timeout) {
+						core.Result::Err(_) => {
+							val _ = sv.join();
+							return 4;
+						},
+						core.Result::Ok(conn) => {
+							var stream = move conn;
+							var read_buf: Array<Byte> = [];
+
+							// --- Warmup (untimed) ---
+							var wi = 0;
+							while wi < warmup_n {
+								match _write_raw(&stream, &req, timeout) {
+									core.Result::Err(_) => {
+										val _ = stream.close(timeout);
+										val _ = sv.join();
+										return 10;
+									},
+									core.Result::Ok(_) => {}
+								}
+								match _read_one_response(&stream, &mut read_buf, timeout) {
+									core.Result::Err(_) => {
+										val _ = stream.close(timeout);
+										val _ = sv.join();
+										return 11;
+									},
+									core.Result::Ok(_) => {}
+								}
+								wi = wi + 1;
+							}
+
+							// --- Measured run (client-side timing) ---
+							var client_write_accum = 0;
+							var client_read_accum = 0;
+							val client_start = time.now_monotonic();
+
+							var mi = 0;
+							while mi < measure_n {
+								val tw = time.now_monotonic();
+								match _write_raw(&stream, &req, timeout) {
+									core.Result::Err(_) => {
+										val _ = stream.close(timeout);
+										val _ = sv.join();
+										return 20;
+									},
+									core.Result::Ok(_) => {}
+								}
+								client_write_accum = client_write_accum + time.elapsed_ms(&tw);
+
+								val tr = time.now_monotonic();
+								match _read_one_response(&stream, &mut read_buf, timeout) {
+									core.Result::Err(_) => {
+										val _ = stream.close(timeout);
+										val _ = sv.join();
+										return 21;
+									},
+									core.Result::Ok(_) => {}
+								}
+								client_read_accum = client_read_accum + time.elapsed_ms(&tr);
+
+								mi = mi + 1;
+							}
+							val client_total_ms = time.elapsed_ms(&client_start);
+
+							val _ = stream.close(timeout);
+
+							// Join server (server prints its timing before exit).
+							match sv.join() {
+								core.Result::Err(_) => { return 30; },
+								core.Result::Ok(exit_code) => {
+									if exit_code != 0 { return 31; }
+								}
+							}
+
+							// Print client-side results.
+							var cw_avg = 0;
+							var cr_avg = 0;
+							var ct_avg = 0;
+							if measure_n > 0 {
+								cw_avg = (client_write_accum * 1000) / measure_n;
+								cr_avg = (client_read_accum * 1000) / measure_n;
+								ct_avg = (client_total_ms * 1000) / measure_n;
+							}
+							val cline = "[client]  write_avg_us=" + fmt.format_int(cw_avg)
+								+ "  read_avg_us=" + fmt.format_int(cr_avg)
+								+ "  total_avg_us=" + fmt.format_int(ct_avg)
+								+ "  |  write_ms=" + fmt.format_int(client_write_accum)
+								+ "  read_ms=" + fmt.format_int(client_read_accum)
+								+ "  total_ms=" + fmt.format_int(client_total_ms);
+							thread.console_writeln(cline);
+
+							return 0;
+						}
+					}
+				}
+			}
+		}
+	}
+}

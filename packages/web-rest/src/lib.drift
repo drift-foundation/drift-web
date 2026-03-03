@@ -2,7 +2,6 @@ module web.rest
 
 import std.core as core;
 import std.json as json;
-import std.net as net;
 import std.concurrent as conc;
 import web.jwt as jwt;
 import web.rest.errors as errors;
@@ -15,6 +14,7 @@ import web.rest.server as server;
 import web.rest.app as app;
 
 export {
+	// Types
 	RestError,
 	Response,
 	Request,
@@ -24,6 +24,7 @@ export {
 	AppBuilder,
 	App,
 	Group,
+	// Error constructors
 	RestBadRequest,
 	RestUnauthorized,
 	RestForbidden,
@@ -39,8 +40,10 @@ export {
 	TAG_INTERNAL_ERROR,
 	rest_error,
 	add_field,
+	// Response
 	json_response,
 	error_envelope,
+	// Request construction / accessors
 	new_context,
 	new_request,
 	add_query_param,
@@ -54,23 +57,26 @@ export {
 	body_json,
 	add_path_param,
 	path_param,
+	// JWT guard
 	new_jwt_guard_config,
 	jwt_guard_apply,
+	// App builder
 	new_app_builder,
 	bind,
 	build_app,
 	add_filter,
 	add_group,
 	add_group_guard,
-	add_throws_route,
-	add_group_throws_route,
+	// Route registration (nothrow: handler returns Result<Response, RestError>)
+	add_route,
+	add_group_route,
+	// Dispatch (for testing / custom server implementations)
 	dispatch,
-	ServerHandle,
-	new_server_handle,
-	clone_handle,
-	stop,
-	listen_app,
-	serve
+	// Server lifecycle (high-level — always runs on VT fiber)
+	RunningServer,
+	start,
+	server_port,
+	shutdown
 };
 
 pub type RestError = errors.RestError;
@@ -205,36 +211,28 @@ pub fn add_group_guard(a: &mut App, group: &Group, guard: core.Callback2<&Reques
 	return app.add_group_guard(a, group, move guard);
 }
 
-pub fn add_throws_route(a: &mut App, method: String, path: String, handler: core.CallbackThrow2<&Request, &mut Context, Response>) nothrow -> core.Result<Void, RestError> {
-	return app.add_throws_route(a, method, path, move handler);
+pub fn add_route(a: &mut App, method: String, path: String, handler: core.Callback2<&Request, &mut Context, core.Result<Response, RestError>>) nothrow -> core.Result<Void, RestError> {
+	return app.add_route(a, method, path, move handler);
 }
 
-pub fn add_group_throws_route(a: &mut App, group: &Group, method: String, path: String, handler: core.CallbackThrow2<&Request, &mut Context, Response>) nothrow -> core.Result<Void, RestError> {
-	return app.add_group_throws_route(a, group, method, path, move handler);
+pub fn add_group_route(a: &mut App, group: &Group, method: String, path: String, handler: core.Callback2<&Request, &mut Context, core.Result<Response, RestError>>) nothrow -> core.Result<Void, RestError> {
+	return app.add_group_route(a, group, method, path, move handler);
 }
 
 pub fn dispatch(a: &App, req: &mut Request, ctx: &mut Context) nothrow -> core.Result<Response, RestError> {
 	return app.dispatch(a, req, ctx);
 }
 
-pub type ServerHandle = server.ServerHandle;
+pub type RunningServer = server.RunningServer;
 
-pub fn new_server_handle() nothrow -> ServerHandle {
-	return server.new_server_handle();
+pub fn start(var a: App, timeout: conc.Duration) nothrow -> core.Result<RunningServer, RestError> {
+	return server.start(move a, timeout);
 }
 
-pub fn clone_handle(handle: &ServerHandle) nothrow -> ServerHandle {
-	return server.clone_handle(handle);
+pub fn server_port(rs: &RunningServer) nothrow -> Int {
+	return server.server_port(rs);
 }
 
-pub fn stop(handle: &ServerHandle) nothrow -> Void {
-	return server.stop(handle);
-}
-
-pub fn listen_app(a: &App, timeout: conc.Duration) nothrow -> core.Result<net.TcpListener, RestError> {
-	return server.listen_app(a, timeout);
-}
-
-pub fn serve(a: App, listener: net.TcpListener, handle: ServerHandle, timeout: conc.Duration) nothrow -> core.Result<Void, RestError> {
-	return server.serve(move a, move listener, move handle, timeout);
+pub fn shutdown(rs: &mut RunningServer) nothrow -> core.Result<Void, RestError> {
+	return server.shutdown(rs);
 }

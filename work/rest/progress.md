@@ -135,25 +135,49 @@ All 14 JWT error tags mapped per plan.md contract:
 
 Facade cleanup applied to `lib.drift`:
 
-- Removed router internals from public API: `split_path`, `parse_route_pattern`, `match_route`, `extract_path_params` (dispatch machinery, never called by consumers)
-- Removed HTTP internals: `parse_request`, `serialize_response` (server-internal; tests import `web.rest.http` directly)
-- Removed redundant aliases: `require_body_json` (identical to `body_json`), `require_path_param` (identical to `path_param`) — removed from both `lib.drift` and `request.drift`
-- Removed dead imports: `web.rest.router`, `web.rest.http` (no longer referenced by facade)
-- Result-style route registration (`add_route`, `add_group_route`) remains internal to `app.drift` only — public API is throws-style per MVP decision
+- Removed router internals: `split_path`, `parse_route_pattern`, `match_route`, `extract_path_params`
+- Removed HTTP internals: `parse_request`, `serialize_response`
+- Removed redundant aliases: `require_body_json`, `require_path_param`
+- Removed low-level server primitives from facade: `serve`, `listen_app`, `ServerHandle`, `new_server_handle`, `clone_handle`, `stop`. These remain in `web.rest.server` for direct import by tests and advanced use.
+- Removed throws-style route registration from facade: `add_throws_route`, `add_group_throws_route`. Available via `import web.rest.app`. Facade exports only the nothrow variant (`add_route`, `add_group_route`) where handlers return `Result<Response, RestError>`.
+
+## Server API
+
+**Primary API: `start()` / `shutdown()`** — server runs on a VT fiber automatically.
+
+```drift
+var app = ...;  // build and configure
+match rest.start(move app, timeout) {
+    Ok(rs) => {
+        val port = rest.server_port(&rs);
+        // ... server is running ...
+        val _ = rest.shutdown(&mut rs);
+    },
+    Err(e) => { ... }
+}
+```
+
+Low-level primitives (`serve()`, `listen_app()`, `ServerHandle`) are not exported
+through the `web.rest` facade. Code that needs them imports `web.rest.server` directly.
+This prevents accidental main-thread server I/O.
+
+**Main-thread I/O caveat:** Drift's runtime uses a 10ms poll quantum
+(`MAIN_THREAD_IO_POLL_QUANTUM_MS`) for socket I/O on the main thread, vs immediate
+epoll wakeup on VT fibers. This is a 300-500x latency difference for loopback
+benchmarks. Server I/O must run on VT fibers. Benchmark clients must also run on VT
+fibers (`conc.spawn_cb()`) to get accurate latency measurements.
 
 ## HTTP Listener Limitations (MVP)
 
 - HTTP/1.1 only, version not validated
 - No chunked transfer encoding — Content-Length only
-- No keep-alive — one request per connection, `Connection: close` always sent
 - Max header size: 8192 bytes
 - No percent-decoding of URL path
 - No Host header validation
 - Response always `Content-Type: application/json`
 - `event_id` is counter-based (`evt-N`), not globally unique
-- Connections handled synchronously (one at a time) — `serve()` takes owned `App` to enable spawning in VTs (Drift closure borrow restriction)
-- **Server shutdown uses `Arc<AtomicBool>` shared stop flag.** `ServerHandle.stopped` is `conc.Arc<sync.AtomicBool>`. `clone_handle()` clones the Arc so caller retains a handle while `serve()` owns another. `stop()` takes `&ServerHandle` and atomically sets the flag. The accept loop checks the flag with `Acquire` ordering between iterations (200ms accept timeout bounds responsiveness).
-- `ServerHandle.max_requests` provides optional bounded exit (0 = unlimited, >0 = exit after N connections) — useful as a test helper but not the primary shutdown mechanism
+- Connections handled synchronously (one at a time)
+- `ServerHandle.max_requests` provides optional bounded exit (0 = unlimited, >0 = exit after N requests) — test helper, not primary shutdown mechanism
 
 ## Compiler Bugs Found During Implementation
 

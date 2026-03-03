@@ -9,6 +9,7 @@ import std.time as time;
 import web.jwt as jwt;
 import web.rest as rest;
 import web.rest.app as rest_app;
+import web.rest.server as server;
 
 // Integration tests for HTTP listener.
 // Each scenario: build app, listen on port 0, spawn server VT, send raw HTTP, assert response.
@@ -104,8 +105,8 @@ fn _http_roundtrip(port: Int, raw_request: &String, timeout: conc.Duration) noth
 }
 
 // Wrapper for spawning serve() — avoids match-in-lambda compiler issue
-fn _run_serve(a: rest.App, listener: net.TcpListener, handle: rest.ServerHandle, timeout: conc.Duration) nothrow -> Int {
-	match rest.serve(move a, move listener, move handle, timeout) {
+fn _run_serve(a: rest.App, listener: net.TcpListener, handle: server.ServerHandle, timeout: conc.Duration) nothrow -> Int {
+	match server.serve(move a, move listener, move handle, timeout) {
 		core.Result::Ok(_) => { return 0; },
 		core.Result::Err(_) => { return 1; }
 	}
@@ -176,24 +177,24 @@ fn _starts_with(s: &String, prefix: &String) nothrow -> Bool {
 // Full lifecycle helper: listen_app → clone handle → spawn serve → roundtrip → stop → join.
 // All scenarios go through the real serve() path.
 fn _roundtrip(app: rest.App, raw_request: &String, timeout: conc.Duration) nothrow -> core.Result<String, Int> {
-	match rest.listen_app(&app, timeout) {
+	match server.listen_app(&app, timeout) {
 		core.Result::Err(_) => { return core.Result::Err(1); },
 		core.Result::Ok(lst) => {
 			var listener = move lst;
 			val port = listener.local_port();
-			var handle = rest.new_server_handle();
-			var caller_handle = rest.clone_handle(&handle);
+			var handle = server.new_server_handle();
+			var caller_handle = server.clone_handle(&handle);
 			var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
 				return _run_serve(move app, move listener, move handle, timeout);
 			});
 			match _http_roundtrip(port, raw_request, timeout) {
 				core.Result::Err(code) => {
-					rest.stop(&caller_handle);
+					server.stop(&caller_handle);
 					val _ = sv.join();
 					return core.Result::Err(code + 10);
 				},
 				core.Result::Ok(resp_str) => {
-					rest.stop(&caller_handle);
+					server.stop(&caller_handle);
 					match sv.join() {
 						core.Result::Err(_) => { return core.Result::Err(2); },
 						core.Result::Ok(exit_code) => {

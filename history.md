@@ -53,3 +53,30 @@
 - Validation:
   - `just rest-check-par` passed
   - `just test` passed
+
+## 2026-03-03
+
+- Completed REST stress and correctness coverage:
+  - added `packages/web-rest/tests/stress/stress_test.drift`
+  - covered sequential mixed requests, concurrent clients, lifecycle cycling, large headers, malformed requests, slow clients, large responses, and keep-alive sustained load
+- Added HTTP/1.1 keep-alive support to `web.rest`:
+  - persistent per-connection request loop in `packages/web-rest/src/server.drift`
+  - remainder-preserving buffered request reader in `packages/web-rest/src/http.drift`
+  - `Connection: keep-alive` default response behavior with client `Connection: close` opt-out
+  - idle keep-alive timeout and short-write-safe response flushing
+- Added a VT-first public server lifecycle API:
+  - `start()`
+  - `server_port()`
+  - `shutdown()`
+  - low-level server primitives were demoted from the `web.rest` facade and retained under `web.rest.server`
+- Expanded performance investigation and harnesses:
+  - added perf baselines and decomposition tests under `packages/web-rest/tests/perf/`
+  - corrected benchmark methodology to avoid main-thread I/O polling distortion by running client/server on virtual threads
+  - established credible keep-alive baseline throughput for `web.rest`
+- Pinned and documented the performance false alarm root cause:
+  - main-thread socket I/O in current Drift runtime polls at a 10ms quantum
+  - reports added under `work/rest/` for VT loopback baseline, allocation bottleneck analysis, and main-thread poll behavior
+- Validation:
+  - `just test` passed
+  - `just rest-stress` passed
+  - `just rest-perf` passed

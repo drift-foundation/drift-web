@@ -2,7 +2,7 @@
 
 **Severity:** Low (workaround trivial: `== true`)
 **Discovered:** 2026-03-02
-**Status:** OPEN
+**Status:** RESOLVED — compiler fix deployed 2026-03-02
 **Subsystem:** Type checker / if-condition validation
 **Repro file:** `packages/web-rest/tests/unit/repro_if_bool_field.drift`
 

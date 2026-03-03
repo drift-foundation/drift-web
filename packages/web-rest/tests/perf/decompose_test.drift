@@ -1,0 +1,561 @@
+module web.rest.tests.perf.decompose_test
+
+import std.core as core;
+import std.io as io;
+import std.net as net;
+import std.concurrent as conc;
+import std.time as time;
+import std.format as fmt;
+import lang.thread as thread;
+import web.rest as rest;
+import web.rest.app as rest_app;
+import web.rest.http as http;
+import web.rest.server as server;
+
+// Decomposition benchmarks: isolate CPU cost of parse, dispatch, serialize.
+// Run via `just rest-decompose`.  Do NOT run under DRIFT_MEMCHECK.
+//
+// Reference points (run separately):
+//   - Raw TCP loopback:      `just rest-check-unit packages/web-rest/tests/perf/baseline_vt_test.drift`
+//   - Full REST keep-alive:  `just rest-perf`
+
+// --- Helpers ---
+
+fn _to_bytes(s: &String) nothrow -> Array<Byte> {
+	var out: Array<Byte> = [];
+	var i = 0;
+	val n = s.byte_length();
+	while i < n {
+		out.push(core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return move out;
+}
+
+fn _print_bench(name: String, iters: Int, total_ms: Int) nothrow -> Void {
+	var avg_us = 0;
+	if iters > 0 {
+		avg_us = (total_ms * 1000) / iters;
+	}
+	var req_per_sec = 0;
+	if total_ms > 0 {
+		req_per_sec = (iters * 1000) / total_ms;
+	}
+	val line = "[bench] " + name
+		+ "  iters=" + fmt.format_int(iters)
+		+ "  total_ms=" + fmt.format_int(total_ms)
+		+ "  avg_us=" + fmt.format_int(avg_us)
+		+ "  req_per_sec=" + fmt.format_int(req_per_sec);
+	thread.console_writeln(line);
+	return core.void_value();
+}
+
+// --- Handler ---
+
+fn _health_handler(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	return core.Result::Ok(rest.json_response(200, "{\"ok\":true}"));
+}
+
+// --- Bench 1: parse-only ---
+// Parse a fixed GET /health request from raw bytes, no TCP.
+
+fn bench_parse_only() nothrow -> core.Result<Int, Int> {
+	val req_str = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
+	val raw = _to_bytes(&req_str);
+	val n = 50000;
+
+	// Warmup
+	var wi = 0;
+	while wi < 500 {
+		match http.parse_request(&raw) {
+			core.Result::Ok(_) => {},
+			core.Result::Err(_) => { return core.Result::Err(1); }
+		}
+		wi = wi + 1;
+	}
+
+	val start = time.now_monotonic();
+	var i = 0;
+	while i < n {
+		match http.parse_request(&raw) {
+			core.Result::Ok(_) => {},
+			core.Result::Err(_) => { return core.Result::Err(2); }
+		}
+		i = i + 1;
+	}
+	val elapsed = time.elapsed_ms(&start);
+	return core.Result::Ok(elapsed);
+}
+
+// --- Bench 2: dispatch-only ---
+// Pre-built App with /health route.  Create Request+Context per iteration,
+// call dispatch, measure.  No TCP, no parse, no serialize.
+
+fn bench_dispatch_only() nothrow -> core.Result<Int, Int> {
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return core.Result::Err(1); },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+				core.Result::Err(_) => { return core.Result::Err(2); },
+				core.Result::Ok(_) => {}
+			}
+
+			val n = 50000;
+
+			// Warmup
+			var wi = 0;
+			while wi < 500 {
+				var req = rest.new_request("GET", "/health");
+				var ctx = rest.new_context();
+				match rest.dispatch(&app, &mut req, &mut ctx) {
+					core.Result::Ok(_) => {},
+					core.Result::Err(_) => { return core.Result::Err(3); }
+				}
+				wi = wi + 1;
+			}
+
+			val start = time.now_monotonic();
+			var i = 0;
+			while i < n {
+				var req = rest.new_request("GET", "/health");
+				var ctx = rest.new_context();
+				match rest.dispatch(&app, &mut req, &mut ctx) {
+					core.Result::Ok(_) => {},
+					core.Result::Err(_) => { return core.Result::Err(4); }
+				}
+				i = i + 1;
+			}
+			val elapsed = time.elapsed_ms(&start);
+			return core.Result::Ok(elapsed);
+		}
+	}
+}
+
+// --- Bench 3: serialize-only ---
+// Pre-built Response, call serialize_response N times.
+// No TCP, no parse, no dispatch.
+
+fn bench_serialize_only() nothrow -> core.Result<Int, Int> {
+	val resp = rest.json_response(200, "{\"ok\":true}");
+	val n = 50000;
+
+	// Warmup
+	var wi = 0;
+	while wi < 500 {
+		val _ = http.serialize_response(&resp, false);
+		wi = wi + 1;
+	}
+
+	val start = time.now_monotonic();
+	var i = 0;
+	while i < n {
+		val _ = http.serialize_response(&resp, false);
+		i = i + 1;
+	}
+	val elapsed = time.elapsed_ms(&start);
+	return core.Result::Ok(elapsed);
+}
+
+// --- Bench 4: parse+dispatch+serialize (no TCP) ---
+// Full server-side processing without any network I/O.
+// Parse raw bytes → dispatch → serialize response.
+
+fn bench_full_cpu_only() nothrow -> core.Result<Int, Int> {
+	val req_str = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
+	val raw = _to_bytes(&req_str);
+
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return core.Result::Err(1); },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+				core.Result::Err(_) => { return core.Result::Err(2); },
+				core.Result::Ok(_) => {}
+			}
+
+			val n = 50000;
+			var event_counter = 0;
+
+			// Warmup
+			var wi = 0;
+			while wi < 500 {
+				match http.parse_request(&raw) {
+					core.Result::Err(_) => { return core.Result::Err(3); },
+					core.Result::Ok(req) => {
+						var mut_req = move req;
+						var ctx = rest.new_context();
+						match rest.dispatch(&app, &mut mut_req, &mut ctx) {
+							core.Result::Err(e) => {
+								event_counter = event_counter + 1;
+								val eid = "evt-" + fmt.format_int(event_counter);
+								val _ = rest.error_envelope(&e, &eid);
+							},
+							core.Result::Ok(resp) => {
+								val _ = http.serialize_response(&resp, false);
+							}
+						}
+					}
+				}
+				wi = wi + 1;
+			}
+
+			val start = time.now_monotonic();
+			var i = 0;
+			while i < n {
+				match http.parse_request(&raw) {
+					core.Result::Err(_) => { return core.Result::Err(4); },
+					core.Result::Ok(req) => {
+						var mut_req = move req;
+						var ctx = rest.new_context();
+						match rest.dispatch(&app, &mut mut_req, &mut ctx) {
+							core.Result::Err(e) => {
+								event_counter = event_counter + 1;
+								val eid = "evt-" + fmt.format_int(event_counter);
+								val _ = rest.error_envelope(&e, &eid);
+							},
+							core.Result::Ok(resp) => {
+								val _ = http.serialize_response(&resp, false);
+							}
+						}
+					}
+				}
+				i = i + 1;
+			}
+			val elapsed = time.elapsed_ms(&start);
+			return core.Result::Ok(elapsed);
+		}
+	}
+}
+
+// --- Bench 5: full REST keep-alive over TCP (reference) ---
+// Identical to perf_test.drift bench_baseline_health.
+
+fn _starts_with(s: &String, prefix: &String) nothrow -> Bool {
+	val p_len = prefix.byte_length();
+	if s.byte_length() < p_len {
+		return false;
+	}
+	var i = 0;
+	while i < p_len {
+		if core.string_byte_at(s, i) != core.string_byte_at(prefix, i) {
+			return false;
+		}
+		i = i + 1;
+	}
+	return true;
+}
+
+fn _find_header_end(raw: &Array<Byte>) nothrow -> Int {
+	val len = raw.len;
+	if len < 4 { return -1; }
+	var i = 0;
+	val limit = len - 3;
+	while i < limit {
+		if raw[i] == cast<Byte>(13) {
+			if raw[i + 1] == cast<Byte>(10) {
+				if raw[i + 2] == cast<Byte>(13) {
+					if raw[i + 3] == cast<Byte>(10) {
+						return i + 4;
+					}
+				}
+			}
+		}
+		i = i + 1;
+	}
+	return -1;
+}
+
+fn _scan_cl(raw: &Array<Byte>, header_end: Int) nothrow -> Int {
+	val marker = "Content-Length: ";
+	val m_len = marker.byte_length();
+	if header_end < m_len { return -1; }
+	var i = 0;
+	val limit = header_end - m_len;
+	while i < limit {
+		var matched = true;
+		var j = 0;
+		while j < m_len {
+			if raw[i + j] != core.string_byte_at(marker, j) {
+				matched = false;
+				j = m_len;
+			} else {
+				j = j + 1;
+			}
+		}
+		if matched {
+			val val_start = i + m_len;
+			var val_end = val_start;
+			var scanning = true;
+			while scanning {
+				if val_end >= header_end {
+					scanning = false;
+				} else {
+					if raw[val_end] == cast<Byte>(13) {
+						scanning = false;
+					} else {
+						val_end = val_end + 1;
+					}
+				}
+			}
+			var result = 0;
+			var k = val_start;
+			while k < val_end {
+				val d = cast<Int>(raw[k]) - 48;
+				if d < 0 { return -1; }
+				if d > 9 { return -1; }
+				result = result * 10 + d;
+				k = k + 1;
+			}
+			return result;
+		}
+		i = i + 1;
+	}
+	return -1;
+}
+
+fn _write_raw(stream: &net.TcpStream, s: &String, timeout: conc.Duration) nothrow -> core.Result<Void, Int> {
+	val bytes = _to_bytes(s);
+	var wbuf = io.buffer(bytes.len);
+	var i = 0;
+	while i < bytes.len {
+		io.buffer_write(&mut wbuf, i, bytes[i]);
+		i = i + 1;
+	}
+	match stream.write(&wbuf, timeout) {
+		core.Result::Err(_) => { return core.Result::Err(1); },
+		core.Result::Ok(_) => { return core.Result::Ok(core.void_value()); }
+	}
+}
+
+fn _read_one_response(stream: &net.TcpStream, buf: &mut Array<Byte>, timeout: conc.Duration) nothrow -> core.Result<Void, Int> {
+	var header_end = -1;
+	var content_length = -1;
+	var done = false;
+	while !done {
+		if header_end == -1 {
+			header_end = _find_header_end(buf);
+			if header_end != -1 {
+				content_length = _scan_cl(buf, header_end);
+			}
+		}
+		if header_end != -1 {
+			if content_length <= 0 {
+				done = true;
+			} else {
+				val body_available = buf.len - header_end;
+				if body_available >= content_length {
+					done = true;
+				}
+			}
+		}
+		if !done {
+			var rbuf = io.buffer(4096);
+			match stream.read(&mut rbuf, timeout) {
+				core.Result::Err(_) => { return core.Result::Err(1); },
+				core.Result::Ok(n) => {
+					if n == 0 { return core.Result::Err(2); }
+					var j = 0;
+					while j < n {
+						buf.push(io.buffer_read(&mut rbuf, j));
+						j = j + 1;
+					}
+				}
+			}
+		}
+	}
+	var total = header_end;
+	if content_length > 0 {
+		total = header_end + content_length;
+	}
+	if total < buf.len {
+		buf.remove_range(0, total);
+	} else {
+		buf.clear();
+	}
+	return core.Result::Ok(core.void_value());
+}
+
+fn _run_serve(a: rest.App, listener: net.TcpListener, handle: server.ServerHandle, timeout: conc.Duration) nothrow -> Int {
+	match server.serve(move a, move listener, move handle, timeout) {
+		core.Result::Ok(_) => { return 0; },
+		core.Result::Err(_) => { return 1; }
+	}
+}
+
+fn bench_rest_keepalive() nothrow -> core.Result<Int, Int> {
+	val timeout = conc.Duration(millis = 5000);
+	val warmup_n = 20;
+	val measure_n = 500;
+	val total_n = warmup_n + measure_n;
+
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return core.Result::Err(1); },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+				core.Result::Err(_) => { return core.Result::Err(2); },
+				core.Result::Ok(_) => {}
+			}
+			match server.listen_app(&app, timeout) {
+				core.Result::Err(_) => { return core.Result::Err(3); },
+				core.Result::Ok(lst) => {
+					var listener = move lst;
+					val port = listener.local_port();
+					var handle = server.new_server_handle();
+					handle.max_requests = total_n;
+					var caller_handle = server.clone_handle(&handle);
+					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
+						return _run_serve(move app, move listener, move handle, timeout);
+					});
+
+					val req = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
+					var addr = net.socket_addr("127.0.0.1", port);
+					match net.connect(&addr, timeout) {
+						core.Result::Err(_) => {
+							server.stop(&caller_handle);
+							val _ = sv.join();
+							return core.Result::Err(4);
+						},
+						core.Result::Ok(conn) => {
+							var stream = move conn;
+							var read_buf: Array<Byte> = [];
+
+							// Warmup
+							var wi = 0;
+							while wi < warmup_n {
+								match _write_raw(&stream, &req, timeout) {
+									core.Result::Err(_) => {
+										val _ = stream.close(timeout);
+										server.stop(&caller_handle);
+										val _ = sv.join();
+										return core.Result::Err(10);
+									},
+									core.Result::Ok(_) => {}
+								}
+								match _read_one_response(&stream, &mut read_buf, timeout) {
+									core.Result::Err(_) => {
+										val _ = stream.close(timeout);
+										server.stop(&caller_handle);
+										val _ = sv.join();
+										return core.Result::Err(11);
+									},
+									core.Result::Ok(_) => {}
+								}
+								wi = wi + 1;
+							}
+
+							// Measured run
+							val start = time.now_monotonic();
+							var mi = 0;
+							while mi < measure_n {
+								match _write_raw(&stream, &req, timeout) {
+									core.Result::Err(_) => {
+										val _ = stream.close(timeout);
+										server.stop(&caller_handle);
+										val _ = sv.join();
+										return core.Result::Err(20);
+									},
+									core.Result::Ok(_) => {}
+								}
+								match _read_one_response(&stream, &mut read_buf, timeout) {
+									core.Result::Err(_) => {
+										val _ = stream.close(timeout);
+										server.stop(&caller_handle);
+										val _ = sv.join();
+										return core.Result::Err(21);
+									},
+									core.Result::Ok(_) => {}
+								}
+								mi = mi + 1;
+							}
+							val elapsed = time.elapsed_ms(&start);
+
+							val _ = stream.close(timeout);
+							server.stop(&caller_handle);
+							match sv.join() {
+								core.Result::Err(_) => { return core.Result::Err(30); },
+								core.Result::Ok(exit_code) => {
+									if exit_code != 0 { return core.Result::Err(31); }
+								}
+							}
+							return core.Result::Ok(elapsed);
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// --- Main ---
+
+fn main() nothrow -> Int {
+	val n_cpu = 50000;
+	val n_tcp = 500;
+
+	// Run CPU-only benchmarks.
+	val r_parse = bench_parse_only();
+	val r_dispatch = bench_dispatch_only();
+	val r_serialize = bench_serialize_only();
+	val r_full_cpu = bench_full_cpu_only();
+
+	// Run TCP benchmark.
+	val r_keepalive = bench_rest_keepalive();
+
+	// Print all results.
+	thread.console_writeln("--- CPU-only (no TCP) ---");
+	match r_parse {
+		core.Result::Err(code) => {
+			val line = "[FAIL] parse-only  code=" + fmt.format_int(code);
+			thread.console_writeln(line);
+			return code;
+		},
+		core.Result::Ok(ms) => { _print_bench("parse-only", n_cpu, ms); }
+	}
+
+	match r_dispatch {
+		core.Result::Err(code) => {
+			val line = "[FAIL] dispatch-only  code=" + fmt.format_int(code);
+			thread.console_writeln(line);
+			return code;
+		},
+		core.Result::Ok(ms) => { _print_bench("dispatch-only", n_cpu, ms); }
+	}
+
+	match r_serialize {
+		core.Result::Err(code) => {
+			val line = "[FAIL] serialize-only  code=" + fmt.format_int(code);
+			thread.console_writeln(line);
+			return code;
+		},
+		core.Result::Ok(ms) => { _print_bench("serialize-only", n_cpu, ms); }
+	}
+
+	match r_full_cpu {
+		core.Result::Err(code) => {
+			val line = "[FAIL] full-cpu-only  code=" + fmt.format_int(code);
+			thread.console_writeln(line);
+			return code;
+		},
+		core.Result::Ok(ms) => { _print_bench("parse+dispatch+serialize", n_cpu, ms); }
+	}
+
+	thread.console_writeln("--- TCP reference ---");
+	match r_keepalive {
+		core.Result::Err(code) => {
+			val line = "[FAIL] rest-keepalive  code=" + fmt.format_int(code);
+			thread.console_writeln(line);
+			return code;
+		},
+		core.Result::Ok(ms) => { _print_bench("rest-keepalive", n_tcp, ms); }
+	}
+
+	return 0;
+}

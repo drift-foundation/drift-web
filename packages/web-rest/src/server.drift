@@ -19,6 +19,10 @@ export {
 	new_server_handle,
 	clone_handle,
 	stop,
+	RunningServer,
+	start,
+	server_port,
+	shutdown,
 	listen_app,
 	serve
 };
@@ -61,6 +65,66 @@ pub fn listen_app(a: &app.App, timeout: conc.Duration) nothrow -> core.Result<ne
 		},
 		core.Result::Err(_) => {
 			return core.Result::Err(errors.rest_error(500, "internal", "listen-failed", "failed to bind TCP listener"));
+		}
+	}
+}
+
+// --- High-level API: start / shutdown ---
+// Server runs on a VT fiber (epoll path). The main thread never does server I/O.
+
+pub struct RunningServer {
+	pub handle: ServerHandle,
+	port: Int,
+	vt: conc.VirtualThread<Int>
+}
+
+// Named wrapper for spawn (avoids match-in-lambda).
+fn _run_serve(a: app.App, listener: net.TcpListener, handle: ServerHandle, timeout: conc.Duration) nothrow -> Int {
+	match serve(move a, move listener, move handle, timeout) {
+		core.Result::Ok(_) => { return 0; },
+		core.Result::Err(_) => { return 1; }
+	}
+}
+
+// Start a server on a VT fiber. Binds, listens, and spawns the serve loop.
+// Returns a RunningServer that can be stopped via shutdown().
+pub fn start(var a: app.App, timeout: conc.Duration) nothrow -> core.Result<RunningServer, errors.RestError> {
+	match listen_app(&a, timeout) {
+		core.Result::Err(_) => {
+			return core.Result::Err(errors.rest_error(500, "internal", "start-failed", "failed to bind listener"));
+		},
+		core.Result::Ok(lst) => {
+			var listener = move lst;
+			val port = listener.local_port();
+			var handle = new_server_handle();
+			var caller_handle = clone_handle(&handle);
+			var vt = conc.spawn_cb(| | captures(move a, move listener, move handle, copy timeout) => {
+				return _run_serve(move a, move listener, move handle, timeout);
+			});
+			var rs = RunningServer(handle = move caller_handle, port = port, vt = move vt);
+			return core.Result::Ok(move rs);
+		}
+	}
+}
+
+// Return the port the server is listening on.
+pub fn server_port(rs: &RunningServer) nothrow -> Int {
+	return rs.port;
+}
+
+// Stop the server and wait for it to finish.
+// Returns Ok on clean shutdown, Err if the server VT failed.
+pub fn shutdown(rs: &mut RunningServer) nothrow -> core.Result<Void, errors.RestError> {
+	stop(&rs.handle);
+	match rs.vt.join() {
+		core.Result::Err(_) => {
+			return core.Result::Err(errors.rest_error(500, "internal", "server-join-failed", "failed to join server thread"));
+		},
+		core.Result::Ok(exit_code) => {
+			if exit_code != 0 {
+				return core.Result::Err(errors.rest_error(500, "internal", "server-error", "server exited with error"));
+			}
+			return core.Result::Ok(core.void_value());
 		}
 	}
 }

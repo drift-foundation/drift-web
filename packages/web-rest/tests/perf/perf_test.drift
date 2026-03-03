@@ -8,7 +8,6 @@ import std.time as time;
 import std.format as fmt;
 import lang.thread as thread;
 import web.rest as rest;
-import web.rest.app as rest_app;
 
 // Performance benchmarks for the REST server.
 // Separate gate: not included in `just test`, `just rest-check-par`, or
@@ -211,15 +210,6 @@ fn _read_one_response(stream: &net.TcpStream, buf: &mut Array<Byte>, timeout: co
 	return core.Result::Ok(core.void_value());
 }
 
-// --- Server lifecycle ---
-
-fn _run_serve(a: rest.App, listener: net.TcpListener, handle: rest.ServerHandle, timeout: conc.Duration) nothrow -> Int {
-	match rest.serve(move a, move listener, move handle, timeout) {
-		core.Result::Ok(_) => { return 0; },
-		core.Result::Err(_) => { return 1; }
-	}
-}
-
 // --- Benchmark output (called only from main, after all benchmarks complete) ---
 
 fn _print_bench(name: String, iters: Int, total_ms: Int) nothrow -> Void {
@@ -251,13 +241,66 @@ fn _health_handler(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Res
 // No I/O inside benchmark functions — caller prints results.
 // All benchmarks use keep-alive: one TCP connection for all requests.
 
+// Client loop: runs on a VT fiber (epoll path) to avoid the main-thread
+// 10ms poll quantum. Returns elapsed_ms for measured portion, or negative
+// error code on failure.
+fn _client_loop(port: Int, warmup_n: Int, measure_n: Int, timeout: conc.Duration) nothrow -> Int {
+	val req = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
+	var addr = net.socket_addr("127.0.0.1", port);
+	match net.connect(&addr, timeout) {
+		core.Result::Err(_) => { return -4; },
+		core.Result::Ok(conn) => {
+			var stream = move conn;
+			var read_buf: Array<Byte> = [];
+
+			// Warmup
+			var wi = 0;
+			while wi < warmup_n {
+				match _write_raw(&stream, &req, timeout) {
+					core.Result::Err(_) => { val _ = stream.close(timeout); return -10; },
+					core.Result::Ok(_) => {}
+				}
+				match _read_one_response(&stream, &mut read_buf, timeout) {
+					core.Result::Err(_) => { val _ = stream.close(timeout); return -11; },
+					core.Result::Ok(_) => {}
+				}
+				wi = wi + 1;
+			}
+
+			// Measured run
+			val start = time.now_monotonic();
+			var mi = 0;
+			while mi < measure_n {
+				match _write_raw(&stream, &req, timeout) {
+					core.Result::Err(_) => { val _ = stream.close(timeout); return -20; },
+					core.Result::Ok(_) => {}
+				}
+				match _read_one_response(&stream, &mut read_buf, timeout) {
+					core.Result::Err(_) => { val _ = stream.close(timeout); return -21; },
+					core.Result::Ok(_) => {}
+				}
+				mi = mi + 1;
+			}
+			val elapsed = time.elapsed_ms(&start);
+			val _ = stream.close(timeout);
+			return elapsed;
+		}
+	}
+}
+
+// Named wrapper for spawn (avoids match-in-lambda).
+fn _run_client_loop(port: Int, warmup_n: Int, measure_n: Int, timeout: conc.Duration) nothrow -> Int {
+	return _client_loop(port, warmup_n, measure_n, timeout);
+}
+
 // baseline-health: GET /health, no filters, no guards, tiny JSON response.
 // One keep-alive connection. Warmup 20 requests, then measure 500 requests.
+// Uses rest.start() — server runs on VT fiber automatically.
+// Client also runs on VT fiber to avoid main-thread 10ms poll quantum.
 fn bench_baseline_health() nothrow -> core.Result<Int, Int> {
 	val timeout = conc.Duration(millis = 5000);
 	val warmup_n = 20;
 	val measure_n = 500;
-	val total_n = warmup_n + measure_n;
 
 	var b = rest.new_app_builder();
 	rest.bind(&mut b, "127.0.0.1", 0);
@@ -265,117 +308,58 @@ fn bench_baseline_health() nothrow -> core.Result<Int, Int> {
 		core.Result::Err(_) => { return core.Result::Err(1); },
 		core.Result::Ok(a) => {
 			var app = move a;
-			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+			match rest.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
 				core.Result::Err(_) => { return core.Result::Err(2); },
 				core.Result::Ok(_) => {}
 			}
-			match rest.listen_app(&app, timeout) {
+			match rest.start(move app, timeout) {
 				core.Result::Err(_) => { return core.Result::Err(3); },
-				core.Result::Ok(lst) => {
-					var listener = move lst;
-					val port = listener.local_port();
-					var handle = rest.new_server_handle();
-					handle.max_requests = total_n;
-					var caller_handle = rest.clone_handle(&handle);
-					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
-						return _run_serve(move app, move listener, move handle, timeout);
+				core.Result::Ok(rs) => {
+					var server = move rs;
+					val port = rest.server_port(&server);
+
+					// Client on VT fiber (epoll path, no 10ms poll quantum).
+					var cl = conc.spawn_cb(| | captures(copy port, copy warmup_n, copy measure_n, copy timeout) => {
+						return _run_client_loop(port, warmup_n, measure_n, timeout);
 					});
 
-					// Keep-alive request (no Connection: close)
-					val req = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
-
-					var addr = net.socket_addr("127.0.0.1", port);
-					match net.connect(&addr, timeout) {
+					// Join client.
+					var elapsed = 0;
+					match cl.join() {
 						core.Result::Err(_) => {
-							rest.stop(&caller_handle);
-							val _ = sv.join();
-							return core.Result::Err(4);
+							val _ = rest.shutdown(&mut server);
+							return core.Result::Err(40);
 						},
-						core.Result::Ok(conn) => {
-							var stream = move conn;
-							var read_buf: Array<Byte> = [];
-
-							// Warmup
-							var wi = 0;
-							while wi < warmup_n {
-								match _write_raw(&stream, &req, timeout) {
-									core.Result::Err(_) => {
-										val _ = stream.close(timeout);
-										rest.stop(&caller_handle);
-										val _ = sv.join();
-										return core.Result::Err(10);
-									},
-									core.Result::Ok(_) => {}
-								}
-								match _read_one_response(&stream, &mut read_buf, timeout) {
-									core.Result::Err(_) => {
-										val _ = stream.close(timeout);
-										rest.stop(&caller_handle);
-										val _ = sv.join();
-										return core.Result::Err(11);
-									},
-									core.Result::Ok(_) => {}
-								}
-								wi = wi + 1;
+						core.Result::Ok(result) => {
+							if result < 0 {
+								val _ = rest.shutdown(&mut server);
+								return core.Result::Err(-(result));
 							}
-
-							// Measured run
-							val start = time.now_monotonic();
-							var mi = 0;
-							while mi < measure_n {
-								match _write_raw(&stream, &req, timeout) {
-									core.Result::Err(_) => {
-										val _ = stream.close(timeout);
-										rest.stop(&caller_handle);
-										val _ = sv.join();
-										return core.Result::Err(20);
-									},
-									core.Result::Ok(_) => {}
-								}
-								match _read_one_response(&stream, &mut read_buf, timeout) {
-									core.Result::Err(_) => {
-										val _ = stream.close(timeout);
-										rest.stop(&caller_handle);
-										val _ = sv.join();
-										return core.Result::Err(21);
-									},
-									core.Result::Ok(_) => {}
-								}
-								mi = mi + 1;
-							}
-							val elapsed = time.elapsed_ms(&start);
-
-							val _ = stream.close(timeout);
-							rest.stop(&caller_handle);
-							match sv.join() {
-								core.Result::Err(_) => { return core.Result::Err(30); },
-								core.Result::Ok(exit_code) => {
-									if exit_code != 0 { return core.Result::Err(31); }
-								}
-							}
-
-							return core.Result::Ok(elapsed);
+							elapsed = result;
 						}
 					}
+
+					// Shutdown server.
+					match rest.shutdown(&mut server) {
+						core.Result::Err(_) => { return core.Result::Err(30); },
+						core.Result::Ok(_) => {}
+					}
+
+					return core.Result::Ok(elapsed);
 				}
 			}
 		}
 	}
 }
 
-// --- Main: run all benchmarks, then print all results ---
+// --- Main: run benchmark, print results ---
 
 fn main() nothrow -> Int {
-	// Run benchmarks — collect timing data, no I/O.
-	val r_health = bench_baseline_health();
-
-	// Print results.
-	match r_health {
+	match bench_baseline_health() {
 		core.Result::Err(code) => { return code; },
 		core.Result::Ok(ms) => {
 			_print_bench("baseline-health", 500, ms);
+			return 0;
 		}
 	}
-
-	return 0;
 }

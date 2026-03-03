@@ -1,0 +1,319 @@
+module web.rest.tests.perf.baseline_vt_test
+
+import std.core as core;
+import std.io as io;
+import std.net as net;
+import std.concurrent as conc;
+import std.sync as sync;
+import std.time as time;
+import std.format as fmt;
+import lang.thread as thread;
+
+// Bare-metal VT overhead benchmark.
+// No REST framework, no strings, no allocations in the hot path.
+// Just raw TCP loopback: read fixed request → write fixed response.
+//
+// Goal: find the true floor — VT scheduler + TCP loopback cost per round-trip.
+// Everything is pre-allocated, fixed-size, zero-copy where possible.
+
+// --- Fixed response: pre-built as a global byte array ---
+// "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nok"
+// content-length: 2, body: "ok"
+
+fn _build_fixed_response() nothrow -> Array<Byte> {
+	val s = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nok";
+	var out: Array<Byte> = [];
+	var i = 0;
+	val n = s.byte_length();
+	while i < n {
+		out.push(core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return move out;
+}
+
+// --- Server: accept one connection, serve N requests, then close ---
+// Hot path: reuses one read buffer, scans for \r\n\r\n, writes fixed response.
+// Zero allocations per request.
+
+fn _server_loop(listener: net.TcpListener, max_requests: Int, timeout: conc.Duration, stopped: conc.Arc<sync.AtomicBool>) nothrow -> Int {
+	val accept_timeout = conc.Duration(millis = 200);
+	val resp_bytes = _build_fixed_response();
+	var served = 0;
+
+	// Pre-allocate write buffer (reused every request).
+	var wbuf = io.buffer(resp_bytes.len);
+	var wi = 0;
+	while wi < resp_bytes.len {
+		io.buffer_write(&mut wbuf, wi, resp_bytes[wi]);
+		wi = wi + 1;
+	}
+
+	// Pre-allocate read buffer (reused every request).
+	val read_cap = 4096;
+	var rbuf = io.buffer(read_cap);
+
+	var running = true;
+	while running {
+		val flag = stopped.get();
+		if flag.load(sync.MemoryOrder::Acquire()) {
+			running = false;
+		}
+		if running {
+			if served >= max_requests {
+				running = false;
+			}
+		}
+		if running {
+			match listener.accept(accept_timeout) {
+				core.Result::Err(_) => {},
+				core.Result::Ok(conn) => {
+					var stream = move conn;
+					var conn_alive = true;
+					while conn_alive {
+						if served >= max_requests {
+							conn_alive = false;
+						}
+						if conn_alive {
+							// Read until we see \r\n\r\n.
+							// For this benchmark, request is always small (<256 bytes).
+							// We read once and scan — no looping needed.
+							match stream.read(&mut rbuf, timeout) {
+								core.Result::Err(_) => {
+									conn_alive = false;
+								},
+								core.Result::Ok(n) => {
+									if n == 0 {
+										conn_alive = false;
+									} else {
+										// Scan for \r\n\r\n — minimal check.
+										var found = false;
+										var si = 0;
+										val limit = n - 3;
+										while si < limit {
+											if io.buffer_read(&mut rbuf, si) == cast<Byte>(13) {
+												if io.buffer_read(&mut rbuf, si + 1) == cast<Byte>(10) {
+													if io.buffer_read(&mut rbuf, si + 2) == cast<Byte>(13) {
+														if io.buffer_read(&mut rbuf, si + 3) == cast<Byte>(10) {
+															found = true;
+															si = limit;
+														}
+													}
+												}
+											}
+											si = si + 1;
+										}
+										if found {
+											// Write fixed response (reuse pre-filled wbuf).
+											match stream.write(&wbuf, timeout) {
+												core.Result::Err(_) => {
+													conn_alive = false;
+												},
+												core.Result::Ok(_) => {
+													served = served + 1;
+												}
+											}
+										} else {
+											conn_alive = false;
+										}
+									}
+								}
+							}
+						}
+					}
+					val _ = stream.close(timeout);
+				}
+			}
+		}
+	}
+	return served;
+}
+
+// --- Client: one connection, send N requests, read N responses ---
+// Hot path: reuses one write buffer and one read buffer.
+// Zero allocations per request.
+
+fn _build_fixed_request() nothrow -> Array<Byte> {
+	val s = "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n";
+	var out: Array<Byte> = [];
+	var i = 0;
+	val n = s.byte_length();
+	while i < n {
+		out.push(core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return move out;
+}
+
+fn _run_client(port: Int, warmup_n: Int, measure_n: Int, timeout: conc.Duration) nothrow -> core.Result<Int, Int> {
+	val req_bytes = _build_fixed_request();
+	val total_n = warmup_n + measure_n;
+
+	// Pre-allocate write buffer.
+	var wbuf = io.buffer(req_bytes.len);
+	var wi = 0;
+	while wi < req_bytes.len {
+		io.buffer_write(&mut wbuf, wi, req_bytes[wi]);
+		wi = wi + 1;
+	}
+
+	// Pre-allocate read buffer.
+	val read_cap = 4096;
+	var rbuf = io.buffer(read_cap);
+
+	// Fixed response length: we know it's exactly 63 bytes.
+	// "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nok"
+	val resp_len = 63;
+
+	var addr = net.socket_addr("127.0.0.1", port);
+	match net.connect(&addr, timeout) {
+		core.Result::Err(_) => { return core.Result::Err(1); },
+		core.Result::Ok(conn) => {
+			var stream = move conn;
+
+			// Warmup
+			var i = 0;
+			while i < warmup_n {
+				match stream.write(&wbuf, timeout) {
+					core.Result::Err(_) => {
+						val _ = stream.close(timeout);
+						return core.Result::Err(10);
+					},
+					core.Result::Ok(_) => {}
+				}
+				// Read response — may come in multiple reads.
+				var got = 0;
+				while got < resp_len {
+					match stream.read(&mut rbuf, timeout) {
+						core.Result::Err(_) => {
+							val _ = stream.close(timeout);
+							return core.Result::Err(11);
+						},
+						core.Result::Ok(n) => {
+							if n == 0 {
+								val _ = stream.close(timeout);
+								return core.Result::Err(12);
+							}
+							got = got + n;
+						}
+					}
+				}
+				i = i + 1;
+			}
+
+			// Measured run
+			val start = time.now_monotonic();
+			var mi = 0;
+			while mi < measure_n {
+				match stream.write(&wbuf, timeout) {
+					core.Result::Err(_) => {
+						val _ = stream.close(timeout);
+						return core.Result::Err(20);
+					},
+					core.Result::Ok(_) => {}
+				}
+				var got = 0;
+				while got < resp_len {
+					match stream.read(&mut rbuf, timeout) {
+						core.Result::Err(_) => {
+							val _ = stream.close(timeout);
+							return core.Result::Err(21);
+						},
+						core.Result::Ok(n) => {
+							if n == 0 {
+								val _ = stream.close(timeout);
+								return core.Result::Err(22);
+							}
+							got = got + n;
+						}
+					}
+				}
+				mi = mi + 1;
+			}
+			val elapsed = time.elapsed_ms(&start);
+
+			val _ = stream.close(timeout);
+			return core.Result::Ok(elapsed);
+		}
+	}
+}
+
+// --- Wrappers for spawn (avoid match-in-lambda) ---
+
+fn _server_main(listener: net.TcpListener, max_requests: Int, timeout: conc.Duration, stopped: conc.Arc<sync.AtomicBool>) nothrow -> Int {
+	return _server_loop(move listener, max_requests, timeout, move stopped);
+}
+
+fn _client_main(port: Int, warmup_n: Int, measure_n: Int, timeout: conc.Duration) nothrow -> Int {
+	match _run_client(port, warmup_n, measure_n, timeout) {
+		core.Result::Ok(ms) => { return ms; },
+		core.Result::Err(code) => { return -(code); }
+	}
+}
+
+fn main() nothrow -> Int {
+	val timeout = conc.Duration(millis = 10000);
+	val warmup_n = 50;
+	val measure_n = 5000;
+	val total_n = warmup_n + measure_n;
+
+	var addr = net.socket_addr("127.0.0.1", 0);
+	match net.listen(&addr, timeout) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(lst) => {
+			var listener = move lst;
+			val port = listener.local_port();
+
+			var stopped = conc.arc(sync.atomic_bool(false));
+			var stopped2 = stopped.clone();
+
+			var sv = conc.spawn_cb(| | captures(move listener, copy total_n, copy timeout, move stopped2) => {
+				return _server_main(move listener, total_n, timeout, move stopped2);
+			});
+
+			var cv = conc.spawn_cb(| | captures(copy port, copy warmup_n, copy measure_n, copy timeout) => {
+				return _client_main(port, warmup_n, measure_n, timeout);
+			});
+
+			// Join client first — it has the timing result.
+			var elapsed_ms = 0;
+			match cv.join() {
+				core.Result::Err(_) => { return 2; },
+				core.Result::Ok(result) => {
+					if result < 0 {
+						val flag = stopped.get();
+						flag.store(true, sync.MemoryOrder::Release());
+						val _ = sv.join();
+						return 3;
+					}
+					elapsed_ms = result;
+				}
+			}
+
+			// Stop server and join.
+			val flag = stopped.get();
+			flag.store(true, sync.MemoryOrder::Release());
+			match sv.join() {
+				core.Result::Err(_) => { return 4; },
+				core.Result::Ok(_) => {}
+			}
+
+			// Print results.
+			var avg_us = 0;
+			if measure_n > 0 {
+				avg_us = (elapsed_ms * 1000) / measure_n;
+			}
+			var req_per_sec = 0;
+			if elapsed_ms > 0 {
+				req_per_sec = (measure_n * 1000) / elapsed_ms;
+			}
+			val line = "[bench] baseline-vt"
+				+ "  iters=" + fmt.format_int(measure_n)
+				+ "  total_ms=" + fmt.format_int(elapsed_ms)
+				+ "  avg_us=" + fmt.format_int(avg_us)
+				+ "  req_per_sec=" + fmt.format_int(req_per_sec);
+			thread.console_writeln(line);
+			return 0;
+		}
+	}
+}

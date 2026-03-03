@@ -443,7 +443,7 @@ fn _throws_internal_handler(req: &rest.Request, ctx: &mut rest.Context) -> rest.
 // Scenario: throws handler returns normally → Ok(Response)
 fn scenario_throws_handler_success() nothrow -> Int {
 	var app = _build_test_app();
-	match rest.add_throws_route(&mut app, "GET", "/thr", core.callback_throw2(_throws_ok_handler)) {
+	match rest_app.add_throws_route(&mut app, "GET", "/thr", core.callback_throw2(_throws_ok_handler)) {
 		core.Result::Err(_) => { return 1301; },
 		core.Result::Ok(_) => {}
 	}
@@ -462,7 +462,7 @@ fn scenario_throws_handler_success() nothrow -> Int {
 // Scenario: throws handler throws RestBadRequest → Err(400)
 fn scenario_throws_handler_bad_request() nothrow -> Int {
 	var app = _build_test_app();
-	match rest.add_throws_route(&mut app, "POST", "/thr", core.callback_throw2(_throws_bad_request_handler)) {
+	match rest_app.add_throws_route(&mut app, "POST", "/thr", core.callback_throw2(_throws_bad_request_handler)) {
 		core.Result::Err(_) => { return 1401; },
 		core.Result::Ok(_) => {}
 	}
@@ -482,7 +482,7 @@ fn scenario_throws_handler_bad_request() nothrow -> Int {
 // Scenario: throws handler throws RestUnauthorized → Err(401)
 fn scenario_throws_handler_unauthorized() nothrow -> Int {
 	var app = _build_test_app();
-	match rest.add_throws_route(&mut app, "GET", "/auth", core.callback_throw2(_throws_unauthorized_handler)) {
+	match rest_app.add_throws_route(&mut app, "GET", "/auth", core.callback_throw2(_throws_unauthorized_handler)) {
 		core.Result::Err(_) => { return 1501; },
 		core.Result::Ok(_) => {}
 	}
@@ -502,7 +502,7 @@ fn scenario_throws_handler_unauthorized() nothrow -> Int {
 // Scenario: throws handler throws RestInternal → Err(500)
 fn scenario_throws_handler_internal() nothrow -> Int {
 	var app = _build_test_app();
-	match rest.add_throws_route(&mut app, "GET", "/fail", core.callback_throw2(_throws_internal_handler)) {
+	match rest_app.add_throws_route(&mut app, "GET", "/fail", core.callback_throw2(_throws_internal_handler)) {
 		core.Result::Err(_) => { return 1601; },
 		core.Result::Ok(_) => {}
 	}
@@ -555,7 +555,7 @@ fn scenario_group_throws_route() nothrow -> Int {
 	match rest.add_group(&mut app, "/api") {
 		core.Result::Err(_) => { return 1901; },
 		core.Result::Ok(group) => {
-			match rest.add_group_throws_route(&mut app, &group, "GET", "/ok", core.callback_throw2(_throws_ok_handler)) {
+			match rest_app.add_group_throws_route(&mut app, &group, "GET", "/ok", core.callback_throw2(_throws_ok_handler)) {
 				core.Result::Err(_) => { return 1902; },
 				core.Result::Ok(_) => {}
 			}

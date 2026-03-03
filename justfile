@@ -72,6 +72,33 @@ rest-perf:
       --test-file packages/web-rest/tests/perf/perf_test.drift \
       --target-word-bits 64
 
+# REST probes: timeout sensitivity, read-call count, raw ping-pong.
+# Do not run under DRIFT_MEMCHECK or DRIFT_ASAN.
+rest-probe:
+    tools/drift_test_parallel_runner.sh run-one \
+      --src-root packages/web-jwt/src \
+      --src-root packages/web-rest/src \
+      --test-file packages/web-rest/tests/perf/probe_test.drift \
+      --target-word-bits 64
+
+# REST instrumented keep-alive: per-phase server + client timing.
+# Do not run under DRIFT_MEMCHECK or DRIFT_ASAN.
+rest-instrument:
+    tools/drift_test_parallel_runner.sh run-one \
+      --src-root packages/web-jwt/src \
+      --src-root packages/web-rest/src \
+      --test-file packages/web-rest/tests/perf/instrument_test.drift \
+      --target-word-bits 64
+
+# REST decomposition benchmarks: parse, dispatch, serialize isolation.
+# Do not run under DRIFT_MEMCHECK or DRIFT_ASAN.
+rest-decompose:
+    tools/drift_test_parallel_runner.sh run-one \
+      --src-root packages/web-jwt/src \
+      --src-root packages/web-rest/src \
+      --test-file packages/web-rest/tests/perf/decompose_test.drift \
+      --target-word-bits 64
+
 # Compile-only check for REST (no execution).
 rest-compile-check FILE="packages/web-rest/src/lib.drift":
     @tools/drift_test_parallel_runner.sh compile \

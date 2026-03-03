@@ -1,0 +1,747 @@
+module web.rest.tests.perf.probe_test
+
+import std.core as core;
+import std.io as io;
+import std.net as net;
+import std.concurrent as conc;
+import std.time as time;
+import std.format as fmt;
+import std.mem as mem;
+import lang.thread as thread;
+import web.rest as rest;
+import web.rest.app as rest_app;
+import web.rest.http as http;
+import web.rest.server as server;
+
+// Probes to isolate the ~10ms keep-alive read stall.
+// Run via `just rest-probe`.  Do NOT run under DRIFT_MEMCHECK.
+//
+// Probe 1: Timeout sensitivity — vary server read timeout.
+// Probe 2: Read-call count — count stream.read() calls per request.
+// Probe 3: Raw keep-alive — same shape, no HTTP parse/dispatch.
+//
+// Finding: TCP_NODELAY is NOT available in Drift's net module.
+// The only socket option set is SO_REUSEADDR on listener sockets.
+//
+// Key finding from runtime analysis:
+//   stream.read() on the MAIN THREAD (vt_current()==0) uses
+//   _park_main_thread_io() which polls at MAIN_THREAD_IO_POLL_QUANTUM_MS = 10ms.
+//   On a VT fiber, it uses epoll (immediate wakeup on data arrival).
+//   The benchmark CLIENT runs on the main thread, so its reads poll at 10ms.
+
+// --- Helpers ---
+
+fn _to_bytes(s: &String) nothrow -> Array<Byte> {
+	var out: Array<Byte> = [];
+	var i = 0;
+	val n = s.byte_length();
+	while i < n {
+		out.push(core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return move out;
+}
+
+fn _find_header_end(raw: &Array<Byte>) nothrow -> Int {
+	val len = raw.len;
+	if len < 4 { return -1; }
+	var i = 0;
+	val limit = len - 3;
+	while i < limit {
+		if raw[i] == cast<Byte>(13) {
+			if raw[i + 1] == cast<Byte>(10) {
+				if raw[i + 2] == cast<Byte>(13) {
+					if raw[i + 3] == cast<Byte>(10) {
+						return i + 4;
+					}
+				}
+			}
+		}
+		i = i + 1;
+	}
+	return -1;
+}
+
+fn _scan_cl(raw: &Array<Byte>, header_end: Int) nothrow -> Int {
+	val marker = "Content-Length: ";
+	val m_len = marker.byte_length();
+	if header_end < m_len { return -1; }
+	var i = 0;
+	val limit = header_end - m_len;
+	while i < limit {
+		var matched = true;
+		var j = 0;
+		while j < m_len {
+			if raw[i + j] != core.string_byte_at(marker, j) {
+				matched = false;
+				j = m_len;
+			} else {
+				j = j + 1;
+			}
+		}
+		if matched {
+			val val_start = i + m_len;
+			var val_end = val_start;
+			var scanning = true;
+			while scanning {
+				if val_end >= header_end { scanning = false; }
+				else {
+					if raw[val_end] == cast<Byte>(13) { scanning = false; }
+					else { val_end = val_end + 1; }
+				}
+			}
+			var result = 0;
+			var k = val_start;
+			while k < val_end {
+				val d = cast<Int>(raw[k]) - 48;
+				if d < 0 { return -1; }
+				if d > 9 { return -1; }
+				result = result * 10 + d;
+				k = k + 1;
+			}
+			return result;
+		}
+		i = i + 1;
+	}
+	return -1;
+}
+
+// Client write helper — same as perf_test.drift.
+fn _write_raw(stream: &net.TcpStream, s: &String, timeout: conc.Duration) nothrow -> core.Result<Void, Int> {
+	val bytes = _to_bytes(s);
+	var wbuf = io.buffer(bytes.len);
+	var i = 0;
+	while i < bytes.len {
+		io.buffer_write(&mut wbuf, i, bytes[i]);
+		i = i + 1;
+	}
+	match stream.write(&wbuf, timeout) {
+		core.Result::Err(_) => { return core.Result::Err(1); },
+		core.Result::Ok(_) => { return core.Result::Ok(core.void_value()); }
+	}
+}
+
+// Client read helper — same as perf_test.drift.
+fn _read_one_response(stream: &net.TcpStream, buf: &mut Array<Byte>, timeout: conc.Duration) nothrow -> core.Result<Void, Int> {
+	var header_end = -1;
+	var content_length = -1;
+	var done = false;
+	while !done {
+		if header_end == -1 {
+			header_end = _find_header_end(buf);
+			if header_end != -1 {
+				content_length = _scan_cl(buf, header_end);
+			}
+		}
+		if header_end != -1 {
+			if content_length <= 0 { done = true; }
+			else {
+				val body_available = buf.len - header_end;
+				if body_available >= content_length { done = true; }
+			}
+		}
+		if !done {
+			var rbuf = io.buffer(4096);
+			match stream.read(&mut rbuf, timeout) {
+				core.Result::Err(_) => { return core.Result::Err(1); },
+				core.Result::Ok(n) => {
+					if n == 0 { return core.Result::Err(2); }
+					var j = 0;
+					while j < n {
+						buf.push(io.buffer_read(&mut rbuf, j));
+						j = j + 1;
+					}
+				}
+			}
+		}
+	}
+	var total = header_end;
+	if content_length > 0 { total = header_end + content_length; }
+	if total < buf.len {
+		var new_buf: Array<Byte> = [];
+		var k = total;
+		while k < buf.len {
+			new_buf.push(buf[k]);
+			k = k + 1;
+		}
+		*buf = move new_buf;
+	} else {
+		var empty: Array<Byte> = [];
+		*buf = move empty;
+	}
+	return core.Result::Ok(core.void_value());
+}
+
+fn _health_handler(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	return core.Result::Ok(rest.json_response(200, "{\"ok\":true}"));
+}
+
+// ============================================================
+// Probe 1: Timeout sensitivity
+// ============================================================
+// Vary the server's read_timeout for read_one_request.
+// Uses keep-alive on a single connection (same shape as the real server).
+// Server runs on VT fiber (epoll), client on main thread (10ms poll).
+// Reports server read_avg_us and client read_avg_us per timeout value.
+
+fn _p1_server(a: rest.App, listener: net.TcpListener, read_timeout: conc.Duration, write_timeout: conc.Duration, n: Int) nothrow -> Int {
+	val accept_timeout = conc.Duration(millis = 5000);
+	match listener.accept(accept_timeout) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(conn) => {
+			var stream = move conn;
+			var conn_buf: Array<Byte> = [];
+			var served = 0;
+			var event_counter = 0;
+			var read_accum = 0;
+			var keep_going = true;
+			while keep_going {
+				if served >= n { keep_going = false; }
+				if keep_going {
+					event_counter = event_counter + 1;
+					val eid = "evt-" + fmt.format_int(event_counter);
+					val t0 = time.now_monotonic();
+					match http.read_one_request(&stream, &mut conn_buf, read_timeout) {
+						core.Result::Err(e) => {
+							read_accum = read_accum + time.elapsed_ms(&t0);
+							// Timeout or parse error — send error, close.
+							val err_resp = rest.error_envelope(&e, &eid);
+							val _ = http.write_response(&stream, &err_resp, true, write_timeout);
+							keep_going = false;
+						},
+						core.Result::Ok(parsed) => {
+							read_accum = read_accum + time.elapsed_ms(&t0);
+							var p = move parsed;
+							val conn_close_flag = p.conn_close == true;
+							var mut_req = mem.replace(&mut p.req, rest.new_request("", ""));
+							var ctx = rest.new_context();
+							var resp = rest.json_response(500, "");
+							match rest.dispatch(&a, &mut mut_req, &mut ctx) {
+								core.Result::Ok(r) => { resp = move r; },
+								core.Result::Err(e) => { resp = rest.error_envelope(&e, &eid); }
+							}
+							match http.write_response(&stream, &resp, conn_close_flag, write_timeout) {
+								core.Result::Err(_) => { keep_going = false; },
+								core.Result::Ok(_) => {}
+							}
+							served = served + 1;
+							if conn_close_flag { keep_going = false; }
+						}
+					}
+				}
+			}
+			var read_avg = 0;
+			if served > 0 {
+				read_avg = (read_accum * 1000) / served;
+			}
+			val line = "  [server] read_avg_us=" + fmt.format_int(read_avg)
+				+ "  served=" + fmt.format_int(served);
+			thread.console_writeln(line);
+			val _ = stream.close(write_timeout);
+			return 0;
+		}
+	}
+}
+
+fn _run_p1_server(a: rest.App, listener: net.TcpListener, read_timeout: conc.Duration, write_timeout: conc.Duration, n: Int) nothrow -> Int {
+	return _p1_server(move a, move listener, read_timeout, write_timeout, n);
+}
+
+// Probe 1 client: send n requests on a keep-alive connection.
+// If write or read fails (server closed), stop early and report partial results.
+// Runs on VT fiber to avoid the 10ms main-thread poll quantum confounding
+// the server read_timeout measurement.
+fn _p1_client_inner(port: Int, n: Int, timeout: conc.Duration) nothrow -> Int {
+	val req = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
+	var addr = net.socket_addr("127.0.0.1", port);
+	match net.connect(&addr, timeout) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(conn) => {
+			var stream = move conn;
+			var read_buf: Array<Byte> = [];
+			var client_read_accum = 0;
+			var completed = 0;
+			var keep_going = true;
+			var i = 0;
+			while keep_going {
+				if i >= n { keep_going = false; }
+				if keep_going {
+					match _write_raw(&stream, &req, timeout) {
+						core.Result::Err(_) => { keep_going = false; },
+						core.Result::Ok(_) => {
+							val tr = time.now_monotonic();
+							match _read_one_response(&stream, &mut read_buf, timeout) {
+								core.Result::Err(_) => { keep_going = false; },
+								core.Result::Ok(_) => {
+									client_read_accum = client_read_accum + time.elapsed_ms(&tr);
+									completed = completed + 1;
+								}
+							}
+						}
+					}
+					i = i + 1;
+				}
+			}
+			val _ = stream.close(timeout);
+			var cr_avg = 0;
+			if completed > 0 {
+				cr_avg = (client_read_accum * 1000) / completed;
+			}
+			val line = "  [client] read_avg_us=" + fmt.format_int(cr_avg)
+				+ "  completed=" + fmt.format_int(completed) + "/" + fmt.format_int(n);
+			thread.console_writeln(line);
+			return 0;
+		}
+	}
+}
+
+fn _run_p1_client(port: Int, n: Int, timeout: conc.Duration) nothrow -> Int {
+	return _p1_client_inner(port, n, timeout);
+}
+
+fn probe1_run(label: String, read_timeout_ms: Int) nothrow -> Int {
+	thread.console_writeln("  --- read_timeout=" + fmt.format_int(read_timeout_ms) + "ms ---");
+	val timeout = conc.Duration(millis = 5000);
+	val read_timeout = conc.Duration(millis = read_timeout_ms);
+	val n = 100;
+
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+				core.Result::Err(_) => { return 2; },
+				core.Result::Ok(_) => {}
+			}
+			match server.listen_app(&app, timeout) {
+				core.Result::Err(_) => { return 3; },
+				core.Result::Ok(lst) => {
+					var listener = move lst;
+					val port = listener.local_port();
+					// Server on VT fiber (epoll path).
+					var sv = conc.spawn_cb(| | captures(move app, move listener, copy read_timeout, copy timeout, copy n) => {
+						return _run_p1_server(move app, move listener, read_timeout, timeout, n);
+					});
+					// Client ALSO on VT fiber — we want to measure server
+					// read_timeout sensitivity without the client's 10ms poll
+					// quantum confounding results.
+					var cl = conc.spawn_cb(| | captures(copy port, copy n, copy timeout) => {
+						return _run_p1_client(port, n, timeout);
+					});
+					// Join client first (it finishes before server or at the same time).
+					var cl_ok = true;
+					match cl.join() {
+						core.Result::Err(_) => { cl_ok = false; },
+						core.Result::Ok(code) => { if code != 0 { cl_ok = false; } }
+					}
+					match sv.join() {
+						core.Result::Err(_) => { return 50; },
+						core.Result::Ok(exit_code) => {
+							if exit_code != 0 { return 51; }
+						}
+					}
+					if !cl_ok { return 60; }
+					return 0;
+				}
+			}
+		}
+	}
+}
+
+// ============================================================
+// Probe 2: Read-call count per request
+// ============================================================
+// Custom read function that counts stream.read() calls and times the first one.
+// Mirrors read_one_request logic for a no-body GET.
+
+fn _p2_instrumented_read(stream: &net.TcpStream, conn_buf: &mut Array<Byte>, timeout: conc.Duration, read_count_out: &mut Int, first_read_ms_out: &mut Int) nothrow -> core.Result<Void, Int> {
+	var read_count = 0;
+	var first_read_ms = 0;
+	var header_end_pos = _find_header_end(conn_buf);
+	var have_full = false;
+	if header_end_pos != -1 { have_full = true; }
+
+	while !have_full {
+		var buf = io.buffer(4096);
+		val t0 = time.now_monotonic();
+		match stream.read(&mut buf, timeout) {
+			core.Result::Err(_) => {
+				*read_count_out = read_count;
+				*first_read_ms_out = first_read_ms;
+				return core.Result::Err(1);
+			},
+			core.Result::Ok(n) => {
+				val elapsed = time.elapsed_ms(&t0);
+				read_count = read_count + 1;
+				if read_count == 1 {
+					first_read_ms = elapsed;
+				}
+				if n == 0 {
+					*read_count_out = read_count;
+					*first_read_ms_out = first_read_ms;
+					return core.Result::Err(2);
+				}
+				var j = 0;
+				while j < n {
+					conn_buf.push(io.buffer_read(&mut buf, j));
+					j = j + 1;
+				}
+				header_end_pos = _find_header_end(conn_buf);
+				if header_end_pos != -1 { have_full = true; }
+			}
+		}
+	}
+	// No body expected for GET — consume up to header_end.
+	if header_end_pos < conn_buf.len {
+		conn_buf.remove_range(0, header_end_pos);
+	} else {
+		conn_buf.clear();
+	}
+	*read_count_out = read_count;
+	*first_read_ms_out = first_read_ms;
+	return core.Result::Ok(core.void_value());
+}
+
+// Pre-built response bytes for probe 2 server.
+fn _p2_build_response() nothrow -> Array<Byte> {
+	val resp = rest.json_response(200, "{\"ok\":true}");
+	val conn_close = false;
+	return http.serialize_response(&resp, conn_close);
+}
+
+fn _p2_server(listener: net.TcpListener, warmup_n: Int, measure_n: Int, timeout: conc.Duration) nothrow -> Int {
+	val total_n = warmup_n + measure_n;
+	val resp_bytes = _p2_build_response();
+	var wbuf = io.buffer(resp_bytes.len);
+	var wi = 0;
+	while wi < resp_bytes.len {
+		io.buffer_write(&mut wbuf, wi, resp_bytes[wi]);
+		wi = wi + 1;
+	}
+	val accept_timeout = conc.Duration(millis = 5000);
+	match listener.accept(accept_timeout) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(conn) => {
+			var stream = move conn;
+			var conn_buf: Array<Byte> = [];
+			var served = 0;
+			var total_read_count = 0;
+			var total_first_read_ms = 0;
+			var keep_going = true;
+			while keep_going {
+				if served >= total_n { keep_going = false; }
+				if keep_going {
+					var rc = 0;
+					var frm = 0;
+					match _p2_instrumented_read(&stream, &mut conn_buf, timeout, &mut rc, &mut frm) {
+						core.Result::Err(_) => { keep_going = false; },
+						core.Result::Ok(_) => {
+							// Write response.
+							match stream.write(&wbuf, timeout) {
+								core.Result::Err(_) => { keep_going = false; },
+								core.Result::Ok(_) => {
+									if served >= warmup_n {
+										total_read_count = total_read_count + rc;
+										total_first_read_ms = total_first_read_ms + frm;
+									}
+									served = served + 1;
+								}
+							}
+						}
+					}
+				}
+			}
+			val measured = served - warmup_n;
+			var avg_reads = 0;
+			var avg_first_read_us = 0;
+			if measured > 0 {
+				avg_reads = total_read_count / measured;
+				avg_first_read_us = (total_first_read_ms * 1000) / measured;
+			}
+			val line = "  [server] avg_reads_per_req=" + fmt.format_int(avg_reads)
+				+ "  first_read_avg_us=" + fmt.format_int(avg_first_read_us)
+				+ "  total_first_read_ms=" + fmt.format_int(total_first_read_ms)
+				+ "  measured=" + fmt.format_int(measured);
+			thread.console_writeln(line);
+			val _ = stream.close(timeout);
+			return 0;
+		}
+	}
+}
+
+fn _run_p2_server(listener: net.TcpListener, warmup_n: Int, measure_n: Int, timeout: conc.Duration) nothrow -> Int {
+	return _p2_server(move listener, warmup_n, measure_n, timeout);
+}
+
+fn probe2_run() nothrow -> Int {
+	val timeout = conc.Duration(millis = 5000);
+	val warmup_n = 10;
+	val measure_n = 500;
+	var addr = net.socket_addr("127.0.0.1", 0);
+	match net.listen(&addr, timeout) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(lst) => {
+			var listener = move lst;
+			val port = listener.local_port();
+			var sv = conc.spawn_cb(| | captures(move listener, copy warmup_n, copy measure_n, copy timeout) => {
+				return _run_p2_server(move listener, warmup_n, measure_n, timeout);
+			});
+			val req = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
+			var conn_addr = net.socket_addr("127.0.0.1", port);
+			match net.connect(&conn_addr, timeout) {
+				core.Result::Err(_) => { val _ = sv.join(); return 2; },
+				core.Result::Ok(conn) => {
+					var stream = move conn;
+					var read_buf: Array<Byte> = [];
+					val total_n = warmup_n + measure_n;
+					// Warmup + measured
+					var client_read_accum = 0;
+					var i = 0;
+					while i < total_n {
+						match _write_raw(&stream, &req, timeout) {
+							core.Result::Err(_) => { val _ = stream.close(timeout); val _ = sv.join(); return 10; },
+							core.Result::Ok(_) => {}
+						}
+						val tr = time.now_monotonic();
+						match _read_one_response(&stream, &mut read_buf, timeout) {
+							core.Result::Err(_) => { val _ = stream.close(timeout); val _ = sv.join(); return 11; },
+							core.Result::Ok(_) => {}
+						}
+						if i >= warmup_n {
+							client_read_accum = client_read_accum + time.elapsed_ms(&tr);
+						}
+						i = i + 1;
+					}
+					val _ = stream.close(timeout);
+					match sv.join() {
+						core.Result::Err(_) => { return 20; },
+						core.Result::Ok(exit_code) => {
+							if exit_code != 0 { return 21; }
+						}
+					}
+					var cr_avg = 0;
+					if measure_n > 0 {
+						cr_avg = (client_read_accum * 1000) / measure_n;
+					}
+					val line = "  [client] read_avg_us=" + fmt.format_int(cr_avg);
+					thread.console_writeln(line);
+					return 0;
+				}
+			}
+		}
+	}
+}
+
+// ============================================================
+// Probe 3: Raw keep-alive ping-pong (no HTTP parse/dispatch)
+// ============================================================
+// Server: read (new buffer per call), scan for \r\n\r\n, write canned response.
+// Client: identical to REST benchmark (same _write_raw, _read_one_response).
+// Isolates whether the stall is in TCP/VT interaction itself.
+
+fn _p3_server(listener: net.TcpListener, warmup_n: Int, measure_n: Int, timeout: conc.Duration) nothrow -> Int {
+	val total_n = warmup_n + measure_n;
+	// Pre-build response.
+	val resp_str = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: keep-alive\r\n\r\n{\"ok\":true}";
+	val resp_bytes = _to_bytes(&resp_str);
+	var wbuf = io.buffer(resp_bytes.len);
+	var wi = 0;
+	while wi < resp_bytes.len {
+		io.buffer_write(&mut wbuf, wi, resp_bytes[wi]);
+		wi = wi + 1;
+	}
+	val accept_timeout = conc.Duration(millis = 5000);
+	match listener.accept(accept_timeout) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(conn) => {
+			var stream = move conn;
+			var served = 0;
+			var read_accum = 0;
+			var write_accum = 0;
+			var keep_going = true;
+			while keep_going {
+				if served >= total_n { keep_going = false; }
+				if keep_going {
+					// Read: new buffer per call (matches read_one_request pattern).
+					var rbuf = io.buffer(4096);
+					val t0 = time.now_monotonic();
+					match stream.read(&mut rbuf, timeout) {
+						core.Result::Err(_) => { keep_going = false; },
+						core.Result::Ok(n) => {
+							val read_ms = time.elapsed_ms(&t0);
+							if n == 0 {
+								keep_going = false;
+							} else {
+								// Minimal scan for \r\n\r\n.
+								var found = false;
+								var si = 0;
+								val limit = n - 3;
+								while si < limit {
+									if io.buffer_read(&mut rbuf, si) == cast<Byte>(13) {
+										if io.buffer_read(&mut rbuf, si + 1) == cast<Byte>(10) {
+											if io.buffer_read(&mut rbuf, si + 2) == cast<Byte>(13) {
+												if io.buffer_read(&mut rbuf, si + 3) == cast<Byte>(10) {
+													found = true;
+													si = limit;
+												}
+											}
+										}
+									}
+									si = si + 1;
+								}
+								if found {
+									val tw = time.now_monotonic();
+									match stream.write(&wbuf, timeout) {
+										core.Result::Err(_) => { keep_going = false; },
+										core.Result::Ok(_) => {
+											if served >= warmup_n {
+												read_accum = read_accum + read_ms;
+												write_accum = write_accum + time.elapsed_ms(&tw);
+											}
+											served = served + 1;
+										}
+									}
+								} else {
+									keep_going = false;
+								}
+							}
+						}
+					}
+				}
+			}
+			val measured = served - warmup_n;
+			var read_avg = 0;
+			var write_avg = 0;
+			if measured > 0 {
+				read_avg = (read_accum * 1000) / measured;
+				write_avg = (write_accum * 1000) / measured;
+			}
+			val line = "  [server] read_avg_us=" + fmt.format_int(read_avg)
+				+ "  write_avg_us=" + fmt.format_int(write_avg)
+				+ "  served=" + fmt.format_int(measured);
+			thread.console_writeln(line);
+			val _ = stream.close(timeout);
+			return 0;
+		}
+	}
+}
+
+fn _run_p3_server(listener: net.TcpListener, warmup_n: Int, measure_n: Int, timeout: conc.Duration) nothrow -> Int {
+	return _p3_server(move listener, warmup_n, measure_n, timeout);
+}
+
+fn probe3_run() nothrow -> Int {
+	val timeout = conc.Duration(millis = 5000);
+	val warmup_n = 10;
+	val measure_n = 500;
+	var addr = net.socket_addr("127.0.0.1", 0);
+	match net.listen(&addr, timeout) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(lst) => {
+			var listener = move lst;
+			val port = listener.local_port();
+			var sv = conc.spawn_cb(| | captures(move listener, copy warmup_n, copy measure_n, copy timeout) => {
+				return _run_p3_server(move listener, warmup_n, measure_n, timeout);
+			});
+			val req = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
+			var conn_addr = net.socket_addr("127.0.0.1", port);
+			match net.connect(&conn_addr, timeout) {
+				core.Result::Err(_) => { val _ = sv.join(); return 2; },
+				core.Result::Ok(conn) => {
+					var stream = move conn;
+					var read_buf: Array<Byte> = [];
+					val total_n = warmup_n + measure_n;
+					var client_read_accum = 0;
+					var i = 0;
+					while i < total_n {
+						match _write_raw(&stream, &req, timeout) {
+							core.Result::Err(_) => { val _ = stream.close(timeout); val _ = sv.join(); return 10; },
+							core.Result::Ok(_) => {}
+						}
+						val tr = time.now_monotonic();
+						match _read_one_response(&stream, &mut read_buf, timeout) {
+							core.Result::Err(_) => { val _ = stream.close(timeout); val _ = sv.join(); return 11; },
+							core.Result::Ok(_) => {}
+						}
+						if i >= warmup_n {
+							client_read_accum = client_read_accum + time.elapsed_ms(&tr);
+						}
+						i = i + 1;
+					}
+					val _ = stream.close(timeout);
+					match sv.join() {
+						core.Result::Err(_) => { return 20; },
+						core.Result::Ok(exit_code) => {
+							if exit_code != 0 { return 21; }
+						}
+					}
+					var cr_avg = 0;
+					if measure_n > 0 {
+						cr_avg = (client_read_accum * 1000) / measure_n;
+					}
+					val line = "  [client] read_avg_us=" + fmt.format_int(cr_avg);
+					thread.console_writeln(line);
+					return 0;
+				}
+			}
+		}
+	}
+}
+
+// --- Main ---
+
+fn main() nothrow -> Int {
+	// Probe 1: timeout sensitivity.
+	// Skipping 1ms: SIGPIPE risk (runtime uses raw write(), no MSG_NOSIGNAL).
+	// With both sides on VT fibers (epoll), this tests whether the server
+	// read_timeout actually governs the per-request latency.
+	thread.console_writeln("=== Probe 1: Timeout Sensitivity ===");
+	val r1a = probe1_run("5ms", 5);
+	if r1a != 0 {
+		val line = "  [FAIL] 5ms timeout: code=" + fmt.format_int(r1a);
+		thread.console_writeln(line);
+	}
+	val r1b = probe1_run("10ms", 10);
+	if r1b != 0 {
+		val line = "  [FAIL] 10ms timeout: code=" + fmt.format_int(r1b);
+		thread.console_writeln(line);
+	}
+	val r1c = probe1_run("100ms", 100);
+	if r1c != 0 {
+		val line = "  [FAIL] 100ms timeout: code=" + fmt.format_int(r1c);
+		thread.console_writeln(line);
+	}
+	val r1d = probe1_run("5000ms", 5000);
+	if r1d != 0 {
+		val line = "  [FAIL] 5000ms timeout: code=" + fmt.format_int(r1d);
+		thread.console_writeln(line);
+	}
+
+	// Probe 2: read-call count
+	thread.console_writeln("=== Probe 2: Read-Call Count ===");
+	val r2 = probe2_run();
+	if r2 != 0 {
+		val line = "  [FAIL] code=" + fmt.format_int(r2);
+		thread.console_writeln(line);
+		return r2;
+	}
+
+	// Probe 3: raw keep-alive
+	thread.console_writeln("=== Probe 3: Raw Keep-Alive (no HTTP parse/dispatch) ===");
+	val r3 = probe3_run();
+	if r3 != 0 {
+		val line = "  [FAIL] code=" + fmt.format_int(r3);
+		thread.console_writeln(line);
+		return r3;
+	}
+
+	// Probe 4: TCP_NODELAY
+	thread.console_writeln("=== Probe 4: TCP_NODELAY ===");
+	thread.console_writeln("  NOT AVAILABLE - Drift net module has no socket option API.");
+	thread.console_writeln("  Only SO_REUSEADDR is set internally on listener sockets.");
+	thread.console_writeln("  No setsockopt/TCP_NODELAY exposed to user code.");
+
+	return 0;
+}
