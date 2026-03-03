@@ -73,6 +73,13 @@
   - added perf baselines and decomposition tests under `packages/web-rest/tests/perf/`
   - corrected benchmark methodology to avoid main-thread I/O polling distortion by running client/server on virtual threads
   - established credible keep-alive baseline throughput for `web.rest`
+- Added same-hardware comparison baselines against Go:
+  - raw TCP control
+  - minimal `net/http` keep-alive health path
+- Re-ran Drift baselines with optimized toolchain/runtime support:
+  - optimized raw TCP baseline improved materially over dev build
+  - optimized `web.rest` keep-alive health benchmark outperformed Go `net/http` on the same machine/workload
+  - framework overhead was pinned to a small per-request cost above the Drift raw TCP floor
 - Pinned and documented the performance false alarm root cause:
   - main-thread socket I/O in current Drift runtime polls at a 10ms quantum
   - reports added under `work/rest/` for VT loopback baseline, allocation bottleneck analysis, and main-thread poll behavior

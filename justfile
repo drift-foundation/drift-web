@@ -63,15 +63,20 @@ rest-stress:
       --test-file packages/web-rest/tests/stress/stress_test.drift \
       --target-word-bits 64
 
-# REST perf benchmarks (separate gate, not in default test target).
+# Performance benchmarks: Go + Drift side-by-side (optimized).
+# Runs Go raw-TCP, Go net/http, Drift raw-TCP, Drift REST.
 # Do not run under DRIFT_MEMCHECK or DRIFT_ASAN.
-rest-perf:
-    tools/drift_test_parallel_runner.sh run-one \
+perf-test:
+    @echo "=== Go baselines ==="
+    @go run work/rest/bench/go_raw_tcp_bench.go
+    @go run work/rest/bench/go_health_bench.go
+    @echo ""
+    @echo "=== Drift (optimized) ==="
+    @DRIFT_OPTIMIZED=1 tools/drift_test_parallel_runner.sh run-one \
       --src-root packages/web-jwt/src \
       --src-root packages/web-rest/src \
       --test-file packages/web-rest/tests/perf/perf_test.drift \
       --target-word-bits 64
-
 # REST probes: timeout sensitivity, read-call count, raw ping-pong.
 # Do not run under DRIFT_MEMCHECK or DRIFT_ASAN.
 rest-probe:

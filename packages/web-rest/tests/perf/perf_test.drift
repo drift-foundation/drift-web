@@ -4,6 +4,7 @@ import std.core as core;
 import std.io as io;
 import std.net as net;
 import std.concurrent as conc;
+import std.sync as sync;
 import std.time as time;
 import std.format as fmt;
 import lang.thread as thread;
@@ -230,21 +231,257 @@ fn _print_bench(name: String, iters: Int, total_ms: Int) nothrow -> Void {
 	return core.void_value();
 }
 
-// --- Handler ---
+// --- Raw TCP benchmark (stdlib/runtime floor) ---
+// No REST framework, no strings, no allocations in hot path.
+// Raw TCP loopback: read fixed request -> write fixed response.
+
+fn _build_fixed_response() nothrow -> Array<Byte> {
+	val s = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nok";
+	var out: Array<Byte> = [];
+	var i = 0;
+	val n = s.byte_length();
+	while i < n {
+		out.push(core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return move out;
+}
+
+fn _build_fixed_request() nothrow -> Array<Byte> {
+	val s = "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n";
+	var out: Array<Byte> = [];
+	var i = 0;
+	val n = s.byte_length();
+	while i < n {
+		out.push(core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return move out;
+}
+
+fn _vt_server_loop(listener: net.TcpListener, max_requests: Int, timeout: conc.Duration, stopped: conc.Arc<sync.AtomicBool>) nothrow -> Int {
+	val accept_timeout = conc.Duration(millis = 200);
+	val resp_bytes = _build_fixed_response();
+	var served = 0;
+
+	var wbuf = io.buffer(resp_bytes.len);
+	var wi = 0;
+	while wi < resp_bytes.len {
+		io.buffer_write(&mut wbuf, wi, resp_bytes[wi]);
+		wi = wi + 1;
+	}
+
+	val read_cap = 4096;
+	var rbuf = io.buffer(read_cap);
+
+	var running = true;
+	while running {
+		val flag = stopped.get();
+		if flag.load(sync.MemoryOrder::Acquire()) {
+			running = false;
+		}
+		if running {
+			if served >= max_requests {
+				running = false;
+			}
+		}
+		if running {
+			match listener.accept(accept_timeout) {
+				core.Result::Err(_) => {},
+				core.Result::Ok(conn) => {
+					var stream = move conn;
+					var conn_alive = true;
+					while conn_alive {
+						if served >= max_requests {
+							conn_alive = false;
+						}
+						if conn_alive {
+							match stream.read(&mut rbuf, timeout) {
+								core.Result::Err(_) => {
+									conn_alive = false;
+								},
+								core.Result::Ok(n) => {
+									if n == 0 {
+										conn_alive = false;
+									} else {
+										var found = false;
+										var si = 0;
+										val limit = n - 3;
+										while si < limit {
+											if io.buffer_read(&mut rbuf, si) == cast<Byte>(13) {
+												if io.buffer_read(&mut rbuf, si + 1) == cast<Byte>(10) {
+													if io.buffer_read(&mut rbuf, si + 2) == cast<Byte>(13) {
+														if io.buffer_read(&mut rbuf, si + 3) == cast<Byte>(10) {
+															found = true;
+															si = limit;
+														}
+													}
+												}
+											}
+											si = si + 1;
+										}
+										if found {
+											match stream.write(&wbuf, timeout) {
+												core.Result::Err(_) => {
+													conn_alive = false;
+												},
+												core.Result::Ok(_) => {
+													served = served + 1;
+												}
+											}
+										} else {
+											conn_alive = false;
+										}
+									}
+								}
+							}
+						}
+					}
+					val _ = stream.close(timeout);
+				}
+			}
+		}
+	}
+	return served;
+}
+
+fn _vt_client_loop(port: Int, warmup_n: Int, measure_n: Int, timeout: conc.Duration) nothrow -> Int {
+	val req_bytes = _build_fixed_request();
+	var wbuf = io.buffer(req_bytes.len);
+	var wi = 0;
+	while wi < req_bytes.len {
+		io.buffer_write(&mut wbuf, wi, req_bytes[wi]);
+		wi = wi + 1;
+	}
+
+	val read_cap = 4096;
+	var rbuf = io.buffer(read_cap);
+	val resp_len = 63;
+
+	var addr = net.socket_addr("127.0.0.1", port);
+	match net.connect(&addr, timeout) {
+		core.Result::Err(_) => { return -1; },
+		core.Result::Ok(conn) => {
+			var stream = move conn;
+
+			// Warmup
+			var i = 0;
+			while i < warmup_n {
+				match stream.write(&wbuf, timeout) {
+					core.Result::Err(_) => { val _ = stream.close(timeout); return -10; },
+					core.Result::Ok(_) => {}
+				}
+				var got = 0;
+				while got < resp_len {
+					match stream.read(&mut rbuf, timeout) {
+						core.Result::Err(_) => { val _ = stream.close(timeout); return -11; },
+						core.Result::Ok(n) => {
+							if n == 0 { val _ = stream.close(timeout); return -12; }
+							got = got + n;
+						}
+					}
+				}
+				i = i + 1;
+			}
+
+			// Measured run
+			val start = time.now_monotonic();
+			var mi = 0;
+			while mi < measure_n {
+				match stream.write(&wbuf, timeout) {
+					core.Result::Err(_) => { val _ = stream.close(timeout); return -20; },
+					core.Result::Ok(_) => {}
+				}
+				var got = 0;
+				while got < resp_len {
+					match stream.read(&mut rbuf, timeout) {
+						core.Result::Err(_) => { val _ = stream.close(timeout); return -21; },
+						core.Result::Ok(n) => {
+							if n == 0 { val _ = stream.close(timeout); return -22; }
+							got = got + n;
+						}
+					}
+				}
+				mi = mi + 1;
+			}
+			val elapsed = time.elapsed_ms(&start);
+			val _ = stream.close(timeout);
+			return elapsed;
+		}
+	}
+}
+
+// Named wrappers for spawn (avoid match-in-lambda).
+fn _run_vt_server(listener: net.TcpListener, max_requests: Int, timeout: conc.Duration, stopped: conc.Arc<sync.AtomicBool>) nothrow -> Int {
+	return _vt_server_loop(move listener, max_requests, timeout, move stopped);
+}
+
+fn _run_vt_client(port: Int, warmup_n: Int, measure_n: Int, timeout: conc.Duration) nothrow -> Int {
+	return _vt_client_loop(port, warmup_n, measure_n, timeout);
+}
+
+// bench_baseline_vt: raw TCP loopback, no framework.
+// Measures: VT scheduler + TCP stack + epoll overhead.
+fn bench_baseline_vt() nothrow -> core.Result<Int, Int> {
+	val timeout = conc.Duration(millis = 10000);
+	val warmup_n = 50;
+	val measure_n = 5000;
+	val total_n = warmup_n + measure_n;
+
+	var addr = net.socket_addr("127.0.0.1", 0);
+	match net.listen(&addr, timeout) {
+		core.Result::Err(_) => { return core.Result::Err(1); },
+		core.Result::Ok(lst) => {
+			var listener = move lst;
+			val port = listener.local_port();
+
+			var stopped = conc.arc(sync.atomic_bool(false));
+			var stopped2 = stopped.clone();
+
+			var sv = conc.spawn_cb(| | captures(move listener, copy total_n, copy timeout, move stopped2) => {
+				return _run_vt_server(move listener, total_n, timeout, move stopped2);
+			});
+
+			var cv = conc.spawn_cb(| | captures(copy port, copy warmup_n, copy measure_n, copy timeout) => {
+				return _run_vt_client(port, warmup_n, measure_n, timeout);
+			});
+
+			var elapsed_ms = 0;
+			match cv.join() {
+				core.Result::Err(_) => { return core.Result::Err(2); },
+				core.Result::Ok(result) => {
+					if result < 0 {
+						val flag = stopped.get();
+						flag.store(true, sync.MemoryOrder::Release());
+						val _ = sv.join();
+						return core.Result::Err(3);
+					}
+					elapsed_ms = result;
+				}
+			}
+
+			val flag = stopped.get();
+			flag.store(true, sync.MemoryOrder::Release());
+			match sv.join() {
+				core.Result::Err(_) => { return core.Result::Err(4); },
+				core.Result::Ok(_) => {}
+			}
+
+			return core.Result::Ok(elapsed_ms);
+		}
+	}
+}
+
+// --- REST benchmark (framework overhead on top of raw TCP) ---
 
 fn _health_handler(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
 	return core.Result::Ok(rest.json_response(200, "{\"ok\":true}"));
 }
 
-// --- Benchmarks ---
-// Each benchmark returns Ok(elapsed_ms) on success, Err(error_code) on failure.
-// No I/O inside benchmark functions — caller prints results.
-// All benchmarks use keep-alive: one TCP connection for all requests.
-
 // Client loop: runs on a VT fiber (epoll path) to avoid the main-thread
 // 10ms poll quantum. Returns elapsed_ms for measured portion, or negative
 // error code on failure.
-fn _client_loop(port: Int, warmup_n: Int, measure_n: Int, timeout: conc.Duration) nothrow -> Int {
+fn _rest_client_loop(port: Int, warmup_n: Int, measure_n: Int, timeout: conc.Duration) nothrow -> Int {
 	val req = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
 	var addr = net.socket_addr("127.0.0.1", port);
 	match net.connect(&addr, timeout) {
@@ -289,18 +526,18 @@ fn _client_loop(port: Int, warmup_n: Int, measure_n: Int, timeout: conc.Duration
 }
 
 // Named wrapper for spawn (avoids match-in-lambda).
-fn _run_client_loop(port: Int, warmup_n: Int, measure_n: Int, timeout: conc.Duration) nothrow -> Int {
-	return _client_loop(port, warmup_n, measure_n, timeout);
+fn _run_rest_client(port: Int, warmup_n: Int, measure_n: Int, timeout: conc.Duration) nothrow -> Int {
+	return _rest_client_loop(port, warmup_n, measure_n, timeout);
 }
 
-// baseline-health: GET /health, no filters, no guards, tiny JSON response.
-// One keep-alive connection. Warmup 20 requests, then measure 500 requests.
+// bench_baseline_health: GET /health through full REST framework.
+// One keep-alive connection. Warmup 20, measure 5000.
 // Uses rest.start() — server runs on VT fiber automatically.
 // Client also runs on VT fiber to avoid main-thread 10ms poll quantum.
 fn bench_baseline_health() nothrow -> core.Result<Int, Int> {
-	val timeout = conc.Duration(millis = 5000);
+	val timeout = conc.Duration(millis = 10000);
 	val warmup_n = 20;
-	val measure_n = 500;
+	val measure_n = 5000;
 
 	var b = rest.new_app_builder();
 	rest.bind(&mut b, "127.0.0.1", 0);
@@ -320,7 +557,7 @@ fn bench_baseline_health() nothrow -> core.Result<Int, Int> {
 
 					// Client on VT fiber (epoll path, no 10ms poll quantum).
 					var cl = conc.spawn_cb(| | captures(copy port, copy warmup_n, copy measure_n, copy timeout) => {
-						return _run_client_loop(port, warmup_n, measure_n, timeout);
+						return _run_rest_client(port, warmup_n, measure_n, timeout);
 					});
 
 					// Join client.
@@ -352,14 +589,30 @@ fn bench_baseline_health() nothrow -> core.Result<Int, Int> {
 	}
 }
 
-// --- Main: run benchmark, print results ---
+// --- Main: run both benchmarks, print results ---
 
 fn main() nothrow -> Int {
-	match bench_baseline_health() {
-		core.Result::Err(code) => { return code; },
+	// 1. Raw TCP baseline (stdlib/runtime overhead)
+	match bench_baseline_vt() {
+		core.Result::Err(code) => {
+			thread.console_writeln("[bench] baseline-vt  FAILED  error=" + fmt.format_int(code));
+			return code;
+		},
 		core.Result::Ok(ms) => {
-			_print_bench("baseline-health", 500, ms);
-			return 0;
+			_print_bench("baseline-vt", 5000, ms);
 		}
 	}
+
+	// 2. REST framework (what we added on top)
+	match bench_baseline_health() {
+		core.Result::Err(code) => {
+			thread.console_writeln("[bench] baseline-health  FAILED  error=" + fmt.format_int(code));
+			return code;
+		},
+		core.Result::Ok(ms) => {
+			_print_bench("baseline-health", 5000, ms);
+		}
+	}
+
+	return 0;
 }
