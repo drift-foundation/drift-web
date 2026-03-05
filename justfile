@@ -56,7 +56,7 @@ rest-check-unit FILE:
       --target-word-bits 64
 
 # REST stress tests (separate gate, not in default test target).
-rest-stress:
+stress-test:
     @tools/drift_test_parallel_runner.sh run-one \
       --src-root packages/web-jwt/src \
       --src-root packages/web-rest/src \
