@@ -63,6 +63,21 @@ rest-stress:
       --test-file packages/web-rest/tests/stress/stress_test.drift \
       --target-word-bits 64
 
+# Build optimized perf binary to a stable path for strace/perf profiling.
+perf-build:
+    @mkdir -p work/rest/bench/bin
+    @DRIFT_OPTIMIZED=1 tools/drift_test_parallel_runner.sh compile \
+      --src-root packages/web-jwt/src \
+      --src-root packages/web-rest/src \
+      --file packages/web-rest/tests/perf/perf_test.drift \
+      --target-word-bits 64
+    @DRIFT_OPTIMIZED=1 "${DRIFTC}" --target-word-bits 64 --optimized \
+      --entry "web.rest.tests.perf.perf_test::main" \
+      packages/web-jwt/src/*.drift packages/web-rest/src/*.drift \
+      packages/web-rest/tests/perf/perf_test.drift \
+      -o work/rest/bench/bin/perf_test
+    @echo "Binary: work/rest/bench/bin/perf_test"
+
 # Performance benchmarks: Go + Drift side-by-side (optimized).
 # Runs Go raw-TCP, Go net/http, Drift raw-TCP, Drift REST.
 # Do not run under DRIFT_MEMCHECK or DRIFT_ASAN.
@@ -77,6 +92,14 @@ perf-test:
       --src-root packages/web-rest/src \
       --test-file packages/web-rest/tests/perf/perf_test.drift \
       --target-word-bits 64
+# Raw TCP with TCP_NODELAY — compare against baseline-vt in perf-test.
+perf-nodelay:
+    @DRIFT_OPTIMIZED=1 tools/drift_test_parallel_runner.sh run-one \
+      --src-root packages/web-jwt/src \
+      --src-root packages/web-rest/src \
+      --test-file packages/web-rest/tests/perf/nodelay_test.drift \
+      --target-word-bits 64
+
 # REST probes: timeout sensitivity, read-call count, raw ping-pong.
 # Do not run under DRIFT_MEMCHECK or DRIFT_ASAN.
 rest-probe:
