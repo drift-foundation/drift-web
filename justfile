@@ -83,8 +83,8 @@ perf-build:
 # Do not run under DRIFT_MEMCHECK or DRIFT_ASAN.
 perf-test:
     @echo "=== Go baselines ==="
-    @go run work/rest/bench/go_raw_tcp_bench.go
-    @go run work/rest/bench/go_health_bench.go
+    @go run benchmarks/go/raw_tcp_bench.go
+    @go run benchmarks/go/net_http_bench.go
     @echo ""
     @echo "=== Drift (optimized) ==="
     @DRIFT_OPTIMIZED=1 tools/drift_test_parallel_runner.sh run-one \
