@@ -1,0 +1,668 @@
+module web.rest.tests.perf.perf_smoke_test
+
+import std.core as core;
+import std.io as io;
+import std.net as net;
+import std.concurrent as conc;
+import std.sync as sync;
+import std.time as time;
+import std.format as fmt;
+import std.parse as parse;
+import std.env as env;
+import lang.thread as thread;
+import web.rest as rest;
+
+// Comparative performance guard for the REST server.
+// Run via `just perf-smoke`. Not part of `just test`.
+// Must be compiled with DRIFT_OPTIMIZED=1.
+// Do not run under DRIFT_MEMCHECK or DRIFT_ASAN.
+//
+// Requires Go baselines passed via environment:
+//   GO_RAW_REQ_PER_SEC    — from go raw_tcp_bench.go
+//   GO_HTTP_REQ_PER_SEC   — from go net_http_bench.go
+//
+// Enforces three ratio thresholds (integer percent, * 100):
+//   drift_raw_ratio      = drift_vt / go_raw       >= 0.80
+//   drift_rest_ratio     = drift_health / go_http   >= 1.50
+//   drift_framework_ratio = drift_health / drift_vt  >= 0.45
+
+// --- Ratio thresholds (percent * 100) ---
+
+fn _threshold_raw_pct() nothrow -> Int { return 80; }
+fn _threshold_rest_pct() nothrow -> Int { return 150; }
+fn _threshold_fw_pct() nothrow -> Int { return 45; }
+
+// --- Read Go baseline from env ---
+
+fn _read_env_int(name: String) nothrow -> core.Result<Int, Int> {
+	match env.get(name) {
+		Optional::None => { return core.Result::Err(1); },
+		Optional::Some(v) => {
+			match parse.parse_int(v) {
+				core.Result::Err(_) => { return core.Result::Err(2); },
+				core.Result::Ok(n) => {
+					if n <= 0 { return core.Result::Err(3); }
+					return core.Result::Ok(n);
+				}
+			}
+		}
+	}
+}
+
+// --- Format ratio as "N.NN" from integer percent ---
+
+fn _format_ratio(pct: Int) nothrow -> String {
+	val whole = pct / 100;
+	var frac = pct - (whole * 100);
+	if frac < 0 { frac = -(frac); }
+	var frac_str = fmt.format_int(frac);
+	if frac < 10 {
+		frac_str = "0" + frac_str;
+	}
+	return fmt.format_int(whole) + "." + frac_str;
+}
+
+// --- Byte/string helpers (duplicated; Drift has no cross-test imports) ---
+
+fn _to_bytes(s: &String) nothrow -> Array<Byte> {
+	var out: Array<Byte> = [];
+	var i = 0;
+	val n = s.byte_length();
+	while i < n {
+		out.push(core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return move out;
+}
+
+// --- Keep-alive TCP helpers ---
+
+fn _find_header_end(raw: &Array<Byte>) nothrow -> Int {
+	val len = raw.len;
+	if len < 4 {
+		return -1;
+	}
+	var i = 0;
+	val limit = len - 3;
+	while i < limit {
+		if raw[i] == cast<Byte>(13) {
+			if raw[i + 1] == cast<Byte>(10) {
+				if raw[i + 2] == cast<Byte>(13) {
+					if raw[i + 3] == cast<Byte>(10) {
+						return i + 4;
+					}
+				}
+			}
+		}
+		i = i + 1;
+	}
+	return -1;
+}
+
+fn _scan_cl(raw: &Array<Byte>, header_end: Int) nothrow -> Int {
+	val marker = "Content-Length: ";
+	val m_len = marker.byte_length();
+	if header_end < m_len {
+		return -1;
+	}
+	var i = 0;
+	val limit = header_end - m_len;
+	while i < limit {
+		var matched = true;
+		var j = 0;
+		while j < m_len {
+			if raw[i + j] != core.string_byte_at(marker, j) {
+				matched = false;
+				j = m_len;
+			} else {
+				j = j + 1;
+			}
+		}
+		if matched {
+			val val_start = i + m_len;
+			var val_end = val_start;
+			var scanning = true;
+			while scanning {
+				if val_end >= header_end {
+					scanning = false;
+				} else {
+					if raw[val_end] == cast<Byte>(13) {
+						scanning = false;
+					} else {
+						val_end = val_end + 1;
+					}
+				}
+			}
+			var result = 0;
+			var k = val_start;
+			while k < val_end {
+				val d = cast<Int>(raw[k]) - 48;
+				if d < 0 { return -1; }
+				if d > 9 { return -1; }
+				result = result * 10 + d;
+				k = k + 1;
+			}
+			return result;
+		}
+		i = i + 1;
+	}
+	return -1;
+}
+
+fn _write_raw(stream: &net.TcpStream, s: &String, timeout: conc.Duration) nothrow -> core.Result<Void, Int> {
+	val bytes = _to_bytes(s);
+	var wbuf = io.buffer(bytes.len);
+	var i = 0;
+	while i < bytes.len {
+		io.buffer_write(&mut wbuf, i, bytes[i]);
+		i = i + 1;
+	}
+	match stream.write(&wbuf, timeout) {
+		core.Result::Err(_) => { return core.Result::Err(1); },
+		core.Result::Ok(_) => { return core.Result::Ok(core.void_value()); }
+	}
+}
+
+fn _read_one_response(stream: &net.TcpStream, buf: &mut Array<Byte>, timeout: conc.Duration) nothrow -> core.Result<Void, Int> {
+	var header_end = -1;
+	var content_length = -1;
+	var done = false;
+
+	while !done {
+		if header_end == -1 {
+			header_end = _find_header_end(buf);
+			if header_end != -1 {
+				content_length = _scan_cl(buf, header_end);
+			}
+		}
+		if header_end != -1 {
+			if content_length <= 0 {
+				done = true;
+			} else {
+				val body_available = buf.len - header_end;
+				if body_available >= content_length {
+					done = true;
+				}
+			}
+		}
+
+		if !done {
+			var rbuf = io.buffer(4096);
+			match stream.read(&mut rbuf, timeout) {
+				core.Result::Err(_) => { return core.Result::Err(1); },
+				core.Result::Ok(n) => {
+					if n == 0 {
+						return core.Result::Err(2);
+					}
+					var j = 0;
+					while j < n {
+						buf.push(io.buffer_read(&mut rbuf, j));
+						j = j + 1;
+					}
+				}
+			}
+		}
+	}
+
+	var total = header_end;
+	if content_length > 0 {
+		total = header_end + content_length;
+	}
+
+	if total < buf.len {
+		var new_buf: Array<Byte> = [];
+		var k = total;
+		while k < buf.len {
+			new_buf.push(buf[k]);
+			k = k + 1;
+		}
+		*buf = move new_buf;
+	} else {
+		var empty: Array<Byte> = [];
+		*buf = move empty;
+	}
+
+	return core.Result::Ok(core.void_value());
+}
+
+// --- Raw TCP baseline (stdlib/runtime floor) ---
+
+fn _build_fixed_response() nothrow -> Array<Byte> {
+	val s = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nok";
+	var out: Array<Byte> = [];
+	var i = 0;
+	val n = s.byte_length();
+	while i < n {
+		out.push(core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return move out;
+}
+
+fn _build_fixed_request() nothrow -> Array<Byte> {
+	val s = "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n";
+	var out: Array<Byte> = [];
+	var i = 0;
+	val n = s.byte_length();
+	while i < n {
+		out.push(core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return move out;
+}
+
+fn _vt_server_loop(listener: net.TcpListener, max_requests: Int, timeout: conc.Duration, stopped: conc.Arc<sync.AtomicBool>) nothrow -> Int {
+	val accept_timeout = conc.Duration(millis = 200);
+	val resp_bytes = _build_fixed_response();
+	var served = 0;
+
+	var wbuf = io.buffer(resp_bytes.len);
+	var wi = 0;
+	while wi < resp_bytes.len {
+		io.buffer_write(&mut wbuf, wi, resp_bytes[wi]);
+		wi = wi + 1;
+	}
+
+	val read_cap = 4096;
+	var rbuf = io.buffer(read_cap);
+
+	var running = true;
+	while running {
+		val flag = stopped.get();
+		if flag.load(sync.MemoryOrder::Acquire()) {
+			running = false;
+		}
+		if running {
+			if served >= max_requests {
+				running = false;
+			}
+		}
+		if running {
+			match listener.accept(accept_timeout) {
+				core.Result::Err(_) => {},
+				core.Result::Ok(conn) => {
+					var stream = move conn;
+					var conn_alive = true;
+					while conn_alive {
+						if served >= max_requests {
+							conn_alive = false;
+						}
+						if conn_alive {
+							match stream.read(&mut rbuf, timeout) {
+								core.Result::Err(_) => {
+									conn_alive = false;
+								},
+								core.Result::Ok(n) => {
+									if n == 0 {
+										conn_alive = false;
+									} else {
+										var found = false;
+										var si = 0;
+										val limit = n - 3;
+										while si < limit {
+											if io.buffer_read(&mut rbuf, si) == cast<Byte>(13) {
+												if io.buffer_read(&mut rbuf, si + 1) == cast<Byte>(10) {
+													if io.buffer_read(&mut rbuf, si + 2) == cast<Byte>(13) {
+														if io.buffer_read(&mut rbuf, si + 3) == cast<Byte>(10) {
+															found = true;
+															si = limit;
+														}
+													}
+												}
+											}
+											si = si + 1;
+										}
+										if found {
+											match stream.write(&wbuf, timeout) {
+												core.Result::Err(_) => {
+													conn_alive = false;
+												},
+												core.Result::Ok(_) => {
+													served = served + 1;
+												}
+											}
+										} else {
+											conn_alive = false;
+										}
+									}
+								}
+							}
+						}
+					}
+					val _ = stream.close(timeout);
+				}
+			}
+		}
+	}
+	return served;
+}
+
+fn _vt_client_loop(port: Int, warmup_n: Int, measure_n: Int, timeout: conc.Duration) nothrow -> Int {
+	val req_bytes = _build_fixed_request();
+	var wbuf = io.buffer(req_bytes.len);
+	var wi = 0;
+	while wi < req_bytes.len {
+		io.buffer_write(&mut wbuf, wi, req_bytes[wi]);
+		wi = wi + 1;
+	}
+
+	val read_cap = 4096;
+	var rbuf = io.buffer(read_cap);
+	val resp_len = 63;
+
+	var addr = net.socket_addr("127.0.0.1", port);
+	match net.connect(&addr, timeout) {
+		core.Result::Err(_) => { return -1; },
+		core.Result::Ok(conn) => {
+			var stream = move conn;
+
+			var i = 0;
+			while i < warmup_n {
+				match stream.write(&wbuf, timeout) {
+					core.Result::Err(_) => { val _ = stream.close(timeout); return -10; },
+					core.Result::Ok(_) => {}
+				}
+				var got = 0;
+				while got < resp_len {
+					match stream.read(&mut rbuf, timeout) {
+						core.Result::Err(_) => { val _ = stream.close(timeout); return -11; },
+						core.Result::Ok(n) => {
+							if n == 0 { val _ = stream.close(timeout); return -12; }
+							got = got + n;
+						}
+					}
+				}
+				i = i + 1;
+			}
+
+			val start = time.now_monotonic();
+			var mi = 0;
+			while mi < measure_n {
+				match stream.write(&wbuf, timeout) {
+					core.Result::Err(_) => { val _ = stream.close(timeout); return -20; },
+					core.Result::Ok(_) => {}
+				}
+				var got = 0;
+				while got < resp_len {
+					match stream.read(&mut rbuf, timeout) {
+						core.Result::Err(_) => { val _ = stream.close(timeout); return -21; },
+						core.Result::Ok(n) => {
+							if n == 0 { val _ = stream.close(timeout); return -22; }
+							got = got + n;
+						}
+					}
+				}
+				mi = mi + 1;
+			}
+			val elapsed = time.elapsed_ms(&start);
+			val _ = stream.close(timeout);
+			return elapsed;
+		}
+	}
+}
+
+fn _run_vt_server(listener: net.TcpListener, max_requests: Int, timeout: conc.Duration, stopped: conc.Arc<sync.AtomicBool>) nothrow -> Int {
+	return _vt_server_loop(move listener, max_requests, timeout, move stopped);
+}
+
+fn _run_vt_client(port: Int, warmup_n: Int, measure_n: Int, timeout: conc.Duration) nothrow -> Int {
+	return _vt_client_loop(port, warmup_n, measure_n, timeout);
+}
+
+fn bench_baseline_vt() nothrow -> core.Result<Int, Int> {
+	val timeout = conc.Duration(millis = 10000);
+	val warmup_n = 50;
+	val measure_n = 5000;
+	val total_n = warmup_n + measure_n;
+
+	var addr = net.socket_addr("127.0.0.1", 0);
+	match net.listen(&addr, timeout) {
+		core.Result::Err(_) => { return core.Result::Err(1); },
+		core.Result::Ok(lst) => {
+			var listener = move lst;
+			val port = listener.local_port();
+
+			var stopped = conc.arc(sync.atomic_bool(false));
+			var stopped2 = stopped.clone();
+
+			var sv = conc.spawn_cb(| | captures(move listener, copy total_n, copy timeout, move stopped2) => {
+				return _run_vt_server(move listener, total_n, timeout, move stopped2);
+			});
+
+			var cv = conc.spawn_cb(| | captures(copy port, copy warmup_n, copy measure_n, copy timeout) => {
+				return _run_vt_client(port, warmup_n, measure_n, timeout);
+			});
+
+			var elapsed_ms = 0;
+			match cv.join() {
+				core.Result::Err(_) => { return core.Result::Err(2); },
+				core.Result::Ok(result) => {
+					if result < 0 {
+						val flag = stopped.get();
+						flag.store(true, sync.MemoryOrder::Release());
+						val _ = sv.join();
+						return core.Result::Err(3);
+					}
+					elapsed_ms = result;
+				}
+			}
+
+			val flag = stopped.get();
+			flag.store(true, sync.MemoryOrder::Release());
+			match sv.join() {
+				core.Result::Err(_) => { return core.Result::Err(4); },
+				core.Result::Ok(_) => {}
+			}
+
+			return core.Result::Ok(elapsed_ms);
+		}
+	}
+}
+
+// --- REST benchmark ---
+
+fn _health_handler(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	return core.Result::Ok(rest.json_response(200, "{\"ok\":true}"));
+}
+
+fn _rest_client_loop(port: Int, warmup_n: Int, measure_n: Int, timeout: conc.Duration) nothrow -> Int {
+	val req = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
+	var addr = net.socket_addr("127.0.0.1", port);
+	match net.connect(&addr, timeout) {
+		core.Result::Err(_) => { return -4; },
+		core.Result::Ok(conn) => {
+			var stream = move conn;
+			var read_buf: Array<Byte> = [];
+
+			var wi = 0;
+			while wi < warmup_n {
+				match _write_raw(&stream, &req, timeout) {
+					core.Result::Err(_) => { val _ = stream.close(timeout); return -10; },
+					core.Result::Ok(_) => {}
+				}
+				match _read_one_response(&stream, &mut read_buf, timeout) {
+					core.Result::Err(_) => { val _ = stream.close(timeout); return -11; },
+					core.Result::Ok(_) => {}
+				}
+				wi = wi + 1;
+			}
+
+			val start = time.now_monotonic();
+			var mi = 0;
+			while mi < measure_n {
+				match _write_raw(&stream, &req, timeout) {
+					core.Result::Err(_) => { val _ = stream.close(timeout); return -20; },
+					core.Result::Ok(_) => {}
+				}
+				match _read_one_response(&stream, &mut read_buf, timeout) {
+					core.Result::Err(_) => { val _ = stream.close(timeout); return -21; },
+					core.Result::Ok(_) => {}
+				}
+				mi = mi + 1;
+			}
+			val elapsed = time.elapsed_ms(&start);
+			val _ = stream.close(timeout);
+			return elapsed;
+		}
+	}
+}
+
+fn _run_rest_client(port: Int, warmup_n: Int, measure_n: Int, timeout: conc.Duration) nothrow -> Int {
+	return _rest_client_loop(port, warmup_n, measure_n, timeout);
+}
+
+fn bench_baseline_health() nothrow -> core.Result<Int, Int> {
+	val timeout = conc.Duration(millis = 10000);
+	val warmup_n = 20;
+	val measure_n = 5000;
+
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return core.Result::Err(1); },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+				core.Result::Err(_) => { return core.Result::Err(2); },
+				core.Result::Ok(_) => {}
+			}
+			match rest.start(move app, timeout) {
+				core.Result::Err(_) => { return core.Result::Err(3); },
+				core.Result::Ok(rs) => {
+					var server = move rs;
+					val port = rest.server_port(&server);
+
+					var cl = conc.spawn_cb(| | captures(copy port, copy warmup_n, copy measure_n, copy timeout) => {
+						return _run_rest_client(port, warmup_n, measure_n, timeout);
+					});
+
+					var elapsed = 0;
+					match cl.join() {
+						core.Result::Err(_) => {
+							val _ = rest.shutdown(&mut server);
+							return core.Result::Err(40);
+						},
+						core.Result::Ok(result) => {
+							if result < 0 {
+								val _ = rest.shutdown(&mut server);
+								return core.Result::Err(-(result));
+							}
+							elapsed = result;
+						}
+					}
+
+					match rest.shutdown(&mut server) {
+						core.Result::Err(_) => { return core.Result::Err(30); },
+						core.Result::Ok(_) => {}
+					}
+
+					return core.Result::Ok(elapsed);
+				}
+			}
+		}
+	}
+}
+
+// --- Main: read Go baselines, run Drift benchmarks, enforce ratio thresholds ---
+
+fn main() nothrow -> Int {
+	val measure_n = 5000;
+
+	// 1. Read Go baselines from environment.
+	var go_raw_rps = 0;
+	match _read_env_int("GO_RAW_REQ_PER_SEC") {
+		core.Result::Err(_) => {
+			thread.console_writeln("[perf-smoke] ERROR: GO_RAW_REQ_PER_SEC not set or invalid");
+			return 1;
+		},
+		core.Result::Ok(v) => { go_raw_rps = v; }
+	}
+
+	var go_http_rps = 0;
+	match _read_env_int("GO_HTTP_REQ_PER_SEC") {
+		core.Result::Err(_) => {
+			thread.console_writeln("[perf-smoke] ERROR: GO_HTTP_REQ_PER_SEC not set or invalid");
+			return 1;
+		},
+		core.Result::Ok(v) => { go_http_rps = v; }
+	}
+
+	// 2. Run Drift baseline-vt.
+	var vt_rps = 0;
+	match bench_baseline_vt() {
+		core.Result::Err(code) => {
+			thread.console_writeln("[perf-smoke] baseline-vt FAILED error=" + fmt.format_int(code));
+			return 2;
+		},
+		core.Result::Ok(ms) => {
+			if ms > 0 {
+				vt_rps = (measure_n * 1000) / ms;
+			}
+		}
+	}
+
+	// 3. Run Drift baseline-health.
+	var health_rps = 0;
+	match bench_baseline_health() {
+		core.Result::Err(code) => {
+			thread.console_writeln("[perf-smoke] baseline-health FAILED error=" + fmt.format_int(code));
+			return 2;
+		},
+		core.Result::Ok(ms) => {
+			if ms > 0 {
+				health_rps = (measure_n * 1000) / ms;
+			}
+		}
+	}
+
+	// 4. Compute ratios (integer percent * 100).
+	var raw_pct = 0;
+	if go_raw_rps > 0 {
+		raw_pct = (vt_rps * 100) / go_raw_rps;
+	}
+
+	var rest_pct = 0;
+	if go_http_rps > 0 {
+		rest_pct = (health_rps * 100) / go_http_rps;
+	}
+
+	var fw_pct = 0;
+	if vt_rps > 0 {
+		fw_pct = (health_rps * 100) / vt_rps;
+	}
+
+	// 5. Print all measured values (diagnostic).
+	thread.console_writeln("[perf-smoke] go-raw-tcp req_per_sec=" + fmt.format_int(go_raw_rps));
+	thread.console_writeln("[perf-smoke] go-net-http req_per_sec=" + fmt.format_int(go_http_rps));
+	thread.console_writeln("[perf-smoke] baseline-vt req_per_sec=" + fmt.format_int(vt_rps));
+	thread.console_writeln("[perf-smoke] baseline-health req_per_sec=" + fmt.format_int(health_rps));
+	thread.console_writeln("[perf-smoke] drift_raw_ratio=" + _format_ratio(raw_pct));
+	thread.console_writeln("[perf-smoke] drift_rest_ratio=" + _format_ratio(rest_pct));
+	thread.console_writeln("[perf-smoke] drift_framework_ratio=" + _format_ratio(fw_pct));
+
+	// 6. Enforce ratio thresholds.
+	var failed = 0;
+
+	if raw_pct < _threshold_raw_pct() {
+		thread.console_writeln("[perf-smoke] FAIL drift_raw_ratio " + _format_ratio(raw_pct) + " < " + _format_ratio(_threshold_raw_pct()));
+		failed = failed + 1;
+	}
+
+	if rest_pct < _threshold_rest_pct() {
+		thread.console_writeln("[perf-smoke] FAIL drift_rest_ratio " + _format_ratio(rest_pct) + " < " + _format_ratio(_threshold_rest_pct()));
+		failed = failed + 1;
+	}
+
+	if fw_pct < _threshold_fw_pct() {
+		thread.console_writeln("[perf-smoke] FAIL drift_framework_ratio " + _format_ratio(fw_pct) + " < " + _format_ratio(_threshold_fw_pct()));
+		failed = failed + 1;
+	}
+
+	if failed > 0 {
+		thread.console_writeln("[perf-smoke] FAIL (" + fmt.format_int(failed) + " threshold(s) violated)");
+		return 3;
+	}
+
+	thread.console_writeln("[perf-smoke] PASS");
+	return 0;
+}

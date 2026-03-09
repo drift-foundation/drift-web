@@ -192,3 +192,19 @@ fibers (`conc.spawn_cb()`) to get accurate latency measurements.
 - [x] Query string parsing: request target split on `?`, path routed without query, params populated
 - [x] Truncated body: Content-Length mismatch returns 400 `incomplete-body`
 - [x] Real lifecycle test: `listen_app()` → `clone_handle()` → spawn `serve()` → roundtrip → `stop()` → `join()` clean exit
+
+## UX Pass 2 — Acceptance Test Gap Report
+
+Date: 2026-03-09
+
+Contract/gap tests pinned in `packages/web-rest/tests/unit/ux_pass2_test.drift` — 7 scenarios encoding the stories from `work/rest-next/plan.md`. Story 1 is a true acceptance test. Stories 2–5 and 7 are gap placeholders using manual inline logic. Story 6 is a placeholder only (tests re-parse equivalence, not caching). Convert stories 2–7 to handler-UX acceptance tests when Pass 2 helpers land.
+
+| Story | Scenario | Type | What works today | API gap needed for Pass 2 |
+|-------|----------|------|-----------------|--------------------------|
+| 1 | `scenario_malformed_json_body` | acceptance | `body_json()` → `malformed-json` tag | None |
+| 2 | `scenario_validation_fields_email_age` | gap placeholder | Manual `node.get()` + `as_int()` + `add_field()` | `require_body_string(node, field)`, `require_body_int(node, field)` |
+| 3 | `scenario_path_int_query_default` | gap placeholder | `path_param()` + `parse.parse_int()` manual | `validate_int(field, raw)`, `validate_int_range(field, value, min, max)` |
+| 4 | `scenario_query_int_parse_failure` | gap placeholder | `query_param()` + `parse.parse_int()` manual | `validate_int(field, raw)` with field-aware error |
+| 5 | `scenario_three_field_accumulation` | gap placeholder | `rest_error()` + `add_field()` loop | `ValidationErrors` collector type |
+| 6 | `scenario_body_parse_caching` | placeholder only | `body_json()` re-parses each call (both succeed) — does not test caching | Framework-level parse caching (parse once per request) |
+| 7 | `scenario_optional_query_default` | gap placeholder | `query_param()` + `parse.parse_int()` manual defaulting | `validate_int(field, raw)` in the string-first defaulting pattern |

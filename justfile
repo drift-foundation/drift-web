@@ -63,6 +63,13 @@ stress-test:
       --test-file packages/web-rest/tests/stress/stress_test.drift \
       --target-word-bits 64
 
+# Performance smoke guard: ratio-based comparative check vs Go baselines.
+# Not part of `just test`. Run as a pre-merge/release quality gate.
+# Requires: go in PATH, DRIFTC set, DRIFT_PYTHON set.
+# Do not run under DRIFT_MEMCHECK or DRIFT_ASAN.
+perf-smoke:
+    @tools/perf_smoke_runner.sh
+
 # Build optimized perf binary to a stable path for strace/perf profiling.
 perf-build:
     @mkdir -p work/rest/bench/bin

@@ -80,6 +80,11 @@
   - optimized raw TCP baseline improved materially over dev build
   - optimized `web.rest` keep-alive health benchmark outperformed Go `net/http` on the same machine/workload
   - framework overhead was pinned to a small per-request cost above the Drift raw TCP floor
+- Added staged performance protection:
+  - ratio-based `perf-smoke` guard against same-run Go baselines
+  - guard uses optimized Drift baselines plus Go reference baselines on the same machine
+  - shell orchestration passes Go baseline values into Drift via `std.env`
+  - guard remains separate from default correctness suites
 - Pinned and documented the performance false alarm root cause:
   - main-thread socket I/O in current Drift runtime polls at a 10ms quantum
   - reports added under `work/rest/` for VT loopback baseline, allocation bottleneck analysis, and main-thread poll behavior

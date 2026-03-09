@@ -1,0 +1,406 @@
+module web.rest.tests.unit.ux_pass2_test
+
+import std.core as core;
+import std.json as json;
+import std.parse as parse;
+import web.rest as rest;
+
+// UX Pass 2 contract/gap tests — 6 scenarios from work/rest-next/plan.md.
+// Story 1 is a true acceptance test (works with current API).
+// Stories 2–5 pin expected behavior using manual inline logic as gap placeholders;
+// convert to handler-UX acceptance tests when Pass 2 helpers land.
+// Story 6 is a placeholder only — does not test caching, only re-parse equivalence.
+// Full gap report: work/rest/progress.md.
+
+// --- Story 1: Malformed JSON body → 400 request-invalid, tag=malformed-json ---
+// Gap: none — body_json() already returns this.
+
+fn scenario_malformed_json_body() nothrow -> Int {
+	var req = rest.new_request("POST", "/v1/users");
+	req.body = "{not json";
+	match rest.body_json(&req) {
+		core.Result::Ok(_) => { return 101; },
+		core.Result::Err(e) => {
+			if e.status != 400 { return 102; }
+			if e.event != "request-invalid" { return 103; }
+			if e.tag != "malformed-json" { return 104; }
+			return 0;
+		}
+	}
+}
+
+// --- Story 2: Missing email + invalid age → 400, tag=validation-failed, two field errors ---
+// Gap placeholder: no require_body_string()/require_body_int() helpers.
+// Uses manual node.get() + type check. Convert when Pass 2 helpers land.
+
+fn scenario_validation_fields_email_age() nothrow -> Int {
+	var req = rest.new_request("POST", "/v1/users");
+	req.body = "{\"age\":\"not-a-number\"}";
+	match rest.body_json(&req) {
+		core.Result::Err(_) => { return 201; },
+		core.Result::Ok(node) => {
+			var err = rest.rest_error(400, "request-invalid", "validation-failed", "input validation failed");
+
+			// Check email — missing field.
+			val email_key = "email";
+			match node.get(&email_key) {
+				Optional::Some(_) => { return 202; },
+				Optional::None => {
+					rest.add_field(&mut err, "email", "required");
+				}
+			}
+
+			// Check age — present but wrong type (string, not int).
+			val age_key = "age";
+			match node.get(&age_key) {
+				Optional::None => { return 203; },
+				Optional::Some(age_node) => {
+					match age_node.as_int() {
+						Optional::Some(_) => { return 204; },
+						Optional::None => {
+							rest.add_field(&mut err, "age", "invalid-type");
+						}
+					}
+				}
+			}
+
+			// Build envelope and verify.
+			val event_id = "evt-ux2-s2";
+			val resp = rest.error_envelope(&err, &event_id);
+			if resp.status != 400 { return 205; }
+			match json.parse(&resp.body) {
+				core.Result::Err(_) => { return 206; },
+				core.Result::Ok(env) => {
+					// tag = validation-failed
+					val tag_key = "tag";
+					match env.get(&tag_key) {
+						Optional::None => { return 207; },
+						Optional::Some(tg) => {
+							match tg.as_string() {
+								Optional::None => { return 208; },
+								Optional::Some(v) => {
+									if v != "validation-failed" { return 209; }
+								}
+							}
+						}
+					}
+					// fields.email = required
+					val fields_key = "fields";
+					match env.get(&fields_key) {
+						Optional::None => { return 210; },
+						Optional::Some(fields) => {
+							val ek = "email";
+							match fields.get(&ek) {
+								Optional::None => { return 211; },
+								Optional::Some(ev) => {
+									match ev.as_string() {
+										Optional::None => { return 212; },
+										Optional::Some(v) => {
+											if v != "required" { return 213; }
+										}
+									}
+								}
+							}
+							// fields.age = invalid-type
+							val ak = "age";
+							match fields.get(&ak) {
+								Optional::None => { return 214; },
+								Optional::Some(av) => {
+									match av.as_string() {
+										Optional::None => { return 215; },
+										Optional::Some(v) => {
+											if v != "invalid-type" { return 216; }
+										}
+									}
+								}
+							}
+							return 0;
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// --- Story 3: Path string extraction + shared int validation ---
+// Gap placeholder: no validate_int()/validate_int_range() helpers yet.
+// Uses path_param() + parse.parse_int() manually. Convert to path_param() -> validate_int() when Pass 2 helpers land.
+
+fn scenario_path_int_query_default() nothrow -> Int {
+	var req = rest.new_request("GET", "/v1/users/42");
+	rest.add_path_param(&mut req, "id", "42");
+	rest.add_query_param(&mut req, "page", "2");
+
+	// Path int: path_param → parse_int.
+	val id_key = "id";
+	match rest.path_param(&req, &id_key) {
+		core.Result::Err(_) => { return 301; },
+		core.Result::Ok(id_str) => {
+			match parse.parse_int(id_str) {
+				core.Result::Err(_) => { return 302; },
+				core.Result::Ok(id_val) => {
+					if id_val != 42 { return 303; }
+				}
+			}
+		}
+	}
+
+	// Query int or default: query_param → parse_int, fallback to 1.
+	val page_key = "page";
+	var page = 1;
+	match rest.query_param(&req, &page_key) {
+		Optional::None => {},
+		Optional::Some(page_str) => {
+			match parse.parse_int(page_str) {
+				core.Result::Err(_) => { return 304; },
+				core.Result::Ok(v) => {
+					page = v;
+				}
+			}
+		}
+	}
+	if page != 2 { return 305; }
+
+	return 0;
+}
+
+// --- Story 4: Query string extraction + shared int validation failure ---
+// Gap placeholder: no validate_int(field, raw) helper yet.
+// Uses query_param() + parse.parse_int() manually. Convert to require_query_param() -> validate_int() when Pass 2 helpers land.
+
+fn scenario_query_int_parse_failure() nothrow -> Int {
+	var req = rest.new_request("GET", "/v1/users/7");
+	rest.add_path_param(&mut req, "id", "7");
+	rest.add_query_param(&mut req, "page", "abc");
+
+	// Attempt to parse page as int — should fail.
+	val page_key = "page";
+	match rest.query_param(&req, &page_key) {
+		Optional::None => { return 401; },
+		Optional::Some(page_str) => {
+			match parse.parse_int(page_str) {
+				core.Result::Ok(_) => { return 402; },
+				core.Result::Err(_) => {
+					// Build field error manually. Plan tag will be source-agnostic: invalid-integer.
+					var err = rest.rest_error(400, "request-invalid", "invalid-query-param", "query parameter is not a valid integer");
+					rest.add_field(&mut err, "page", "invalid-integer");
+					val event_id = "evt-ux2-s4";
+					val resp = rest.error_envelope(&err, &event_id);
+					if resp.status != 400 { return 403; }
+					match json.parse(&resp.body) {
+						core.Result::Err(_) => { return 404; },
+						core.Result::Ok(env) => {
+							val fields_key = "fields";
+							match env.get(&fields_key) {
+								Optional::None => { return 405; },
+								Optional::Some(fields) => {
+									val pk = "page";
+									match fields.get(&pk) {
+										Optional::None => { return 406; },
+										Optional::Some(pv) => {
+											match pv.as_string() {
+												Optional::None => { return 407; },
+												Optional::Some(v) => {
+													if v != "invalid-integer" { return 408; }
+													return 0;
+												}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// --- Story 5: Mixed validation accumulation (3 fields) ---
+// Gap placeholder: no ValidationErrors collector type.
+// Uses rest_error() + add_field() directly. Convert when Pass 2 helpers land.
+// Plan tags for missing fields will move from manual required -> missing-field.
+
+fn scenario_three_field_accumulation() nothrow -> Int {
+	var err = rest.rest_error(400, "request-invalid", "validation-failed", "input validation failed");
+	rest.add_field(&mut err, "email", "required");
+	rest.add_field(&mut err, "age", "invalid-type");
+	rest.add_field(&mut err, "name", "too-short");
+
+	val event_id = "evt-ux2-s5";
+	val resp = rest.error_envelope(&err, &event_id);
+	if resp.status != 400 { return 501; }
+	match json.parse(&resp.body) {
+		core.Result::Err(_) => { return 502; },
+		core.Result::Ok(env) => {
+			val fields_key = "fields";
+			match env.get(&fields_key) {
+				Optional::None => { return 503; },
+				Optional::Some(fields) => {
+					// Verify email=required.
+					val ek = "email";
+					match fields.get(&ek) {
+						Optional::None => { return 504; },
+						Optional::Some(ev) => {
+							match ev.as_string() {
+								Optional::None => { return 505; },
+								Optional::Some(v) => {
+									if v != "required" { return 506; }
+								}
+							}
+						}
+					}
+					// Verify age=invalid-type.
+					val ak = "age";
+					match fields.get(&ak) {
+						Optional::None => { return 507; },
+						Optional::Some(av) => {
+							match av.as_string() {
+								Optional::None => { return 508; },
+								Optional::Some(v) => {
+									if v != "invalid-type" { return 509; }
+								}
+							}
+						}
+					}
+					// Verify name=too-short.
+					val nk = "name";
+					match fields.get(&nk) {
+						Optional::None => { return 510; },
+						Optional::Some(nv) => {
+							match nv.as_string() {
+								Optional::None => { return 511; },
+								Optional::Some(v) => {
+									if v != "too-short" { return 512; }
+									return 0;
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// --- Story 6: Body parse caching — PLACEHOLDER ONLY ---
+// This does NOT test caching. It only verifies that two body_json() calls return equivalent results.
+// True acceptance test requires framework-level parse caching (parse once per request), which is a gap.
+// Replace this placeholder when caching is implemented.
+
+fn scenario_body_parse_caching() nothrow -> Int {
+	var req = rest.new_request("POST", "/v1/users");
+	req.body = "{\"name\":\"alice\"}";
+
+	// First parse.
+	match rest.body_json(&req) {
+		core.Result::Err(_) => { return 601; },
+		core.Result::Ok(node1) => {
+			val k1 = "name";
+			match node1.get(&k1) {
+				Optional::None => { return 602; },
+				Optional::Some(n1) => {
+					match n1.as_string() {
+						Optional::None => { return 603; },
+						Optional::Some(v1) => {
+							if v1 != "alice" { return 604; }
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Second parse — must also succeed with same content.
+	match rest.body_json(&req) {
+		core.Result::Err(_) => { return 605; },
+		core.Result::Ok(node2) => {
+			val k2 = "name";
+			match node2.get(&k2) {
+				Optional::None => { return 606; },
+				Optional::Some(n2) => {
+					match n2.as_string() {
+						Optional::None => { return 607; },
+						Optional::Some(v2) => {
+							if v2 != "alice" { return 608; }
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return 0;
+}
+
+// --- Story 7: Optional query param with default ---
+// Gap placeholder: no shared validate_int(field, raw) helper yet.
+// Uses query_param() + parse.parse_int() manually. Convert when Pass 2 helpers land.
+
+fn scenario_optional_query_default() nothrow -> Int {
+	var req_missing = rest.new_request("GET", "/v1/users/42");
+	rest.add_path_param(&mut req_missing, "id", "42");
+
+	val page_key = "page";
+	var page1 = 1;
+	match rest.query_param(&req_missing, &page_key) {
+		Optional::None => {},
+		Optional::Some(page_str) => {
+			match parse.parse_int(page_str) {
+				core.Result::Err(_) => { return 701; },
+				core.Result::Ok(v) => { page1 = v; }
+			}
+		}
+	}
+	if page1 != 1 { return 702; }
+
+	var req_present = rest.new_request("GET", "/v1/users/42");
+	rest.add_path_param(&mut req_present, "id", "42");
+	rest.add_query_param(&mut req_present, "page", "2");
+
+	var page2 = 1;
+	match rest.query_param(&req_present, &page_key) {
+		Optional::None => {},
+		Optional::Some(page_str) => {
+			match parse.parse_int(page_str) {
+				core.Result::Err(_) => { return 703; },
+				core.Result::Ok(v) => { page2 = v; }
+			}
+		}
+	}
+	if page2 != 2 { return 704; }
+
+	var req_bad = rest.new_request("GET", "/v1/users/42");
+	rest.add_path_param(&mut req_bad, "id", "42");
+	rest.add_query_param(&mut req_bad, "page", "abc");
+
+	match rest.query_param(&req_bad, &page_key) {
+		Optional::None => { return 705; },
+		Optional::Some(page_str) => {
+			match parse.parse_int(page_str) {
+				core.Result::Ok(_) => { return 706; },
+				core.Result::Err(_) => { return 0; }
+			}
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	val a = scenario_malformed_json_body();
+	if a != 0 { return a; }
+	val b = scenario_validation_fields_email_age();
+	if b != 0 { return b; }
+	val c = scenario_path_int_query_default();
+	if c != 0 { return c; }
+	val d = scenario_query_int_parse_failure();
+	if d != 0 { return d; }
+	val e = scenario_three_field_accumulation();
+	if e != 0 { return e; }
+	val f = scenario_body_parse_caching();
+	if f != 0 { return f; }
+	val g = scenario_optional_query_default();
+	if g != 0 { return g; }
+	return 0;
+}
