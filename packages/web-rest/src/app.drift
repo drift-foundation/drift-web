@@ -347,6 +347,9 @@ pub fn dispatch(app: &App, req: &mut request.Request, ctx: &mut context.Context)
 	val best_pat = &app.route_patterns[best_idx];
 	router.extract_path_params(best_pat, &segments, req);
 
+	// 4b. Cache body JSON parse result
+	request.cache_body_json(req);
+
 	// 5. Run all global filters in order; short-circuit on Err
 	var fi = 0;
 	while fi < app.filters.len {

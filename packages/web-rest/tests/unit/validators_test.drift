@@ -1,0 +1,171 @@
+module web.rest.tests.unit.validators_test
+
+import std.core as core;
+import web.rest as rest;
+
+// --- validate_int ---
+
+fn test_validate_int_ok() nothrow -> Int {
+	match rest.validate_int("age", "42") {
+		core.Result::Err(_) => { return 1001; },
+		core.Result::Ok(v) => {
+			if v != 42 { return 1002; }
+			return 0;
+		}
+	}
+}
+
+fn test_validate_int_not_integer() nothrow -> Int {
+	match rest.validate_int("age", "abc") {
+		core.Result::Ok(_) => { return 1101; },
+		core.Result::Err(e) => {
+			if e.tag != "invalid-integer" { return 1102; }
+			if e.field_keys.len != 1 { return 1103; }
+			if e.field_keys[0] != "age" { return 1104; }
+			if e.field_values[0] != "invalid-integer" { return 1105; }
+			return 0;
+		}
+	}
+}
+
+fn test_validate_int_empty_string() nothrow -> Int {
+	match rest.validate_int("id", "") {
+		core.Result::Ok(_) => { return 1201; },
+		core.Result::Err(e) => {
+			if e.tag != "invalid-integer" { return 1202; }
+			if e.field_keys[0] != "id" { return 1203; }
+			return 0;
+		}
+	}
+}
+
+// --- validate_int_range ---
+
+fn test_validate_int_range_in_range() nothrow -> Int {
+	match rest.validate_int_range("page", 5, 1, 100) {
+		core.Result::Err(_) => { return 2001; },
+		core.Result::Ok(v) => {
+			if v != 5 { return 2002; }
+			return 0;
+		}
+	}
+}
+
+fn test_validate_int_range_below_min() nothrow -> Int {
+	match rest.validate_int_range("page", 0, 1, 100) {
+		core.Result::Ok(_) => { return 2101; },
+		core.Result::Err(e) => {
+			if e.tag != "out-of-range" { return 2102; }
+			if e.field_keys.len != 1 { return 2103; }
+			if e.field_keys[0] != "page" { return 2104; }
+			if e.field_values[0] != "out-of-range" { return 2105; }
+			return 0;
+		}
+	}
+}
+
+fn test_validate_int_range_above_max() nothrow -> Int {
+	match rest.validate_int_range("page", 101, 1, 100) {
+		core.Result::Ok(_) => { return 2201; },
+		core.Result::Err(e) => {
+			if e.tag != "out-of-range" { return 2202; }
+			if e.field_keys[0] != "page" { return 2203; }
+			if e.field_values[0] != "out-of-range" { return 2204; }
+			return 0;
+		}
+	}
+}
+
+// --- validate_non_empty ---
+
+fn test_validate_non_empty_ok() nothrow -> Int {
+	match rest.validate_non_empty("name", "alice") {
+		core.Result::Err(_) => { return 3001; },
+		core.Result::Ok(v) => {
+			if v != "alice" { return 3002; }
+			return 0;
+		}
+	}
+}
+
+fn test_validate_non_empty_fails() nothrow -> Int {
+	match rest.validate_non_empty("name", "") {
+		core.Result::Ok(_) => { return 3101; },
+		core.Result::Err(e) => {
+			if e.tag != "empty-value" { return 3102; }
+			if e.field_keys.len != 1 { return 3103; }
+			if e.field_keys[0] != "name" { return 3104; }
+			if e.field_values[0] != "empty-value" { return 3105; }
+			return 0;
+		}
+	}
+}
+
+// --- validate_min_length ---
+
+fn test_validate_min_length_ok() nothrow -> Int {
+	match rest.validate_min_length("password", "abcdefgh", 8) {
+		core.Result::Err(_) => { return 4001; },
+		core.Result::Ok(v) => {
+			if v != "abcdefgh" { return 4002; }
+			return 0;
+		}
+	}
+}
+
+fn test_validate_min_length_too_short() nothrow -> Int {
+	match rest.validate_min_length("password", "abc", 8) {
+		core.Result::Ok(_) => { return 4101; },
+		core.Result::Err(e) => {
+			if e.tag != "too-short" { return 4102; }
+			if e.field_keys.len != 1 { return 4103; }
+			if e.field_keys[0] != "password" { return 4104; }
+			if e.field_values[0] != "too-short" { return 4105; }
+			return 0;
+		}
+	}
+}
+
+fn test_validate_min_length_exactly_at_min() nothrow -> Int {
+	match rest.validate_min_length("code", "abcd", 4) {
+		core.Result::Err(_) => { return 4201; },
+		core.Result::Ok(v) => {
+			if v != "abcd" { return 4202; }
+			return 0;
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	// validate_int
+	val r1 = test_validate_int_ok();
+	if r1 != 0 { return r1; }
+	val r2 = test_validate_int_not_integer();
+	if r2 != 0 { return r2; }
+	val r3 = test_validate_int_empty_string();
+	if r3 != 0 { return r3; }
+
+	// validate_int_range
+	val r4 = test_validate_int_range_in_range();
+	if r4 != 0 { return r4; }
+	val r5 = test_validate_int_range_below_min();
+	if r5 != 0 { return r5; }
+	val r6 = test_validate_int_range_above_max();
+	if r6 != 0 { return r6; }
+
+	// validate_non_empty
+	val r7 = test_validate_non_empty_ok();
+	if r7 != 0 { return r7; }
+	val r8 = test_validate_non_empty_fails();
+	if r8 != 0 { return r8; }
+
+	// validate_min_length
+	val r9 = test_validate_min_length_ok();
+	if r9 != 0 { return r9; }
+	val r10 = test_validate_min_length_too_short();
+	if r10 != 0 { return r10; }
+	val r11 = test_validate_min_length_exactly_at_min();
+	if r11 != 0 { return r11; }
+
+	return 0;
+}

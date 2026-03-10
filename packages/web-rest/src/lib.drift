@@ -12,6 +12,9 @@ import web.rest.request as request;
 import web.rest.jwt_guard as jwt_guard;
 import web.rest.server as server;
 import web.rest.app as app;
+import web.rest.json_extract as json_extract;
+import web.rest.validators as validators;
+import web.rest.validation_collector as validation_collector;
 
 export {
 	// Types
@@ -24,6 +27,7 @@ export {
 	AppBuilder,
 	App,
 	Group,
+	JsonHandle,
 	// Error constructors
 	RestBadRequest,
 	RestUnauthorized,
@@ -43,6 +47,24 @@ export {
 	// Response
 	json_response,
 	error_envelope,
+	// JSON field extraction
+	require_json_string,
+	require_json_int,
+	require_json_bool,
+	json_string,
+	json_int,
+	// Source-agnostic validators
+	validate_int,
+	validate_int_range,
+	validate_non_empty,
+	validate_min_length,
+	// Validation collector
+	ValidationErrors,
+	new_validation_errors,
+	add_validation_error,
+	merge_validation_error,
+	has_validation_errors,
+	validation_error,
 	// Request construction / accessors
 	new_context,
 	new_request,
@@ -88,6 +110,9 @@ pub type JwtGuardConfig = jwt_guard.JwtGuardConfig;
 pub type AppBuilder = app.AppBuilder;
 pub type App = app.App;
 pub type Group = app.Group;
+pub type JsonHandle = json.JsonHandle;
+
+pub type ValidationErrors = validation_collector.ValidationErrors;
 
 pub type RestBadRequest = events.RestBadRequest;
 pub type RestUnauthorized = events.RestUnauthorized;
@@ -167,8 +192,64 @@ pub fn require_query_param(req: &Request, name: &String) nothrow -> core.Result<
 	return request.require_query_param(req, name);
 }
 
-pub fn body_json(req: &Request) nothrow -> core.Result<json.JsonNode, RestError> {
+pub fn body_json(req: &Request) nothrow -> core.Result<json.JsonHandle, RestError> {
 	return request.body_json(req);
+}
+
+pub fn require_json_string(node: &json.JsonNode, field: String) nothrow -> core.Result<String, RestError> {
+	return json_extract.require_json_string(node, field);
+}
+
+pub fn require_json_int(node: &json.JsonNode, field: String) nothrow -> core.Result<Int, RestError> {
+	return json_extract.require_json_int(node, field);
+}
+
+pub fn require_json_bool(node: &json.JsonNode, field: String) nothrow -> core.Result<Bool, RestError> {
+	return json_extract.require_json_bool(node, field);
+}
+
+pub fn json_string(node: &json.JsonNode, field: String) nothrow -> Optional<String> {
+	return json_extract.json_string(node, field);
+}
+
+pub fn json_int(node: &json.JsonNode, field: String) nothrow -> Optional<Int> {
+	return json_extract.json_int(node, field);
+}
+
+pub fn validate_int(field: String, raw: String) nothrow -> core.Result<Int, RestError> {
+	return validators.validate_int(field, raw);
+}
+
+pub fn validate_int_range(field: String, value: Int, min: Int, max: Int) nothrow -> core.Result<Int, RestError> {
+	return validators.validate_int_range(field, value, min, max);
+}
+
+pub fn validate_non_empty(field: String, value: String) nothrow -> core.Result<String, RestError> {
+	return validators.validate_non_empty(field, value);
+}
+
+pub fn validate_min_length(field: String, value: String, min: Int) nothrow -> core.Result<String, RestError> {
+	return validators.validate_min_length(field, value, min);
+}
+
+pub fn new_validation_errors() nothrow -> ValidationErrors {
+	return validation_collector.new_validation_errors();
+}
+
+pub fn add_validation_error(ve: &mut ValidationErrors, field: String, tag: String) nothrow -> Void {
+	return validation_collector.add_validation_error(ve, field, tag);
+}
+
+pub fn merge_validation_error(ve: &mut ValidationErrors, err: RestError) nothrow -> Void {
+	return validation_collector.merge_validation_error(ve, move err);
+}
+
+pub fn has_validation_errors(ve: &ValidationErrors) nothrow -> Bool {
+	return validation_collector.has_validation_errors(ve);
+}
+
+pub fn validation_error(ve: ValidationErrors) nothrow -> RestError {
+	return validation_collector.validation_error(move ve);
 }
 
 pub fn add_path_param(req: &mut Request, key: String, value: String) nothrow -> Void {

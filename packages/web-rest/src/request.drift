@@ -14,6 +14,7 @@ export {
 	query_param,
 	require_query_param,
 	body_json,
+	cache_body_json,
 	add_path_param,
 	clear_path_params,
 	path_param
@@ -28,7 +29,9 @@ pub struct Request {
 	pub header_keys: Array<String>,
 	pub header_values: Array<String>,
 	pub path_param_keys: Array<String>,
-	pub path_param_values: Array<String>
+	pub path_param_values: Array<String>,
+	pub body_cache_state: Int,
+	pub body_cache_handle: json.JsonHandle
 }
 
 pub fn new_request(method: String, path: String) nothrow -> Request {
@@ -38,7 +41,7 @@ pub fn new_request(method: String, path: String) nothrow -> Request {
 	var hv: Array<String> = [];
 	var ppk: Array<String> = [];
 	var ppv: Array<String> = [];
-	return Request(method = method, path = path, body = "", param_keys = move keys, param_values = move values, header_keys = move hk, header_values = move hv, path_param_keys = move ppk, path_param_values = move ppv);
+	return Request(method = method, path = path, body = "", param_keys = move keys, param_values = move values, header_keys = move hk, header_values = move hv, path_param_keys = move ppk, path_param_values = move ppv, body_cache_state = 0, body_cache_handle = json.share(json.JsonNode::Null()));
 }
 
 pub fn add_query_param(req: &mut Request, key: String, value: String) nothrow -> Void {
@@ -127,13 +130,40 @@ pub fn require_query_param(req: &Request, name: &String) nothrow -> core.Result<
 	}
 }
 
-pub fn body_json(req: &Request) nothrow -> core.Result<json.JsonNode, errors.RestError> {
+pub fn cache_body_json(req: &mut Request) nothrow -> Void {
+	if req.body.byte_length() == 0 {
+		req.body_cache_state = 2;
+		return core.void_value();
+	}
+	match json.parse(&req.body) {
+		core.Result::Ok(node) => {
+			req.body_cache_handle = json.share(move node);
+			req.body_cache_state = 1;
+		},
+		core.Result::Err(_) => {
+			req.body_cache_state = 3;
+		}
+	}
+	return core.void_value();
+}
+
+pub fn body_json(req: &Request) nothrow -> core.Result<json.JsonHandle, errors.RestError> {
+	if req.body_cache_state == 1 {
+		return core.Result::Ok(req.body_cache_handle.clone());
+	}
+	if req.body_cache_state == 2 {
+		return core.Result::Err(errors.rest_error(400, "request-invalid", "missing-body", "request body is empty"));
+	}
+	if req.body_cache_state == 3 {
+		return core.Result::Err(errors.rest_error(400, "request-invalid", "malformed-json", "request body is not valid JSON"));
+	}
+	// state 0: uncached — direct call without dispatch
 	if req.body.byte_length() == 0 {
 		return core.Result::Err(errors.rest_error(400, "request-invalid", "missing-body", "request body is empty"));
 	}
 	match json.parse(&req.body) {
 		core.Result::Ok(node) => {
-			return core.Result::Ok(move node);
+			return core.Result::Ok(json.share(move node));
 		},
 		core.Result::Err(_) => {
 			return core.Result::Err(errors.rest_error(400, "request-invalid", "malformed-json", "request body is not valid JSON"));

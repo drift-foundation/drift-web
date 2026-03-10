@@ -92,3 +92,30 @@
   - `just test` passed
   - `just rest-stress` passed
   - `just rest-perf` passed
+
+## 2026-03-10
+
+- Completed `web.rest` UX Pass 2 request parsing and validation layer:
+  - JSON field extraction helpers in `packages/web-rest/src/json_extract.drift`
+  - source-agnostic validators in `packages/web-rest/src/validators.drift`
+  - validation collector in `packages/web-rest/src/validation_collector.drift`
+- Converted REST UX contract tests into real acceptance coverage:
+  - stories 1-5 and 7 in `packages/web-rest/tests/unit/ux_pass2_test.drift`
+  - focused helper coverage in `json_extract_test`, `validators_test`, and `validation_collector_test`
+- Adopted additive shared JSON for request bodies:
+  - `body_json(req)` now returns `std.json.JsonHandle`
+  - `JsonHandle` is re-exported from `web.rest`
+  - public callback contracts remain on `&Request`
+- Landed request-body JSON caching on the normal dispatch path:
+  - dispatch populates request-scoped cached JSON root handles
+  - `body_json(req)` returns cached handles on framework-managed requests
+  - direct/manual request usage remains correct but may reparse outside dispatch
+  - `cache_body_json()` was removed from the public `web.rest` facade
+- Closed the upstream JSON-sharing design loop:
+  - reviewed and sent `work/rest-next/shared-json-proposal.md` as the additive shared-JSON direction
+  - aligned `web.rest` with delivered `std.json.JsonHandle`
+- Validation:
+  - `just rest-check-par` passed
+  - `just test` passed
+  - `just stress-test` passed
+  - `just perf-smoke` passed

@@ -1,0 +1,66 @@
+module web.rest.validation_collector
+
+import std.core as core;
+import web.rest.errors as errors;
+
+export {
+	ValidationErrors,
+	new_validation_errors,
+	add_validation_error,
+	merge_validation_error,
+	has_validation_errors,
+	validation_error
+};
+
+pub struct ValidationErrors {
+	pub field_keys: Array<String>,
+	pub field_values: Array<String>
+}
+
+fn _set_field(ve: &mut ValidationErrors, key: String, value: String) nothrow -> Void {
+	var i = 0;
+	while i < ve.field_keys.len {
+		if ve.field_keys[i] == key {
+			ve.field_values[i] = value;
+			return core.void_value();
+		}
+		i = i + 1;
+	}
+	ve.field_keys.push(move key);
+	ve.field_values.push(move value);
+	return core.void_value();
+}
+
+pub fn new_validation_errors() nothrow -> ValidationErrors {
+	var fk: Array<String> = [];
+	var fv: Array<String> = [];
+	return ValidationErrors(field_keys = move fk, field_values = move fv);
+}
+
+pub fn add_validation_error(ve: &mut ValidationErrors, field: String, tag: String) nothrow -> Void {
+	_set_field(ve, field, tag);
+	return core.void_value();
+}
+
+pub fn merge_validation_error(ve: &mut ValidationErrors, err: errors.RestError) nothrow -> Void {
+	var i = 0;
+	while i < err.field_keys.len {
+		_set_field(ve, err.field_keys[i], err.field_values[i]);
+		i = i + 1;
+	}
+	return core.void_value();
+}
+
+pub fn has_validation_errors(ve: &ValidationErrors) nothrow -> Bool {
+	return ve.field_keys.len > 0;
+}
+
+pub fn validation_error(ve: ValidationErrors) nothrow -> errors.RestError {
+	var err = errors.rest_error(400, "request-invalid", "validation-failed", "input validation failed");
+	var i = 0;
+	while i < ve.field_keys.len {
+		errors.add_field(&mut err, ve.field_keys[i], ve.field_values[i]);
+		i = i + 1;
+	}
+	return move err;
+}

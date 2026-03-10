@@ -1,0 +1,321 @@
+module web.rest.tests.unit.json_extract_test
+
+import std.core as core;
+import std.json as json;
+import web.rest as rest;
+
+// --- require_json_string ---
+
+fn test_require_json_string_ok() nothrow -> Int {
+	val text = "{\"name\":\"alice\"}";
+	match json.parse(&text) {
+		core.Result::Err(_) => { return 1001; },
+		core.Result::Ok(node) => {
+			match rest.require_json_string(&node, "name") {
+				core.Result::Err(_) => { return 1002; },
+				core.Result::Ok(v) => {
+					if v != "alice" { return 1003; }
+					return 0;
+				}
+			}
+		}
+	}
+}
+
+fn test_require_json_string_missing() nothrow -> Int {
+	val text = "{\"age\":42}";
+	match json.parse(&text) {
+		core.Result::Err(_) => { return 1101; },
+		core.Result::Ok(node) => {
+			match rest.require_json_string(&node, "name") {
+				core.Result::Ok(_) => { return 1102; },
+				core.Result::Err(e) => {
+					if e.status != 400 { return 1103; }
+					if e.event != "request-invalid" { return 1104; }
+					if e.tag != "missing-field" { return 1105; }
+					if e.field_keys.len != 1 { return 1106; }
+					if e.field_keys[0] != "name" { return 1107; }
+					if e.field_values[0] != "missing-field" { return 1108; }
+					return 0;
+				}
+			}
+		}
+	}
+}
+
+fn test_require_json_string_wrong_type() nothrow -> Int {
+	val text = "{\"name\":123}";
+	match json.parse(&text) {
+		core.Result::Err(_) => { return 1201; },
+		core.Result::Ok(node) => {
+			match rest.require_json_string(&node, "name") {
+				core.Result::Ok(_) => { return 1202; },
+				core.Result::Err(e) => {
+					if e.tag != "invalid-type" { return 1203; }
+					if e.field_keys.len != 1 { return 1204; }
+					if e.field_keys[0] != "name" { return 1205; }
+					if e.field_values[0] != "invalid-type" { return 1206; }
+					return 0;
+				}
+			}
+		}
+	}
+}
+
+// --- require_json_int ---
+
+fn test_require_json_int_ok() nothrow -> Int {
+	val text = "{\"age\":42}";
+	match json.parse(&text) {
+		core.Result::Err(_) => { return 2001; },
+		core.Result::Ok(node) => {
+			match rest.require_json_int(&node, "age") {
+				core.Result::Err(_) => { return 2002; },
+				core.Result::Ok(v) => {
+					if v != 42 { return 2003; }
+					return 0;
+				}
+			}
+		}
+	}
+}
+
+fn test_require_json_int_missing() nothrow -> Int {
+	val text = "{\"name\":\"alice\"}";
+	match json.parse(&text) {
+		core.Result::Err(_) => { return 2101; },
+		core.Result::Ok(node) => {
+			match rest.require_json_int(&node, "age") {
+				core.Result::Ok(_) => { return 2102; },
+				core.Result::Err(e) => {
+					if e.tag != "missing-field" { return 2103; }
+					if e.field_keys[0] != "age" { return 2104; }
+					if e.field_values[0] != "missing-field" { return 2105; }
+					return 0;
+				}
+			}
+		}
+	}
+}
+
+fn test_require_json_int_wrong_type() nothrow -> Int {
+	val text = "{\"age\":\"not-a-number\"}";
+	match json.parse(&text) {
+		core.Result::Err(_) => { return 2201; },
+		core.Result::Ok(node) => {
+			match rest.require_json_int(&node, "age") {
+				core.Result::Ok(_) => { return 2202; },
+				core.Result::Err(e) => {
+					if e.tag != "invalid-type" { return 2203; }
+					if e.field_keys[0] != "age" { return 2204; }
+					if e.field_values[0] != "invalid-type" { return 2205; }
+					return 0;
+				}
+			}
+		}
+	}
+}
+
+// --- require_json_bool ---
+
+fn test_require_json_bool_ok() nothrow -> Int {
+	val text = "{\"active\":true}";
+	match json.parse(&text) {
+		core.Result::Err(_) => { return 3001; },
+		core.Result::Ok(node) => {
+			match rest.require_json_bool(&node, "active") {
+				core.Result::Err(_) => { return 3002; },
+				core.Result::Ok(v) => {
+					if v != true { return 3003; }
+					return 0;
+				}
+			}
+		}
+	}
+}
+
+fn test_require_json_bool_false() nothrow -> Int {
+	val text = "{\"active\":false}";
+	match json.parse(&text) {
+		core.Result::Err(_) => { return 3101; },
+		core.Result::Ok(node) => {
+			match rest.require_json_bool(&node, "active") {
+				core.Result::Err(_) => { return 3102; },
+				core.Result::Ok(v) => {
+					if v != false { return 3103; }
+					return 0;
+				}
+			}
+		}
+	}
+}
+
+fn test_require_json_bool_missing() nothrow -> Int {
+	val text = "{\"name\":\"alice\"}";
+	match json.parse(&text) {
+		core.Result::Err(_) => { return 3201; },
+		core.Result::Ok(node) => {
+			match rest.require_json_bool(&node, "active") {
+				core.Result::Ok(_) => { return 3202; },
+				core.Result::Err(e) => {
+					if e.tag != "missing-field" { return 3203; }
+					if e.field_keys[0] != "active" { return 3204; }
+					if e.field_values[0] != "missing-field" { return 3205; }
+					return 0;
+				}
+			}
+		}
+	}
+}
+
+fn test_require_json_bool_wrong_type() nothrow -> Int {
+	val text = "{\"active\":\"yes\"}";
+	match json.parse(&text) {
+		core.Result::Err(_) => { return 3301; },
+		core.Result::Ok(node) => {
+			match rest.require_json_bool(&node, "active") {
+				core.Result::Ok(_) => { return 3302; },
+				core.Result::Err(e) => {
+					if e.tag != "invalid-type" { return 3303; }
+					if e.field_keys[0] != "active" { return 3304; }
+					if e.field_values[0] != "invalid-type" { return 3305; }
+					return 0;
+				}
+			}
+		}
+	}
+}
+
+// --- json_string (optional) ---
+
+fn test_json_string_present() nothrow -> Int {
+	val text = "{\"name\":\"bob\"}";
+	match json.parse(&text) {
+		core.Result::Err(_) => { return 4001; },
+		core.Result::Ok(node) => {
+			match rest.json_string(&node, "name") {
+				Optional::None => { return 4002; },
+				Optional::Some(v) => {
+					if v != "bob" { return 4003; }
+					return 0;
+				}
+			}
+		}
+	}
+}
+
+fn test_json_string_missing() nothrow -> Int {
+	val text = "{\"age\":42}";
+	match json.parse(&text) {
+		core.Result::Err(_) => { return 4101; },
+		core.Result::Ok(node) => {
+			match rest.json_string(&node, "name") {
+				Optional::Some(_) => { return 4102; },
+				Optional::None => { return 0; }
+			}
+		}
+	}
+}
+
+fn test_json_string_wrong_type() nothrow -> Int {
+	val text = "{\"name\":42}";
+	match json.parse(&text) {
+		core.Result::Err(_) => { return 4201; },
+		core.Result::Ok(node) => {
+			match rest.json_string(&node, "name") {
+				Optional::Some(_) => { return 4202; },
+				Optional::None => { return 0; }
+			}
+		}
+	}
+}
+
+// --- json_int (optional) ---
+
+fn test_json_int_present() nothrow -> Int {
+	val text = "{\"age\":99}";
+	match json.parse(&text) {
+		core.Result::Err(_) => { return 5001; },
+		core.Result::Ok(node) => {
+			match rest.json_int(&node, "age") {
+				Optional::None => { return 5002; },
+				Optional::Some(v) => {
+					if v != 99 { return 5003; }
+					return 0;
+				}
+			}
+		}
+	}
+}
+
+fn test_json_int_missing() nothrow -> Int {
+	val text = "{\"name\":\"alice\"}";
+	match json.parse(&text) {
+		core.Result::Err(_) => { return 5101; },
+		core.Result::Ok(node) => {
+			match rest.json_int(&node, "age") {
+				Optional::Some(_) => { return 5102; },
+				Optional::None => { return 0; }
+			}
+		}
+	}
+}
+
+fn test_json_int_wrong_type() nothrow -> Int {
+	val text = "{\"age\":\"not-a-number\"}";
+	match json.parse(&text) {
+		core.Result::Err(_) => { return 5201; },
+		core.Result::Ok(node) => {
+			match rest.json_int(&node, "age") {
+				Optional::Some(_) => { return 5202; },
+				Optional::None => { return 0; }
+			}
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	// require_json_string
+	val r1 = test_require_json_string_ok();
+	if r1 != 0 { return r1; }
+	val r2 = test_require_json_string_missing();
+	if r2 != 0 { return r2; }
+	val r3 = test_require_json_string_wrong_type();
+	if r3 != 0 { return r3; }
+
+	// require_json_int
+	val r4 = test_require_json_int_ok();
+	if r4 != 0 { return r4; }
+	val r5 = test_require_json_int_missing();
+	if r5 != 0 { return r5; }
+	val r6 = test_require_json_int_wrong_type();
+	if r6 != 0 { return r6; }
+
+	// require_json_bool
+	val r7 = test_require_json_bool_ok();
+	if r7 != 0 { return r7; }
+	val r8 = test_require_json_bool_false();
+	if r8 != 0 { return r8; }
+	val r9 = test_require_json_bool_missing();
+	if r9 != 0 { return r9; }
+	val r10 = test_require_json_bool_wrong_type();
+	if r10 != 0 { return r10; }
+
+	// json_string
+	val r11 = test_json_string_present();
+	if r11 != 0 { return r11; }
+	val r12 = test_json_string_missing();
+	if r12 != 0 { return r12; }
+	val r13 = test_json_string_wrong_type();
+	if r13 != 0 { return r13; }
+
+	// json_int
+	val r14 = test_json_int_present();
+	if r14 != 0 { return r14; }
+	val r15 = test_json_int_missing();
+	if r15 != 0 { return r15; }
+	val r16 = test_json_int_wrong_type();
+	if r16 != 0 { return r16; }
+
+	return 0;
+}

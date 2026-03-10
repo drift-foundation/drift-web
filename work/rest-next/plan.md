@@ -69,7 +69,7 @@ fn create_user(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Resul
         core.Result::Err(e) => { return core.Result::Err(e); }
     };
 
-    val email = match rest.require_body_string(&body, "email") {
+    val email = match rest.require_json_string(&body, "email") {
         core.Result::Ok(v) => { v },
         core.Result::Err(e) => { return core.Result::Err(e); }
     };
@@ -123,11 +123,11 @@ Behavior:
 
 #### 2. Body field extraction from parsed JSON
 
-- `require_body_string(node, field) -> Result<String, RestError>`
-- `require_body_int(node, field) -> Result<Int, RestError>`
-- `require_body_bool(node, field) -> Result<Bool, RestError>`
-- `body_string(node, field) -> Optional<String>`
-- `body_int(node, field) -> Optional<Int>`
+- `require_json_string(node, field) -> Result<String, RestError>`
+- `require_json_int(node, field) -> Result<Int, RestError>`
+- `require_json_bool(node, field) -> Result<Bool, RestError>`
+- `json_string(node, field) -> Optional<String>`
+- `json_int(node, field) -> Optional<Int>`
 
 Behavior:
 - field missing -> field-aware error
@@ -283,12 +283,12 @@ Optional query param with default:
 | Function | Error condition | Tag |
 |----------|-----------------|-----|
 | `body_json` | malformed/missing body | existing malformed body tag (`malformed-json`) |
-| `require_body_string` | field missing | `missing-field` |
-| `require_body_string` | field present, wrong JSON type | `invalid-type` |
-| `require_body_int` | field missing | `missing-field` |
-| `require_body_int` | field present, wrong JSON type | `invalid-type` |
-| `require_body_bool` | field missing | `missing-field` |
-| `require_body_bool` | field present, wrong JSON type | `invalid-type` |
+| `require_json_string` | field missing | `missing-field` |
+| `require_json_string` | field present, wrong JSON type | `invalid-type` |
+| `require_json_int` | field missing | `missing-field` |
+| `require_json_int` | field present, wrong JSON type | `invalid-type` |
+| `require_json_bool` | field missing | `missing-field` |
+| `require_json_bool` | field present, wrong JSON type | `invalid-type` |
 | `path_param` | missing path value | `missing-path-param` |
 | `require_query_param` | missing query value | `missing-query-param` |
 | `validate_int` | not parseable as integer | `invalid-integer` |

@@ -1,0 +1,126 @@
+module web.rest.tests.unit.validation_collector_test
+
+import std.core as core;
+import web.rest as rest;
+
+// --- new + has_validation_errors (empty) ---
+
+fn test_new_is_empty() nothrow -> Int {
+	val ve = rest.new_validation_errors();
+	if rest.has_validation_errors(&ve) == true { return 1001; }
+	return 0;
+}
+
+// --- add_validation_error ---
+
+fn test_add_single_field() nothrow -> Int {
+	var ve = rest.new_validation_errors();
+	rest.add_validation_error(&mut ve, "email", "missing-field");
+	if rest.has_validation_errors(&ve) != true { return 1101; }
+	val err = rest.validation_error(move ve);
+	if err.field_keys.len != 1 { return 1102; }
+	if err.field_keys[0] != "email" { return 1103; }
+	if err.field_values[0] != "missing-field" { return 1104; }
+	return 0;
+}
+
+// --- merge_validation_error from validator ---
+
+fn test_merge_from_validator() nothrow -> Int {
+	var ve = rest.new_validation_errors();
+	match rest.validate_int("page", "abc") {
+		core.Result::Ok(_) => { return 1201; },
+		core.Result::Err(e) => {
+			rest.merge_validation_error(&mut ve, move e);
+		}
+	}
+	if rest.has_validation_errors(&ve) != true { return 1202; }
+	val err = rest.validation_error(move ve);
+	if err.field_keys.len != 1 { return 1203; }
+	if err.field_keys[0] != "page" { return 1204; }
+	if err.field_values[0] != "invalid-integer" { return 1205; }
+	return 0;
+}
+
+fn test_merge_multiple_errors() nothrow -> Int {
+	var ve = rest.new_validation_errors();
+	match rest.validate_int("page", "abc") {
+		core.Result::Ok(_) => { return 1301; },
+		core.Result::Err(e) => {
+			rest.merge_validation_error(&mut ve, move e);
+		}
+	}
+	match rest.validate_non_empty("name", "") {
+		core.Result::Ok(_) => { return 1302; },
+		core.Result::Err(e) => {
+			rest.merge_validation_error(&mut ve, move e);
+		}
+	}
+	val err = rest.validation_error(move ve);
+	if err.field_keys.len != 2 { return 1303; }
+	if err.field_keys[0] != "page" { return 1304; }
+	if err.field_values[0] != "invalid-integer" { return 1305; }
+	if err.field_keys[1] != "name" { return 1306; }
+	if err.field_values[1] != "empty-value" { return 1307; }
+	return 0;
+}
+
+// --- last-write-wins ---
+
+fn test_last_write_wins_add() nothrow -> Int {
+	var ve = rest.new_validation_errors();
+	rest.add_validation_error(&mut ve, "email", "missing-field");
+	rest.add_validation_error(&mut ve, "email", "invalid-format");
+	val err = rest.validation_error(move ve);
+	if err.field_keys.len != 1 { return 1401; }
+	if err.field_keys[0] != "email" { return 1402; }
+	if err.field_values[0] != "invalid-format" { return 1403; }
+	return 0;
+}
+
+fn test_last_write_wins_merge() nothrow -> Int {
+	var ve = rest.new_validation_errors();
+	rest.add_validation_error(&mut ve, "page", "required");
+	match rest.validate_int("page", "abc") {
+		core.Result::Ok(_) => { return 1501; },
+		core.Result::Err(e) => {
+			rest.merge_validation_error(&mut ve, move e);
+		}
+	}
+	val err = rest.validation_error(move ve);
+	if err.field_keys.len != 1 { return 1502; }
+	if err.field_values[0] != "invalid-integer" { return 1503; }
+	return 0;
+}
+
+// --- validation_error output contract ---
+
+fn test_validation_error_contract() nothrow -> Int {
+	var ve = rest.new_validation_errors();
+	rest.add_validation_error(&mut ve, "email", "missing-field");
+	rest.add_validation_error(&mut ve, "age", "invalid-type");
+	val err = rest.validation_error(move ve);
+	if err.status != 400 { return 1601; }
+	if err.event != "request-invalid" { return 1602; }
+	if err.tag != "validation-failed" { return 1603; }
+	if err.field_keys.len != 2 { return 1604; }
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	val r1 = test_new_is_empty();
+	if r1 != 0 { return r1; }
+	val r2 = test_add_single_field();
+	if r2 != 0 { return r2; }
+	val r3 = test_merge_from_validator();
+	if r3 != 0 { return r3; }
+	val r4 = test_merge_multiple_errors();
+	if r4 != 0 { return r4; }
+	val r5 = test_last_write_wins_add();
+	if r5 != 0 { return r5; }
+	val r6 = test_last_write_wins_merge();
+	if r6 != 0 { return r6; }
+	val r7 = test_validation_error_contract();
+	if r7 != 0 { return r7; }
+	return 0;
+}

@@ -93,7 +93,8 @@ fn scenario_valid_json_body_accepted() nothrow -> Int {
 	var req = rest.new_request("POST", "/v1/users");
 	req.body = "{\"name\":\"alice\",\"age\":30}";
 	match rest.body_json(&req) {
-		core.Result::Ok(node) => {
+		core.Result::Ok(handle) => {
+			val node = handle.node();
 			val name_key = "name";
 			match node.get(&name_key) {
 				Optional::None => { return 601; },

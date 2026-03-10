@@ -1,0 +1,50 @@
+module web.rest.validators
+
+import std.core as core;
+import std.parse as parse;
+import web.rest.errors as errors;
+
+export {
+	validate_int,
+	validate_int_range,
+	validate_non_empty,
+	validate_min_length
+};
+
+fn _field_error(field: String, tag: String, message: String) nothrow -> errors.RestError {
+	var err = errors.rest_error(400, "request-invalid", tag, message);
+	errors.add_field(&mut err, field, tag);
+	return move err;
+}
+
+pub fn validate_int(field: String, raw: String) nothrow -> core.Result<Int, errors.RestError> {
+	match parse.parse_int(raw) {
+		core.Result::Ok(v) => {
+			return core.Result::Ok(v);
+		},
+		core.Result::Err(_) => {
+			return core.Result::Err(_field_error(field, "invalid-integer", "field is not a valid integer"));
+		}
+	}
+}
+
+pub fn validate_int_range(field: String, value: Int, min: Int, max: Int) nothrow -> core.Result<Int, errors.RestError> {
+	if value < min or value > max {
+		return core.Result::Err(_field_error(field, "out-of-range", "integer is out of allowed range"));
+	}
+	return core.Result::Ok(value);
+}
+
+pub fn validate_non_empty(field: String, value: String) nothrow -> core.Result<String, errors.RestError> {
+	if value.byte_length() == 0 {
+		return core.Result::Err(_field_error(field, "empty-value", "field must not be empty"));
+	}
+	return core.Result::Ok(value);
+}
+
+pub fn validate_min_length(field: String, value: String, min: Int) nothrow -> core.Result<String, errors.RestError> {
+	if value.byte_length() < min {
+		return core.Result::Err(_field_error(field, "too-short", "field is shorter than minimum length"));
+	}
+	return core.Result::Ok(value);
+}
