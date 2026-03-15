@@ -1,4 +1,4 @@
-module web.rest.tests.unit.validators_test
+module web.rest.tests.unit.validators_test;
 
 import std.core as core;
 import web.rest as rest;

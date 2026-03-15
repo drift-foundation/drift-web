@@ -1,4 +1,4 @@
-module web.jwt.tests.unit.sign_verify_test
+module web.jwt.tests.unit.sign_verify_test;
 
 import std.core as core;
 import std.io as io;

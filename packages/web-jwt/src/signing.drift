@@ -1,4 +1,4 @@
-module web.jwt.signing
+module web.jwt.signing;
 
 import std.core as core;
 import std.io as io;

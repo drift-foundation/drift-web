@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "project": {
+    "name": "drift-web",
+    "license": "MIT"
+  },
+  "artifacts": [
+    {
+      "kind": "package",
+      "name": "web-jwt",
+      "module_namespace": "web.jwt",
+      "version": "0.1.0",
+      "description": "HS256 JWT sign/verify with temporal claims validation",
+      "entry_module": "packages/web-jwt/src/lib.drift",
+      "modules": [
+        "packages/web-jwt/src/lib.drift",
+        "packages/web-jwt/src/model.drift",
+        "packages/web-jwt/src/signing.drift",
+        "packages/web-jwt/src/verify.drift",
+        "packages/web-jwt/src/claims.drift",
+        "packages/web-jwt/src/errors.drift"
+      ],
+      "assets": [
+        "docs/integration.md",
+        "docs/effective-web-jwt.md",
+        "README.md"
+      ]
+    },
+    {
+      "kind": "package",
+      "name": "web-rest",
+      "module_namespace": "web.rest",
+      "version": "0.1.0",
+      "description": "HTTP/1.1 REST server with routing, guards, and JSON body handling",
+      "entry_module": "packages/web-rest/src/lib.drift",
+      "modules": [
+        "packages/web-rest/src/lib.drift",
+        "packages/web-rest/src/app.drift",
+        "packages/web-rest/src/context.drift",
+        "packages/web-rest/src/errors.drift",
+        "packages/web-rest/src/events.drift",
+        "packages/web-rest/src/http.drift",
+        "packages/web-rest/src/json_extract.drift",
+        "packages/web-rest/src/jwt_guard.drift",
+        "packages/web-rest/src/request.drift",
+        "packages/web-rest/src/response.drift",
+        "packages/web-rest/src/router.drift",
+        "packages/web-rest/src/server.drift",
+        "packages/web-rest/src/validation_collector.drift",
+        "packages/web-rest/src/validators.drift"
+      ],
+      "package_deps": [
+        {"name": "web-jwt", "version": "0.1.0"}
+      ],
+      "assets": [
+        "docs/integration.md",
+        "docs/effective-web-rest.md",
+        "docs/effective-web-jwt.md",
+        "README.md"
+      ]
+    }
+  ]
+}

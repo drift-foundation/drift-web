@@ -1,4 +1,4 @@
-module web.rest.context
+module web.rest.context;
 
 import std.core as core;
 

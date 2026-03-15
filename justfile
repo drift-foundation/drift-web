@@ -142,6 +142,35 @@ rest-compile-check FILE="packages/web-rest/src/lib.drift":
       --file "{{FILE}}" \
       --target-word-bits 64
 
+# Deploy via drift deploy (standardized toolchain release flow).
+#
+# Usage:
+#   just deploy -- --dest=~/opt/drift/libs
+#
+# Reads drift-package.json for artifact definitions.
+# Requires: DRIFTC, DRIFT_SIGN_KEY_FILE, DRIFT_LANG_ROOT (default: ../drift-lang).
+deploy *ARGS:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	: "${DRIFTC:?set DRIFTC to your driftc path}"
+	DRIFT_LANG_ROOT="${DRIFT_LANG_ROOT:-../drift-lang}"
+	args=({{ARGS}})
+	# Strip leading -- (forwarded from just)
+	if [[ ${#args[@]} -gt 0 && "${args[0]}" == "--" ]]; then
+		args=("${args[@]:1}")
+	fi
+	# Expand ~ in --dest= values (just doesn't expand ~ inside quotes)
+	expanded=()
+	for a in "${args[@]}"; do
+		case "$a" in
+			--dest=\~/*) expanded+=("--dest=${HOME}/${a#--dest=\~/}") ;;
+			--dest=\~)   expanded+=("--dest=${HOME}") ;;
+			*)           expanded+=("$a") ;;
+		esac
+	done
+	PYTHONPATH="${DRIFT_LANG_ROOT}" python3 -m tools.drift_deploy.drift_deploy \
+		--driftc "${DRIFTC}" "${expanded[@]}"
+
 # Show driftc version info.
 driftc-help:
     @${DRIFTC} --help 2>&1 | head -5 || true

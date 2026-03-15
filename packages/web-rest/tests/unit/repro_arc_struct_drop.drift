@@ -1,4 +1,4 @@
-module web.rest.tests.unit.repro_arc_struct_drop
+module web.rest.tests.unit.repro_arc_struct_drop;
 
 import std.core as core;
 import std.concurrent as conc;

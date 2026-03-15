@@ -1,4 +1,4 @@
-module web.rest.events
+module web.rest.events;
 
 export {
 	RestBadRequest,

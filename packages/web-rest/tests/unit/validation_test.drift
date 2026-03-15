@@ -1,4 +1,4 @@
-module web.rest.tests.unit.validation_test
+module web.rest.tests.unit.validation_test;
 
 import std.core as core;
 import std.json as json;

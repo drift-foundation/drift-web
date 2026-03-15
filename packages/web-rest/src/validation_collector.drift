@@ -1,4 +1,4 @@
-module web.rest.validation_collector
+module web.rest.validation_collector;
 
 import std.core as core;
 import web.rest.errors as errors;

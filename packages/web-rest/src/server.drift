@@ -1,4 +1,4 @@
-module web.rest.server
+module web.rest.server;
 
 import std.core as core;
 import std.io as io;

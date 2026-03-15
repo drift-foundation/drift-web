@@ -1,4 +1,4 @@
-module web.jwt.tests.unit.strictness_test
+module web.jwt.tests.unit.strictness_test;
 
 import std.core as core;
 import web.jwt as jwt;

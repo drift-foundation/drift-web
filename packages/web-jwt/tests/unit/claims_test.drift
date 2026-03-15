@@ -1,4 +1,4 @@
-module web.jwt.tests.unit.claims_test
+module web.jwt.tests.unit.claims_test;
 
 import std.core as core;
 import web.jwt as jwt;

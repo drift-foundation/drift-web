@@ -1,4 +1,4 @@
-module web.rest.response
+module web.rest.response;
 
 import std.core as core;
 import std.io as io;

@@ -1,4 +1,4 @@
-module web.rest.request
+module web.rest.request;
 
 import std.core as core;
 import std.io as io;

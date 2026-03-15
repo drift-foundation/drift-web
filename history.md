@@ -119,3 +119,26 @@
   - `just test` passed
   - `just stress-test` passed
   - `just perf-smoke` passed
+
+## 2026-03-15
+
+- Adopted standardized downstream packaging via `drift deploy`:
+  - added `drift-package.json` with two published package artifacts:
+    - `web-jwt@0.1.0`
+    - `web-rest@0.1.0`
+  - `web-rest` declares packaged dependency on `web-jwt@0.1.0`
+  - added deploy entrypoint in `justfile`
+- Aligned published package metadata with actual Drift module namespaces:
+  - explicit `module_namespace` for `web.jwt`
+  - explicit `module_namespace` for `web.rest`
+- Added consumer-facing package docs:
+  - `docs/integration.md`
+  - refreshed `README.md` for signed package consumption
+  - bundled deploy assets for published packages
+- Validated real signed-package publish in a shared library root:
+  - both packages build, sign, smoke, and publish in a single run
+  - publish works alongside unrelated packages such as `net-tls`
+  - no shared-root workarounds required after upstream compiler/deploy fixes through `0.27.62`
+- Consumer model is now pinned and documented:
+  - `driftc 0.27.59+` required initially; shared-root deploy validation completed on `0.27.62`
+  - consumers use `--package-root <library-root>` plus exact `--dep web-jwt@0.1.0` / `--dep web-rest@0.1.0`

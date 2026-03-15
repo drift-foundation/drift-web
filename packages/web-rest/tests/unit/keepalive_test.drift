@@ -1,4 +1,4 @@
-module web.rest.tests.unit.keepalive_test
+module web.rest.tests.unit.keepalive_test;
 
 import std.core as core;
 import std.io as io;

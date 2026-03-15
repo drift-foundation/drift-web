@@ -1,4 +1,4 @@
-module web.jwt.errors
+module web.jwt.errors;
 
 import std.core as core;
 

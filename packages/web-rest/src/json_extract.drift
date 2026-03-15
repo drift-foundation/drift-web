@@ -1,4 +1,4 @@
-module web.rest.json_extract
+module web.rest.json_extract;
 
 import std.core as core;
 import std.json as json;

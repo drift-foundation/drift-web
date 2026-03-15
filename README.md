@@ -1,59 +1,54 @@
 # drift-web
 
-Drift web ecosystem workspace.
-
-This repository hosts foundational user-land `web.*` packages intended for publication and reuse across Drift applications.
+Server-side web framework for Drift. Published as signed packages for
+downstream consumption via `driftc --package-root`.
 
 ## Packages
 
-1. `packages/web-jwt`
-- Module: `web.jwt`
-- Scope: compact JWS JWT (`HS256`) sign/verify with strict validation and temporal claim policy.
+| Package | Module | Description |
+|---|---|---|
+| `web-jwt` | `web.jwt` | HS256 JWT sign/verify with temporal claims validation |
+| `web-rest` | `web.rest` | HTTP/1.1 REST server with routing, guards, and JSON body handling |
 
-Planned next packages:
-- `web.rest` (REST framework)
-- `web.streaming` (streaming/web transport primitives)
+`web-rest` depends on `web-jwt`. Most applications should depend on both.
 
-## Current scope (JWT MVP)
+## Quick start
 
-- Compact JWT (`header.payload.signature`)
-- `HS256` only
-- Strict base64url handling
-- Signature verification over original token segments
-- Temporal claim validation (`exp`, `nbf`, `iat`) with explicit policy
+See [docs/integration.md](docs/integration.md) for full consumer setup,
+trust store configuration, and compilation instructions.
 
-## Docs
+## Documentation
 
-- JWT handoff notes: `docs/web-jwt.md`
-- JWT design contract: `docs/jwt-webtoken-design.md`
-- Effective JWT usage guide: `docs/effective-web-jwt.md`
-- Project layout/template reference: `docs/project-setup.md`
+- [Integration guide](docs/integration.md) — package consumption, trust
+  setup, compilation
+- [Effective web-jwt](docs/effective-web-jwt.md) — JWT API reference and
+  usage patterns
+- [Effective web-rest](docs/effective-web-rest.md) — REST server API,
+  routing, guards, error envelopes
+- [Project setup template](docs/project-setup.md) — Drift library project
+  conventions
 
 ## Development
 
-Primary recipes:
-- `just test`
-- `just jwt-check-par`
-- `just jwt-check-unit packages/web-jwt/tests/unit/sign_verify_test.drift`
-- `just jwt-compile-check`
+```bash
+export DRIFTC=/path/to/driftc
+export DRIFT_SIGN_KEY_FILE=/path/to/signing-key.seed
 
-Requirements:
-- `just`
-- `bash`
-- `driftc` (set `DRIFTC` env var)
+just test                    # full test suite
+just deploy -- --dest=~/opt/drift/libs   # build, sign, smoke, publish
+```
+
+Requirements: `just`, `bash`, `driftc` 0.27.59+, `DRIFT_SIGN_KEY_FILE`
+for deploy.
 
 ## Repository layout
 
 ```text
 packages/
-  web-jwt/
-docs/
-work/
-history.md
-AGENTS.md
+  web-jwt/        # JWT sign/verify
+  web-rest/       # REST server framework
+docs/             # Usage guides and design docs
+tools/            # Test runners
+drift-package.json
+drift/trust.json  # Project-local trust store
 ```
-
-## Status
-
-- API/design and package structure are in place.
-- See `work/initial/plan.md` for active blockers and completion criteria.

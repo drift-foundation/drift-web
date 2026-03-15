@@ -74,7 +74,7 @@ tools/drift_test_parallel_runner.sh run-one \
 Every test file is a standalone executable with a `module` declaration and `fn main() nothrow -> Int`:
 
 ```drift
-module your.package.tests.unit.feature_test
+module your.package.tests.unit.feature_test;
 
 import std.core as core;
 import your.package as pkg;

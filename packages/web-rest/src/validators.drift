@@ -1,4 +1,4 @@
-module web.rest.validators
+module web.rest.validators;
 
 import std.core as core;
 import std.parse as parse;

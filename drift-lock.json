@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "artifacts": {
+    "web-rest": {
+      "resolved": {
+        "web-jwt": {
+          "version": "0.1.0",
+          "integrity": "sha256:3c074eb336e537d168bd6da9cde912420eafc9d05d3288483564d3f052f30e11",
+          "dep_type": "direct"
+        }
+      }
+    }
+  }
+}

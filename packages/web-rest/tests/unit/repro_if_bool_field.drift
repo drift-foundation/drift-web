@@ -1,4 +1,4 @@
-module web.rest.tests.unit.repro_if_bool_field
+module web.rest.tests.unit.repro_if_bool_field;
 
 import std.core as core;
 

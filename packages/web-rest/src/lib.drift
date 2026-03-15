@@ -1,4 +1,4 @@
-module web.rest
+module web.rest;
 
 import std.core as core;
 import std.json as json;

@@ -1,4 +1,4 @@
-module web.rest.tests.perf.instrument_test
+module web.rest.tests.perf.instrument_test;
 
 import std.core as core;
 import std.io as io;

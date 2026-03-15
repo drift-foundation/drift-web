@@ -51,7 +51,7 @@ Internal module split:
 ## Public API (Proposed)
 
 ```drift
-module web.jwt
+module web.jwt;
 
 struct SignOptions {
     // If true, ensure header contains typ=JWT.

@@ -1,4 +1,4 @@
-module web.rest.router
+module web.rest.router;
 
 import std.core as core;
 import std.io as io;

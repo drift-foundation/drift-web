@@ -1,4 +1,4 @@
-module web.jwt.claims
+module web.jwt.claims;
 
 import std.core as core;
 import std.json as json;

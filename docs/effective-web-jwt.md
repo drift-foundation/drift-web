@@ -33,7 +33,7 @@ Out of scope in MVP:
 ## Pinned public API (for implementation)
 
 ```drift
-module web.jwt
+module web.jwt;
 
 pub struct SignOptions {
 	pub enforce_typ_jwt: Bool

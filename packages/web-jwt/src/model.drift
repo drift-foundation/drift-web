@@ -1,4 +1,4 @@
-module web.jwt.model
+module web.jwt.model;
 
 export {
 	SignOptions,

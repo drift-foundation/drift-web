@@ -1,4 +1,4 @@
-module web.rest.tests.unit.ux_pass2_test
+module web.rest.tests.unit.ux_pass2_test;
 
 import std.core as core;
 import std.json as json;

@@ -1,4 +1,4 @@
-module web.jwt.tests.e2e.realtime_default_policy_test
+module web.jwt.tests.e2e.realtime_default_policy_test;
 
 import std.core as core;
 import std.time as time;
