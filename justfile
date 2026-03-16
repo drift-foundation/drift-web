@@ -142,6 +142,27 @@ rest-compile-check FILE="packages/web-rest/src/lib.drift":
       --file "{{FILE}}" \
       --target-word-bits 64
 
+# All client unit tests (parallel compile, serial run).
+client-check-par:
+    @tools/drift_test_parallel_runner.sh run-all \
+      --src-root packages/web-client/src \
+      --test-root packages/web-client/tests/unit \
+      --target-word-bits 64
+
+# Single client unit test.
+client-check-unit FILE:
+    @tools/drift_test_parallel_runner.sh run-one \
+      --src-root packages/web-client/src \
+      --test-file "{{FILE}}" \
+      --target-word-bits 64
+
+# Compile-only check for client (no execution).
+client-compile-check FILE="packages/web-client/src/lib.drift":
+    @tools/drift_test_parallel_runner.sh compile \
+      --src-root packages/web-client/src \
+      --file "{{FILE}}" \
+      --target-word-bits 64
+
 # Deploy via drift deploy (standardized toolchain release flow).
 #
 # Usage:

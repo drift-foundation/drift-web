@@ -114,7 +114,7 @@ is_executable_test_entry() {
 
 test_module_of() {
 	local file="$1"
-	sed -n "s/^module[[:space:]]\\+\\(.*\\)$/\\1/p" "${file}" | head -n1
+	sed -n "s/^module[[:space:]]\\+\\(.*\\);\\{0,1\\}$/\\1/p" "${file}" | sed 's/;$//' | head -n1
 }
 
 OPTIMIZED_FLAG=()
