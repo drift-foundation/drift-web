@@ -9,7 +9,9 @@
   },
   "namespaces": {
     "web.jwt.*": ["ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0="],
-    "web.rest.*": ["ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0="]
+    "web.rest.*": ["ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0="],
+    "web.client.*": ["ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0="],
+    "net_tls.*": ["ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0="]
   },
   "revoked": []
 }

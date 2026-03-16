@@ -9,7 +9,7 @@
       "kind": "package",
       "name": "web-jwt",
       "module_namespace": "web.jwt",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "description": "HS256 JWT sign/verify with temporal claims validation",
       "entry_module": "packages/web-jwt/src/lib.drift",
       "modules": [
@@ -30,7 +30,7 @@
       "kind": "package",
       "name": "web-rest",
       "module_namespace": "web.rest",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "description": "HTTP/1.1 REST server with routing, guards, and JSON body handling",
       "entry_module": "packages/web-rest/src/lib.drift",
       "modules": [
@@ -50,12 +50,36 @@
         "packages/web-rest/src/validators.drift"
       ],
       "package_deps": [
-        {"name": "web-jwt", "version": "0.1.0"}
+        {"name": "web-jwt", "version": "0.2.0"}
       ],
       "assets": [
         "docs/integration.md",
         "docs/effective-web-rest.md",
         "docs/effective-web-jwt.md",
+        "README.md"
+      ]
+    },
+    {
+      "kind": "package",
+      "name": "web-client",
+      "module_namespace": "web.client",
+      "version": "0.2.0",
+      "description": "HTTP/1.1 and HTTPS client for outbound requests",
+      "entry_module": "packages/web-client/src/lib.drift",
+      "modules": [
+        "packages/web-client/src/lib.drift",
+        "packages/web-client/src/request.drift",
+        "packages/web-client/src/response.drift",
+        "packages/web-client/src/errors.drift",
+        "packages/web-client/src/transport.drift",
+        "packages/web-client/src/http.drift",
+        "packages/web-client/src/url.drift"
+      ],
+      "package_deps": [
+        {"name": "net-tls", "version": "0.3.2"}
+      ],
+      "assets": [
+        "docs/integration.md",
         "README.md"
       ]
     }

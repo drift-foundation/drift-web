@@ -13,7 +13,8 @@ export {
 	ParsedResponse,
 	serialize_request,
 	parse_response_headers,
-	decode_chunked_body
+	decode_chunked_body,
+	find_header_end_bytes
 };
 
 // --- String/byte helpers ---
@@ -156,6 +157,10 @@ fn _find_crlf(raw: &Array<Byte>, start: Int, limit: Int) nothrow -> Int {
 		i = i + 1;
 	}
 	return -1;
+}
+
+pub fn find_header_end_bytes(raw: &Array<Byte>) nothrow -> Int {
+	return _find_header_end(raw);
 }
 
 fn _find_header_end(raw: &Array<Byte>) nothrow -> Int {
@@ -325,7 +330,7 @@ pub fn decode_chunked_body(raw: &Array<Byte>, start: Int, max_body: Int) nothrow
 	while decoding {
 		val line_end = _find_crlf(raw, pos, raw_len);
 		if line_end < 0 {
-			return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "incomplete chunked body"));
+			return core.Result::Err(errors.client_error(errors.TAG_INCOMPLETE, "incomplete chunked body"));
 		}
 		val size_str = _bytes_to_string(raw, pos, line_end);
 		var chunk_size = 0;
@@ -340,13 +345,13 @@ pub fn decode_chunked_body(raw: &Array<Byte>, start: Int, max_body: Int) nothrow
 			// Require terminating CRLF after the 0-size chunk line (0\r\n\r\n).
 			val term_pos = line_end + 2;
 			if term_pos + 1 >= raw_len {
-				return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "missing terminating CRLF in chunked body"));
+				return core.Result::Err(errors.client_error(errors.TAG_INCOMPLETE, "missing terminating CRLF in chunked body"));
 			}
 			if raw[term_pos] != cast<Byte>(13) {
-				return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "missing terminating CRLF in chunked body"));
+				return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "malformed terminating CRLF in chunked body"));
 			}
 			if raw[term_pos + 1] != cast<Byte>(10) {
-				return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "missing terminating CRLF in chunked body"));
+				return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "malformed terminating CRLF in chunked body"));
 			}
 			decoding = false;
 		} else {
@@ -356,7 +361,7 @@ pub fn decode_chunked_body(raw: &Array<Byte>, start: Int, max_body: Int) nothrow
 			val data_start = line_end + 2;
 			val data_end = data_start + chunk_size;
 			if data_end > raw_len {
-				return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "truncated chunk data"));
+				return core.Result::Err(errors.client_error(errors.TAG_INCOMPLETE, "truncated chunk data"));
 			}
 			var i = 0;
 			while i < chunk_size {
@@ -365,13 +370,13 @@ pub fn decode_chunked_body(raw: &Array<Byte>, start: Int, max_body: Int) nothrow
 			}
 			// Verify trailing CRLF after chunk data.
 			if data_end + 1 >= raw_len {
-				return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "missing CRLF after chunk data"));
+				return core.Result::Err(errors.client_error(errors.TAG_INCOMPLETE, "missing CRLF after chunk data"));
 			}
 			if raw[data_end] != cast<Byte>(13) {
-				return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "missing CRLF after chunk data"));
+				return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "malformed CRLF after chunk data"));
 			}
 			if raw[data_end + 1] != cast<Byte>(10) {
-				return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "missing CRLF after chunk data"));
+				return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "malformed CRLF after chunk data"));
 			}
 			pos = data_end + 2;
 		}

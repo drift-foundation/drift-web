@@ -1,0 +1,156 @@
+module web.client.tests.e2e.http_e2e_test;
+
+import std.core as core;
+import std.concurrent as conc;
+import std.format as fmt;
+import std.console as console;
+import web.rest as rest;
+import web.client as client;
+
+fn _health_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	return core.Result::Ok(rest.json_response(200, "{\"ok\":true}"));
+}
+
+fn _echo_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	return core.Result::Ok(rest.json_response(200, "{\"echo\":\"hello\"}"));
+}
+
+// --- Scenarios ---
+
+// GET /health → 200, verify body.
+fn scenario_get_health(port: Int) nothrow -> Int {
+	var cfg = client.new_client_config();
+	val url = "http://127.0.0.1:" + fmt.format_int(port) + "/health";
+	var req = client.new_request("GET", url);
+	match client.send(&cfg, move req) {
+		core.Result::Err(_) => { return 101; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 102; }
+			match client.response_body_string(&resp) {
+				core.Result::Err(_) => { return 103; },
+				core.Result::Ok(body) => {
+					val expected = "{\"ok\":true}";
+					if body != expected { return 104; }
+					return 0;
+				}
+			}
+		}
+	}
+}
+
+// POST /echo with JSON body → 200, verify response body.
+fn scenario_post_echo(port: Int) nothrow -> Int {
+	var cfg = client.new_client_config();
+	val url = "http://127.0.0.1:" + fmt.format_int(port) + "/echo";
+	var req = client.new_request("POST", url);
+	client.set_json_body(&mut req, "{\"body\":\"hello\"}");
+	match client.send(&cfg, move req) {
+		core.Result::Err(_) => { return 201; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 202; }
+			match client.response_body_string(&resp) {
+				core.Result::Err(_) => { return 203; },
+				core.Result::Ok(body) => {
+					val expected = "{\"echo\":\"hello\"}";
+					if body != expected { return 204; }
+					return 0;
+				}
+			}
+		}
+	}
+}
+
+// Verify response header lookup (case-insensitive).
+fn scenario_response_header(port: Int) nothrow -> Int {
+	var cfg = client.new_client_config();
+	val url = "http://127.0.0.1:" + fmt.format_int(port) + "/health";
+	var req = client.new_request("GET", url);
+	match client.send(&cfg, move req) {
+		core.Result::Err(_) => { return 301; },
+		core.Result::Ok(resp) => {
+			val ct_name = "content-type";
+			match client.response_header(&resp, &ct_name) {
+				Optional::None() => { return 302; },
+				Optional::Some(v) => {
+					val expected = "application/json";
+					if v != expected { return 303; }
+					return 0;
+				}
+			}
+		}
+	}
+}
+
+// Verify response_body_json succeeds on valid JSON.
+fn scenario_json_body_parse(port: Int) nothrow -> Int {
+	var cfg = client.new_client_config();
+	val url = "http://127.0.0.1:" + fmt.format_int(port) + "/health";
+	var req = client.new_request("GET", url);
+	match client.send(&cfg, move req) {
+		core.Result::Err(_) => { return 401; },
+		core.Result::Ok(resp) => {
+			match client.response_body_json(&resp) {
+				core.Result::Err(_) => { return 402; },
+				core.Result::Ok(_) => { return 0; }
+			}
+		}
+	}
+}
+
+// Verify that connecting to a bad port returns an error.
+fn scenario_error_on_bad_port() nothrow -> Int {
+	var cfg = client.new_client_config();
+	client.with_connect_timeout(&mut cfg, 1000);
+	val url = "http://127.0.0.1:1/health";
+	var req = client.new_request("GET", url);
+	match client.send(&cfg, move req) {
+		core.Result::Ok(_) => { return 501; },
+		core.Result::Err(_) => { return 0; }
+	}
+}
+
+fn _run_all(port: Int) nothrow -> Int {
+	val a = scenario_get_health(port);
+	if a != 0 { return a; }
+	val b = scenario_post_echo(port);
+	if b != 0 { return b; }
+	val c = scenario_response_header(port);
+	if c != 0 { return c; }
+	val d = scenario_json_body_parse(port);
+	if d != 0 { return d; }
+	val e = scenario_error_on_bad_port();
+	if e != 0 { return e; }
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest.add_route(&mut app, "GET", "/health", _health_handler) {
+				core.Result::Err(_) => { return 2; },
+				core.Result::Ok(_) => {}
+			}
+			match rest.add_route(&mut app, "POST", "/echo", _echo_handler) {
+				core.Result::Err(_) => { return 3; },
+				core.Result::Ok(_) => {}
+			}
+			match rest.start(move app, conc.Duration(millis = 5000)) {
+				core.Result::Err(_) => { return 4; },
+				core.Result::Ok(srv) => {
+					var running = move srv;
+					val port = rest.server_port(&running);
+					val r = _run_all(port);
+					match rest.shutdown(&mut running) {
+						core.Result::Ok(_) => {},
+						core.Result::Err(_) => {}
+					}
+					return r;
+				}
+			}
+		}
+	}
+}

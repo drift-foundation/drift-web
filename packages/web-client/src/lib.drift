@@ -2,6 +2,7 @@ module web.client;
 
 import std.core as core;
 import std.json as json;
+import net_tls.config as tls_config;
 import web.client.errors as errors;
 import web.client.request as request;
 import web.client.response as resp;
@@ -16,6 +17,7 @@ export {
 	ClientResponse,
 	ClientError,
 	ParsedUrl,
+	TrustStore,
 	// Error tags
 	TAG_INVALID_URL,
 	TAG_CONNECT_FAILED,
@@ -32,6 +34,7 @@ export {
 	with_tls_handshake_timeout,
 	with_io_timeout,
 	with_max_response_body,
+	with_tls_trust_store,
 	// Request construction
 	new_request,
 	set_header,
@@ -42,6 +45,8 @@ export {
 	response_header,
 	response_body_string,
 	response_body_json,
+	// Execution
+	send,
 	// URL parsing
 	parse_url
 };
@@ -53,6 +58,7 @@ pub type ClientRequest = request.ClientRequest;
 pub type ClientResponse = resp.ClientResponse;
 pub type ClientError = errors.ClientError;
 pub type ParsedUrl = url_mod.ParsedUrl;
+pub type TrustStore = tls_config.TrustStore;
 
 // --- Error tag re-exports ---
 
@@ -86,6 +92,10 @@ pub fn with_io_timeout(cfg: &mut ClientConfig, ms: Int) nothrow -> Void {
 
 pub fn with_max_response_body(cfg: &mut ClientConfig, bytes: Int) nothrow -> Void {
 	return transport.with_max_response_body(cfg, bytes);
+}
+
+pub fn with_tls_trust_store(cfg: &mut ClientConfig, store: TrustStore) nothrow -> Void {
+	return transport.with_tls_trust_store(cfg, move store);
 }
 
 // --- Request construction ---
@@ -122,6 +132,12 @@ pub fn response_body_string(r: &ClientResponse) nothrow -> core.Result<String, C
 
 pub fn response_body_json(r: &ClientResponse) nothrow -> core.Result<json.JsonHandle, ClientError> {
 	return resp.response_body_json(r);
+}
+
+// --- Execution ---
+
+pub fn send(cfg: &ClientConfig, req: ClientRequest) nothrow -> core.Result<ClientResponse, ClientError> {
+	return transport.send(cfg, move req);
 }
 
 // --- URL parsing ---

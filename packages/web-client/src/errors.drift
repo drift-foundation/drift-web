@@ -11,7 +11,8 @@ export {
 	TAG_BODY_TOO_LARGE,
 	TAG_BODY_NOT_UTF8,
 	TAG_JSON_PARSE_FAILED,
-	client_error
+	client_error,
+	TAG_INCOMPLETE
 };
 
 pub struct ClientError {
@@ -28,6 +29,9 @@ pub const TAG_INVALID_RESPONSE: String = "client-invalid-response";
 pub const TAG_BODY_TOO_LARGE: String = "client-body-too-large";
 pub const TAG_BODY_NOT_UTF8: String = "client-body-not-utf8";
 pub const TAG_JSON_PARSE_FAILED: String = "client-json-parse-failed";
+
+// Internal tag for incomplete chunked data (retryable by reading more).
+pub const TAG_INCOMPLETE: String = "client-incomplete";
 
 pub fn client_error(tag: String, message: String) nothrow -> ClientError {
 	return ClientError(tag = tag, message = message);

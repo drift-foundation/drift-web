@@ -17,6 +17,9 @@ TEST_ROOT="packages/mariadb-wire-proto/tests/unit"
 TEST_FILE=""
 CHECK_FILE=""
 TARGET_WORD_BITS="64"
+PACKAGE_ROOTS=()
+DEP_PINS=()
+EXTRA_DRIFTC_FLAGS=()
 DEFAULT_JOBS="4"
 if command -v nproc >/dev/null 2>&1; then
 	DEFAULT_JOBS="$(nproc)"
@@ -51,6 +54,22 @@ while [[ $# -gt 0 ]]; do
 			;;
 		--jobs)
 			JOBS="${2:-}"
+			shift 2
+			;;
+		--package-root)
+			PACKAGE_ROOTS+=("${2:-}")
+			shift 2
+			;;
+		--dep)
+			DEP_PINS+=("${2:-}")
+			shift 2
+			;;
+		--allow-unsigned-from)
+			EXTRA_DRIFTC_FLAGS+=("--allow-unsigned-from" "${2:-}")
+			shift 2
+			;;
+		--link-search)
+			EXTRA_DRIFTC_FLAGS+=("--link-search" "${2:-}")
 			shift 2
 			;;
 		*)
@@ -122,10 +141,24 @@ if [[ "${DRIFT_OPTIMIZED:-0}" == "1" ]]; then
 	OPTIMIZED_FLAG=("--optimized")
 fi
 
+build_pkg_flags() {
+	PKG_FLAGS=()
+	local pr
+	for pr in "${PACKAGE_ROOTS[@]}"; do
+		PKG_FLAGS+=("--package-root" "${pr}")
+	done
+	local dp
+	for dp in "${DEP_PINS[@]}"; do
+		PKG_FLAGS+=("--dep" "${dp}")
+	done
+	PKG_FLAGS+=("${EXTRA_DRIFTC_FLAGS[@]}")
+}
+
 compile_only_file() {
 	local file="$1"
 	[[ -f "${file}" ]] || { echo "error: missing file ${file}" >&2; exit 2; }
-	env -u DRIFT_MEMCHECK -u DRIFT_MASSIF "${DRIFTC}" --target-word-bits "${TARGET_WORD_BITS}" "${OPTIMIZED_FLAG[@]}" "${SRC_FILES[@]}" "${file}"
+	build_pkg_flags
+	env -u DRIFT_MEMCHECK -u DRIFT_MASSIF "${DRIFTC}" --target-word-bits "${TARGET_WORD_BITS}" "${OPTIMIZED_FLAG[@]}" "${PKG_FLAGS[@]}" "${SRC_FILES[@]}" "${file}"
 }
 
 compile_test_binary() {
@@ -135,7 +168,8 @@ compile_test_binary() {
 	test_module="$(test_module_of "${test_file}")"
 	[[ -n "${test_module}" ]] || { echo "error: missing module declaration in ${test_file}" >&2; exit 2; }
 	local entry_symbol="${test_module}::main"
-	env -u DRIFT_MEMCHECK -u DRIFT_MASSIF "${DRIFTC}" --target-word-bits "${TARGET_WORD_BITS}" "${OPTIMIZED_FLAG[@]}" --entry "${entry_symbol}" "${SRC_FILES[@]}" "${test_file}" -o "${bin_path}"
+	build_pkg_flags
+	env -u DRIFT_MEMCHECK -u DRIFT_MASSIF "${DRIFTC}" --target-word-bits "${TARGET_WORD_BITS}" "${OPTIMIZED_FLAG[@]}" "${PKG_FLAGS[@]}" --entry "${entry_symbol}" "${SRC_FILES[@]}" "${test_file}" -o "${bin_path}"
 }
 
 run_binary() {

@@ -147,6 +147,9 @@ client-check-par:
     @tools/drift_test_parallel_runner.sh run-all \
       --src-root packages/web-client/src \
       --test-root packages/web-client/tests/unit \
+      --package-root ~/opt/drift/libs \
+      --dep net-tls@0.3.2 \
+      --link-search "$HOME/src/drift-net-tls/build/lib" \
       --target-word-bits 64
 
 # Single client unit test.
@@ -154,12 +157,62 @@ client-check-unit FILE:
     @tools/drift_test_parallel_runner.sh run-one \
       --src-root packages/web-client/src \
       --test-file "{{FILE}}" \
+      --package-root ~/opt/drift/libs \
+      --dep net-tls@0.3.2 \
+      --link-search "$HOME/src/drift-net-tls/build/lib" \
       --target-word-bits 64
+
+# Client e2e tests (HTTP + HTTPS against local servers).
+client-e2e-par:
+    @tools/drift_test_parallel_runner.sh run-all \
+      --src-root packages/web-jwt/src \
+      --src-root packages/web-rest/src \
+      --src-root packages/web-client/src \
+      --test-root packages/web-client/tests/e2e \
+      --package-root ~/opt/drift/libs \
+      --dep net-tls@0.3.2 \
+      --link-search "$HOME/src/drift-net-tls/build/lib" \
+      --target-word-bits 64
+
+# Single client e2e test.
+client-e2e-unit FILE:
+    @tools/drift_test_parallel_runner.sh run-one \
+      --src-root packages/web-jwt/src \
+      --src-root packages/web-rest/src \
+      --src-root packages/web-client/src \
+      --test-file "{{FILE}}" \
+      --package-root ~/opt/drift/libs \
+      --dep net-tls@0.3.2 \
+      --link-search "$HOME/src/drift-net-tls/build/lib" \
+      --target-word-bits 64
+
+# Client HTTPS e2e test (local Python HTTPS server + net-tls).
+client-https-e2e:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	: "${DRIFTC:?set DRIFTC to your driftc path}"
+	TMPDIR="$(mktemp -d)"
+	trap 'rm -rf "${TMPDIR}"' EXIT
+	# Compile test binary.
+	"${DRIFTC}" --target-word-bits 64 \
+	  --package-root ~/opt/drift/libs \
+	  --dep net-tls@0.3.2 \
+	  --link-search "$HOME/src/drift-net-tls/build/lib" \
+	  --entry "web.client.tests.e2e.https_e2e_test::main" \
+	  packages/web-jwt/src/*.drift packages/web-rest/src/*.drift packages/web-client/src/*.drift \
+	  packages/web-client/tests/e2e/https_e2e_test.drift \
+	  -o "${TMPDIR}/https_e2e_test"
+	# Run with HTTPS test server.
+	LD_LIBRARY_PATH="${HOME}/src/drift-net-tls/build/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
+	  packages/web-client/tools/run-https-e2e.sh "${TMPDIR}/https_e2e_test"
 
 # Compile-only check for client (no execution).
 client-compile-check FILE="packages/web-client/src/lib.drift":
     @tools/drift_test_parallel_runner.sh compile \
       --src-root packages/web-client/src \
+      --package-root ~/opt/drift/libs \
+      --dep net-tls@0.3.2 \
+      --link-search "$HOME/src/drift-net-tls/build/lib" \
       --file "{{FILE}}" \
       --target-word-bits 64
 
@@ -169,12 +222,11 @@ client-compile-check FILE="packages/web-client/src/lib.drift":
 #   just deploy -- --dest=~/opt/drift/libs
 #
 # Reads drift-package.json for artifact definitions.
-# Requires: DRIFTC, DRIFT_SIGN_KEY_FILE, DRIFT_LANG_ROOT (default: ../drift-lang).
+# Requires: DRIFTC, DRIFT_SIGN_KEY_FILE.
 deploy *ARGS:
 	#!/usr/bin/env bash
 	set -euo pipefail
 	: "${DRIFTC:?set DRIFTC to your driftc path}"
-	DRIFT_LANG_ROOT="${DRIFT_LANG_ROOT:-../drift-lang}"
 	args=({{ARGS}})
 	# Strip leading -- (forwarded from just)
 	if [[ ${#args[@]} -gt 0 && "${args[0]}" == "--" ]]; then
@@ -189,8 +241,8 @@ deploy *ARGS:
 			*)           expanded+=("$a") ;;
 		esac
 	done
-	PYTHONPATH="${DRIFT_LANG_ROOT}" python3 -m tools.drift_deploy.drift_deploy \
-		--driftc "${DRIFTC}" "${expanded[@]}"
+	DRIFT_BIN="$(dirname "${DRIFTC}")/drift"
+	"${DRIFT_BIN}" deploy --driftc "${DRIFTC}" "${expanded[@]}"
 
 # Show driftc version info.
 driftc-help:
