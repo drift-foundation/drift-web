@@ -1,0 +1,411 @@
+module web.client.http;
+
+import std.core as core;
+import std.io as io;
+import std.format as fmt;
+import std.parse as parse;
+import web.client.errors as errors;
+import web.client.request as request;
+import web.client.response as response;
+import web.client.url as url;
+
+export {
+	ParsedResponse,
+	serialize_request,
+	parse_response_headers,
+	decode_chunked_body
+};
+
+// --- String/byte helpers ---
+
+fn _bytes_to_string(raw: &Array<Byte>, start: Int, end: Int) nothrow -> String {
+	val n = end - start;
+	if n <= 0 {
+		return "";
+	}
+	var b = io.buffer(n);
+	var i = 0;
+	while i < n {
+		io.buffer_write(&mut b, i, raw[start + i]);
+		i = i + 1;
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&b), n);
+}
+
+fn _push_string(out: &mut Array<Byte>, s: &String) nothrow -> Void {
+	var i = 0;
+	val n = s.byte_length();
+	while i < n {
+		out.push(core.string_byte_at(s, i));
+		i = i + 1;
+	}
+}
+
+fn _push_crlf(out: &mut Array<Byte>) nothrow -> Void {
+	out.push(cast<Byte>(13));
+	out.push(cast<Byte>(10));
+}
+
+fn _has_header_ci(req: &request.ClientRequest, target: &String) nothrow -> Bool {
+	var i = 0;
+	while i < req.header_keys.len {
+		val key = &req.header_keys[i];
+		if key.byte_length() == target.byte_length() {
+			var match_ok = true;
+			var j = 0;
+			while j < key.byte_length() {
+				var a = cast<Int>(core.string_byte_at(key, j));
+				var b = cast<Int>(core.string_byte_at(target, j));
+				if a >= 65 and a <= 90 { a = a + 32; }
+				if b >= 65 and b <= 90 { b = b + 32; }
+				if a != b { match_ok = false; }
+				j = j + 1;
+			}
+			if match_ok { return true; }
+		}
+		i = i + 1;
+	}
+	return false;
+}
+
+// --- Request serialization ---
+
+pub fn serialize_request(parsed: &url.ParsedUrl, req: &request.ClientRequest) nothrow -> Array<Byte> {
+	var out: Array<Byte> = [];
+
+	// Request line: METHOD PATH HTTP/1.1\r\n
+	_push_string(&mut out, &req.method);
+	out.push(cast<Byte>(32));
+	_push_string(&mut out, &parsed.path);
+	val http_ver = " HTTP/1.1";
+	_push_string(&mut out, &http_ver);
+	_push_crlf(&mut out);
+
+	// Host header (only if not set by caller).
+	val host_name = "Host";
+	if not _has_header_ci(req, &host_name) {
+		val host_key = "Host: ";
+		_push_string(&mut out, &host_key);
+		_push_string(&mut out, &parsed.host);
+		val is_default_http = parsed.scheme == "http" and parsed.port == 80;
+		val is_default_https = parsed.scheme == "https" and parsed.port == 443;
+		if not is_default_http {
+			if not is_default_https {
+				val colon = ":";
+				_push_string(&mut out, &colon);
+				val port_str = fmt.format_int(parsed.port);
+				_push_string(&mut out, &port_str);
+			}
+		}
+		_push_crlf(&mut out);
+	}
+
+	// User headers.
+	var i = 0;
+	while i < req.header_keys.len {
+		_push_string(&mut out, &req.header_keys[i]);
+		val sep = ": ";
+		_push_string(&mut out, &sep);
+		_push_string(&mut out, &req.header_values[i]);
+		_push_crlf(&mut out);
+		i = i + 1;
+	}
+
+	// Content-Length if body present and not set by caller.
+	val cl_name_check = "Content-Length";
+	if req.body.len > 0 and not _has_header_ci(req, &cl_name_check) {
+		val cl_key = "Content-Length: ";
+		_push_string(&mut out, &cl_key);
+		val cl_val = fmt.format_int(req.body.len);
+		_push_string(&mut out, &cl_val);
+		_push_crlf(&mut out);
+	}
+
+	// Connection: close (only if not set by caller).
+	val conn_name = "Connection";
+	if not _has_header_ci(req, &conn_name) {
+		val conn_close = "Connection: close";
+		_push_string(&mut out, &conn_close);
+		_push_crlf(&mut out);
+	}
+
+	// End of headers.
+	_push_crlf(&mut out);
+
+	// Body.
+	var j = 0;
+	while j < req.body.len {
+		out.push(req.body[j]);
+		j = j + 1;
+	}
+
+	return move out;
+}
+
+// --- Response parsing ---
+
+fn _find_crlf(raw: &Array<Byte>, start: Int, limit: Int) nothrow -> Int {
+	var i = start;
+	val end = limit - 1;
+	while i < end {
+		if raw[i] == cast<Byte>(13) {
+			if raw[i + 1] == cast<Byte>(10) {
+				return i;
+			}
+		}
+		i = i + 1;
+	}
+	return -1;
+}
+
+fn _find_header_end(raw: &Array<Byte>) nothrow -> Int {
+	val arr_len = raw.len;
+	if arr_len < 4 {
+		return -1;
+	}
+	var i = 0;
+	val limit = arr_len - 3;
+	while i < limit {
+		if raw[i] == cast<Byte>(13) {
+			if raw[i + 1] == cast<Byte>(10) {
+				if raw[i + 2] == cast<Byte>(13) {
+					if raw[i + 3] == cast<Byte>(10) {
+						return i + 4;
+					}
+				}
+			}
+		}
+		i = i + 1;
+	}
+	return -1;
+}
+
+fn _find_byte_in_range(raw: &Array<Byte>, start: Int, end: Int, target: Byte) nothrow -> Int {
+	var i = start;
+	while i < end {
+		if raw[i] == target {
+			return i;
+		}
+		i = i + 1;
+	}
+	return -1;
+}
+
+fn _skip_spaces(raw: &Array<Byte>, start: Int, end: Int) nothrow -> Int {
+	var i = start;
+	while i < end {
+		if raw[i] != cast<Byte>(32) {
+			return i;
+		}
+		i = i + 1;
+	}
+	return end;
+}
+
+fn _ascii_eq_lower(raw: &Array<Byte>, start: Int, end: Int, target: &String) nothrow -> Bool {
+	val n = end - start;
+	if n != target.byte_length() {
+		return false;
+	}
+	var i = 0;
+	while i < n {
+		var b = raw[start + i];
+		val v = cast<Int>(b);
+		if v >= 65 {
+			if v <= 90 {
+				b = cast<Byte>(v + 32);
+			}
+		}
+		if b != core.string_byte_at(target, i) {
+			return false;
+		}
+		i = i + 1;
+	}
+	return true;
+}
+
+pub struct ParsedResponse {
+	pub status: Int,
+	pub header_keys: Array<String>,
+	pub header_values: Array<String>,
+	pub body_start: Int,
+	pub content_length: Int,
+	pub chunked: Bool
+}
+
+pub fn parse_response_headers(raw: &Array<Byte>) nothrow -> core.Result<ParsedResponse, errors.ClientError> {
+	val header_end = _find_header_end(raw);
+	if header_end < 0 {
+		return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "incomplete response headers"));
+	}
+
+	val first_crlf = _find_crlf(raw, 0, header_end);
+	if first_crlf < 0 {
+		return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "no status line"));
+	}
+
+	val sp1 = _find_byte_in_range(raw, 0, first_crlf, cast<Byte>(32));
+	if sp1 < 0 {
+		return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "malformed status line"));
+	}
+
+	val sp2 = _find_byte_in_range(raw, sp1 + 1, first_crlf, cast<Byte>(32));
+	var status_end = first_crlf;
+	if sp2 >= 0 {
+		status_end = sp2;
+	}
+	val status_str = _bytes_to_string(raw, sp1 + 1, status_end);
+	var status = 0;
+	match parse.parse_int(status_str) {
+		core.Result::Ok(v) => { status = v; },
+		core.Result::Err(_) => {
+			return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "invalid status code"));
+		}
+	}
+
+	var hdr_keys: Array<String> = [];
+	var hdr_values: Array<String> = [];
+	var content_length = -1;
+	var chunked = false;
+	var pos = first_crlf + 2;
+	val cl_name = "content-length";
+	val te_name = "transfer-encoding";
+	val chunked_val = "chunked";
+
+	var parsing = true;
+	while parsing {
+		val line_end = _find_crlf(raw, pos, header_end);
+		if line_end < 0 {
+			parsing = false;
+		} else {
+			if line_end == pos {
+				parsing = false;
+			} else {
+				val colon = _find_byte_in_range(raw, pos, line_end, cast<Byte>(58));
+				if colon >= 0 {
+					val name = _bytes_to_string(raw, pos, colon);
+					val val_start = _skip_spaces(raw, colon + 1, line_end);
+					val value = _bytes_to_string(raw, val_start, line_end);
+					if _ascii_eq_lower(raw, pos, colon, &cl_name) {
+						match parse.parse_int(value) {
+							core.Result::Ok(v) => { content_length = v; },
+							core.Result::Err(_) => {}
+						}
+					}
+					if _ascii_eq_lower(raw, pos, colon, &te_name) {
+						if _ascii_eq_lower(raw, val_start, line_end, &chunked_val) {
+							chunked = true;
+						}
+					}
+					hdr_keys.push(move name);
+				hdr_values.push(move value);
+				}
+				pos = line_end + 2;
+			}
+		}
+	}
+
+	return core.Result::Ok(ParsedResponse(
+		status = status,
+		header_keys = move hdr_keys,
+		header_values = move hdr_values,
+		body_start = header_end,
+		content_length = content_length,
+		chunked = chunked
+	));
+}
+
+// Decode chunked transfer encoding body.
+pub fn decode_chunked_body(raw: &Array<Byte>, start: Int, max_body: Int) nothrow -> core.Result<Array<Byte>, errors.ClientError> {
+	var out: Array<Byte> = [];
+	var pos = start;
+	val raw_len = raw.len;
+
+	var decoding = true;
+	while decoding {
+		val line_end = _find_crlf(raw, pos, raw_len);
+		if line_end < 0 {
+			return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "incomplete chunked body"));
+		}
+		val size_str = _bytes_to_string(raw, pos, line_end);
+		var chunk_size = 0;
+		match _parse_hex(&size_str) {
+			core.Result::Ok(v) => { chunk_size = v; },
+			core.Result::Err(_) => {
+				return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "invalid chunk size"));
+			}
+		}
+
+		if chunk_size == 0 {
+			// Require terminating CRLF after the 0-size chunk line (0\r\n\r\n).
+			val term_pos = line_end + 2;
+			if term_pos + 1 >= raw_len {
+				return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "missing terminating CRLF in chunked body"));
+			}
+			if raw[term_pos] != cast<Byte>(13) {
+				return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "missing terminating CRLF in chunked body"));
+			}
+			if raw[term_pos + 1] != cast<Byte>(10) {
+				return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "missing terminating CRLF in chunked body"));
+			}
+			decoding = false;
+		} else {
+			if out.len + chunk_size > max_body {
+				return core.Result::Err(errors.client_error(errors.TAG_BODY_TOO_LARGE, "response body exceeds size limit"));
+			}
+			val data_start = line_end + 2;
+			val data_end = data_start + chunk_size;
+			if data_end > raw_len {
+				return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "truncated chunk data"));
+			}
+			var i = 0;
+			while i < chunk_size {
+				out.push(raw[data_start + i]);
+				i = i + 1;
+			}
+			// Verify trailing CRLF after chunk data.
+			if data_end + 1 >= raw_len {
+				return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "missing CRLF after chunk data"));
+			}
+			if raw[data_end] != cast<Byte>(13) {
+				return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "missing CRLF after chunk data"));
+			}
+			if raw[data_end + 1] != cast<Byte>(10) {
+				return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "missing CRLF after chunk data"));
+			}
+			pos = data_end + 2;
+		}
+	}
+
+	return core.Result::Ok(move out);
+}
+
+fn _parse_hex(s: &String) nothrow -> core.Result<Int, errors.ClientError> {
+	val n = s.byte_length();
+	if n == 0 {
+		return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "empty hex string"));
+	}
+	var result = 0;
+	var i = 0;
+	while i < n {
+		val b = cast<Int>(core.string_byte_at(s, i));
+		var digit = -1;
+		if b >= 48 and b <= 57 {
+			digit = b - 48;
+		} else {
+			if b >= 97 and b <= 102 {
+				digit = b - 87;
+			} else {
+				if b >= 65 and b <= 70 {
+					digit = b - 55;
+				}
+			}
+		}
+		if digit < 0 {
+			return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "invalid hex digit"));
+		}
+		result = result * 16 + digit;
+		i = i + 1;
+	}
+	return core.Result::Ok(result);
+}

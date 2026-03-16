@@ -1,0 +1,56 @@
+module web.client.transport;
+
+import std.core as core;
+import std.net as net;
+import std.concurrent as conc;
+import web.client.errors as errors;
+import web.client.url as url;
+
+export {
+	ClientConfig,
+	new_client_config,
+	with_connect_timeout,
+	with_tls_handshake_timeout,
+	with_io_timeout,
+	with_max_response_body
+};
+
+pub struct ClientConfig {
+	pub connect_timeout_ms: Int,
+	pub tls_handshake_timeout_ms: Int,
+	pub io_timeout_ms: Int,
+	pub max_response_body_bytes: Int
+}
+
+pub fn new_client_config() nothrow -> ClientConfig {
+	return ClientConfig(
+		connect_timeout_ms = 5000,
+		tls_handshake_timeout_ms = 10000,
+		io_timeout_ms = 30000,
+		max_response_body_bytes = 10485760
+	);
+}
+
+pub fn with_connect_timeout(cfg: &mut ClientConfig, ms: Int) nothrow -> Void {
+	if ms > 0 {
+		cfg.connect_timeout_ms = ms;
+	}
+}
+
+pub fn with_tls_handshake_timeout(cfg: &mut ClientConfig, ms: Int) nothrow -> Void {
+	if ms > 0 {
+		cfg.tls_handshake_timeout_ms = ms;
+	}
+}
+
+pub fn with_io_timeout(cfg: &mut ClientConfig, ms: Int) nothrow -> Void {
+	if ms > 0 {
+		cfg.io_timeout_ms = ms;
+	}
+}
+
+pub fn with_max_response_body(cfg: &mut ClientConfig, bytes: Int) nothrow -> Void {
+	if bytes > 0 {
+		cfg.max_response_body_bytes = bytes;
+	}
+}

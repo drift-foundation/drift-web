@@ -1,0 +1,81 @@
+module web.client.response;
+
+import std.core as core;
+import std.io as io;
+import std.json as json;
+import web.client.errors as errors;
+
+export {
+	ClientResponse,
+	response_header,
+	response_body_string,
+	response_body_json
+};
+
+pub struct ClientResponse {
+	pub status: Int,
+	pub header_keys: Array<String>,
+	pub header_values: Array<String>,
+	pub body: Array<Byte>
+}
+
+pub fn response_header(resp: &ClientResponse, name: &String) nothrow -> Optional<String> {
+	val target_len = name.byte_length();
+	var i = 0;
+	while i < resp.header_keys.len {
+		val key = &resp.header_keys[i];
+		if key.byte_length() == target_len {
+			var matched = true;
+			var j = 0;
+			while j < target_len {
+				var a = cast<Int>(core.string_byte_at(key, j));
+				var b = cast<Int>(core.string_byte_at(name, j));
+				if a >= 65 and a <= 90 { a = a + 32; }
+				if b >= 65 and b <= 90 { b = b + 32; }
+				if a != b { matched = false; }
+				j = j + 1;
+			}
+			if matched {
+				return Optional::Some(resp.header_values[i]);
+			}
+		}
+		i = i + 1;
+	}
+	return Optional::None();
+}
+
+pub fn response_body_string(resp: &ClientResponse) nothrow -> core.Result<String, errors.ClientError> {
+	val n = resp.body.len;
+	if n == 0 {
+		return core.Result::Ok("");
+	}
+	var buf = io.buffer(n);
+	var i = 0;
+	while i < n {
+		io.buffer_write(&mut buf, i, resp.body[i]);
+		i = i + 1;
+	}
+	val s = core.string_from_utf8_bytes(io.buffer_ptr(&buf), n);
+	if s.byte_length() != n {
+		return core.Result::Err(errors.client_error(errors.TAG_BODY_NOT_UTF8, "response body is not valid UTF-8"));
+	}
+	return core.Result::Ok(s);
+}
+
+pub fn response_body_json(resp: &ClientResponse) nothrow -> core.Result<json.JsonHandle, errors.ClientError> {
+	match response_body_string(resp) {
+		core.Result::Err(e) => {
+			return core.Result::Err(e);
+		},
+		core.Result::Ok(s) => {
+			match json.parse(&s) {
+				core.Result::Ok(node) => {
+					return core.Result::Ok(json.share(move node));
+				},
+				core.Result::Err(_) => {
+					return core.Result::Err(errors.client_error(errors.TAG_JSON_PARSE_FAILED, "response body is not valid JSON"));
+				}
+			}
+		}
+	}
+}

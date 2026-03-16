@@ -1,0 +1,34 @@
+module web.client.errors;
+
+export {
+	ClientError,
+	TAG_INVALID_URL,
+	TAG_CONNECT_FAILED,
+	TAG_TLS_FAILED,
+	TAG_SEND_FAILED,
+	TAG_READ_FAILED,
+	TAG_INVALID_RESPONSE,
+	TAG_BODY_TOO_LARGE,
+	TAG_BODY_NOT_UTF8,
+	TAG_JSON_PARSE_FAILED,
+	client_error
+};
+
+pub struct ClientError {
+	pub tag: String,
+	pub message: String
+}
+
+pub const TAG_INVALID_URL: String = "client-invalid-url";
+pub const TAG_CONNECT_FAILED: String = "client-connect-failed";
+pub const TAG_TLS_FAILED: String = "client-tls-failed";
+pub const TAG_SEND_FAILED: String = "client-send-failed";
+pub const TAG_READ_FAILED: String = "client-read-failed";
+pub const TAG_INVALID_RESPONSE: String = "client-invalid-response";
+pub const TAG_BODY_TOO_LARGE: String = "client-body-too-large";
+pub const TAG_BODY_NOT_UTF8: String = "client-body-not-utf8";
+pub const TAG_JSON_PARSE_FAILED: String = "client-json-parse-failed";
+
+pub fn client_error(tag: String, message: String) nothrow -> ClientError {
+	return ClientError(tag = tag, message = message);
+}

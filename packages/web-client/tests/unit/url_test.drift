@@ -1,0 +1,195 @@
+module web.client.tests.unit.url_test;
+
+import std.core as core;
+import web.client as client;
+
+// --- URL parsing tests ---
+
+fn scenario_http_simple() nothrow -> Int {
+	val u = "http://example.com/health";
+	match client.parse_url(&u) {
+		core.Result::Err(_) => { return 101; },
+		core.Result::Ok(p) => {
+			if p.scheme != "http" { return 102; }
+			if p.host != "example.com" { return 103; }
+			if p.port != 80 { return 104; }
+			if p.path != "/health" { return 105; }
+			return 0;
+		}
+	}
+}
+
+fn scenario_https_simple() nothrow -> Int {
+	val u = "https://api.example.com/v1/users";
+	match client.parse_url(&u) {
+		core.Result::Err(_) => { return 201; },
+		core.Result::Ok(p) => {
+			if p.scheme != "https" { return 202; }
+			if p.host != "api.example.com" { return 203; }
+			if p.port != 443 { return 204; }
+			if p.path != "/v1/users" { return 205; }
+			return 0;
+		}
+	}
+}
+
+fn scenario_explicit_port() nothrow -> Int {
+	val u = "http://localhost:8080/test";
+	match client.parse_url(&u) {
+		core.Result::Err(_) => { return 301; },
+		core.Result::Ok(p) => {
+			if p.scheme != "http" { return 302; }
+			if p.host != "localhost" { return 303; }
+			if p.port != 8080 { return 304; }
+			if p.path != "/test" { return 305; }
+			return 0;
+		}
+	}
+}
+
+fn scenario_https_explicit_port() nothrow -> Int {
+	val u = "https://localhost:4433/secure";
+	match client.parse_url(&u) {
+		core.Result::Err(_) => { return 401; },
+		core.Result::Ok(p) => {
+			if p.scheme != "https" { return 402; }
+			if p.host != "localhost" { return 403; }
+			if p.port != 4433 { return 404; }
+			if p.path != "/secure" { return 405; }
+			return 0;
+		}
+	}
+}
+
+fn scenario_no_path() nothrow -> Int {
+	val u = "http://example.com";
+	match client.parse_url(&u) {
+		core.Result::Err(_) => { return 501; },
+		core.Result::Ok(p) => {
+			if p.path != "/" { return 502; }
+			return 0;
+		}
+	}
+}
+
+fn scenario_root_path() nothrow -> Int {
+	val u = "http://example.com/";
+	match client.parse_url(&u) {
+		core.Result::Err(_) => { return 601; },
+		core.Result::Ok(p) => {
+			if p.path != "/" { return 602; }
+			return 0;
+		}
+	}
+}
+
+fn scenario_query_string_in_path() nothrow -> Int {
+	val u = "http://example.com/search?q=drift&page=1";
+	match client.parse_url(&u) {
+		core.Result::Err(_) => { return 701; },
+		core.Result::Ok(p) => {
+			if p.path != "/search?q=drift&page=1" { return 702; }
+			return 0;
+		}
+	}
+}
+
+fn scenario_missing_scheme() nothrow -> Int {
+	val u = "example.com/path";
+	match client.parse_url(&u) {
+		core.Result::Ok(_) => { return 801; },
+		core.Result::Err(e) => {
+			if e.tag != client.TAG_INVALID_URL { return 802; }
+			return 0;
+		}
+	}
+}
+
+fn scenario_empty_host() nothrow -> Int {
+	val u = "http:///path";
+	match client.parse_url(&u) {
+		core.Result::Ok(_) => { return 901; },
+		core.Result::Err(e) => {
+			if e.tag != client.TAG_INVALID_URL { return 902; }
+			return 0;
+		}
+	}
+}
+
+fn scenario_invalid_port() nothrow -> Int {
+	val u = "http://localhost:abc/path";
+	match client.parse_url(&u) {
+		core.Result::Ok(_) => { return 1001; },
+		core.Result::Err(e) => {
+			if e.tag != client.TAG_INVALID_URL { return 1002; }
+			return 0;
+		}
+	}
+}
+
+fn scenario_query_only_no_path() nothrow -> Int {
+	val u = "http://example.com?q=1";
+	match client.parse_url(&u) {
+		core.Result::Err(_) => { return 1201; },
+		core.Result::Ok(p) => {
+			if p.host != "example.com" { return 1202; }
+			if p.path != "/?q=1" { return 1203; }
+			if p.port != 80 { return 1204; }
+			return 0;
+		}
+	}
+}
+
+fn scenario_query_with_path() nothrow -> Int {
+	val u = "https://api.example.com/v1?key=val";
+	match client.parse_url(&u) {
+		core.Result::Err(_) => { return 1301; },
+		core.Result::Ok(p) => {
+			if p.host != "api.example.com" { return 1302; }
+			if p.path != "/v1?key=val" { return 1303; }
+			if p.port != 443 { return 1304; }
+			return 0;
+		}
+	}
+}
+
+fn scenario_port_out_of_range() nothrow -> Int {
+	val u = "http://localhost:99999/path";
+	match client.parse_url(&u) {
+		core.Result::Ok(_) => { return 1101; },
+		core.Result::Err(e) => {
+			if e.tag != client.TAG_INVALID_URL { return 1102; }
+			return 0;
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	val a = scenario_http_simple();
+	if a != 0 { return a; }
+	val b = scenario_https_simple();
+	if b != 0 { return b; }
+	val c = scenario_explicit_port();
+	if c != 0 { return c; }
+	val d = scenario_https_explicit_port();
+	if d != 0 { return d; }
+	val e = scenario_no_path();
+	if e != 0 { return e; }
+	val f = scenario_root_path();
+	if f != 0 { return f; }
+	val g = scenario_query_string_in_path();
+	if g != 0 { return g; }
+	val h = scenario_missing_scheme();
+	if h != 0 { return h; }
+	val i = scenario_empty_host();
+	if i != 0 { return i; }
+	val j = scenario_invalid_port();
+	if j != 0 { return j; }
+	val k = scenario_port_out_of_range();
+	if k != 0 { return k; }
+	val l = scenario_query_only_no_path();
+	if l != 0 { return l; }
+	val m = scenario_query_with_path();
+	if m != 0 { return m; }
+	return 0;
+}

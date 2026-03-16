@@ -1,0 +1,179 @@
+module web.client.url;
+
+import std.core as core;
+import std.io as io;
+import std.parse as parse;
+import web.client.errors as errors;
+
+export {
+	ParsedUrl,
+	parse_url
+};
+
+pub struct ParsedUrl {
+	pub scheme: String,
+	pub host: String,
+	pub port: Int,
+	pub path: String
+}
+
+fn _substring(s: &String, start: Int, end: Int) nothrow -> String {
+	val n = end - start;
+	if n <= 0 {
+		return "";
+	}
+	var b = io.buffer(n);
+	var i = 0;
+	while i < n {
+		io.buffer_write(&mut b, i, core.string_byte_at(s, start + i));
+		i = i + 1;
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&b), n);
+}
+
+fn _starts_with(s: &String, prefix: &String) nothrow -> Bool {
+	val p_len = prefix.byte_length();
+	if s.byte_length() < p_len {
+		return false;
+	}
+	var i = 0;
+	while i < p_len {
+		if core.string_byte_at(s, i) != core.string_byte_at(prefix, i) {
+			return false;
+		}
+		i = i + 1;
+	}
+	return true;
+}
+
+fn _find_char(s: &String, target: Byte) nothrow -> Int {
+	var i = 0;
+	val n = s.byte_length();
+	while i < n {
+		if core.string_byte_at(s, i) == target {
+			return i;
+		}
+		i = i + 1;
+	}
+	return -1;
+}
+
+fn _find_last_char(s: &String, target: Byte) nothrow -> Int {
+	val n = s.byte_length();
+	var i = n - 1;
+	while i >= 0 {
+		if core.string_byte_at(s, i) == target {
+			return i;
+		}
+		i = i - 1;
+	}
+	return -1;
+}
+
+pub fn parse_url(raw_url: &String) nothrow -> core.Result<ParsedUrl, errors.ClientError> {
+	val https_prefix = "https://";
+	val http_prefix = "http://";
+	var scheme = "";
+	var rest_start = 0;
+	var default_port = 80;
+
+	if _starts_with(raw_url, &https_prefix) {
+		scheme = "https";
+		rest_start = 8;
+		default_port = 443;
+	} else {
+		if _starts_with(raw_url, &http_prefix) {
+			scheme = "http";
+			rest_start = 7;
+		} else {
+			return core.Result::Err(errors.client_error(errors.TAG_INVALID_URL, "URL must start with http:// or https://"));
+		}
+	}
+
+	val url_len = raw_url.byte_length();
+	if rest_start >= url_len {
+		return core.Result::Err(errors.client_error(errors.TAG_INVALID_URL, "URL has no host"));
+	}
+
+	val rest = _substring(raw_url, rest_start, url_len);
+
+	// Split authority from path+query at first '/' or '?'.
+	val slash_byte = cast<Byte>(47);
+	val qmark_byte = cast<Byte>(63);
+	val slash_idx = _find_char(&rest, slash_byte);
+	val qmark_idx = _find_char(&rest, qmark_byte);
+	// Find the earliest separator.
+	var sep_idx = -1;
+	if slash_idx >= 0 {
+		if qmark_idx >= 0 {
+			if slash_idx < qmark_idx {
+				sep_idx = slash_idx;
+			} else {
+				sep_idx = qmark_idx;
+			}
+		} else {
+			sep_idx = slash_idx;
+		}
+	} else {
+		if qmark_idx >= 0 {
+			sep_idx = qmark_idx;
+		}
+	}
+	var authority = "";
+	var path = "/";
+	if sep_idx >= 0 {
+		authority = _substring(&rest, 0, sep_idx);
+		// If separator is '?', path is /? + rest. If '/', path is from slash onward.
+		if slash_idx >= 0 and slash_idx == sep_idx {
+			path = _substring(&rest, sep_idx, rest.byte_length());
+		} else {
+			// Query without path: synthesize /?query
+			val qpath = "/";
+			val qtail = _substring(&rest, sep_idx, rest.byte_length());
+			path = qpath + qtail;
+		}
+	} else {
+		authority = rest;
+	}
+
+	if authority.byte_length() == 0 {
+		return core.Result::Err(errors.client_error(errors.TAG_INVALID_URL, "URL has no host"));
+	}
+
+	val colon_byte = cast<Byte>(58);
+	val colon_idx = _find_last_char(&authority, colon_byte);
+	var host = authority;
+	var port = default_port;
+	if colon_idx >= 0 {
+		host = _substring(&authority, 0, colon_idx);
+		val port_str = _substring(&authority, colon_idx + 1, authority.byte_length());
+		if port_str.byte_length() == 0 {
+			return core.Result::Err(errors.client_error(errors.TAG_INVALID_URL, "empty port in URL"));
+		}
+		match parse.parse_int(port_str) {
+			core.Result::Ok(p) => {
+				if p <= 0 {
+					return core.Result::Err(errors.client_error(errors.TAG_INVALID_URL, "port out of range"));
+				}
+				if p > 65535 {
+					return core.Result::Err(errors.client_error(errors.TAG_INVALID_URL, "port out of range"));
+				}
+				port = p;
+			},
+			core.Result::Err(_) => {
+				return core.Result::Err(errors.client_error(errors.TAG_INVALID_URL, "invalid port in URL"));
+			}
+		}
+	}
+
+	if host.byte_length() == 0 {
+		return core.Result::Err(errors.client_error(errors.TAG_INVALID_URL, "URL has no host"));
+	}
+
+	return core.Result::Ok(ParsedUrl(
+		scheme = scheme,
+		host = host,
+		port = port,
+		path = path
+	));
+}

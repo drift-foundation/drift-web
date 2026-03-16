@@ -1,0 +1,67 @@
+module web.client.tests.unit.error_tags_test;
+
+import std.core as core;
+import web.client as client;
+
+fn scenario_tag_values() nothrow -> Int {
+	if client.TAG_INVALID_URL != "client-invalid-url" { return 101; }
+	if client.TAG_CONNECT_FAILED != "client-connect-failed" { return 102; }
+	if client.TAG_TLS_FAILED != "client-tls-failed" { return 103; }
+	if client.TAG_SEND_FAILED != "client-send-failed" { return 104; }
+	if client.TAG_READ_FAILED != "client-read-failed" { return 105; }
+	if client.TAG_INVALID_RESPONSE != "client-invalid-response" { return 106; }
+	if client.TAG_BODY_TOO_LARGE != "client-body-too-large" { return 107; }
+	if client.TAG_BODY_NOT_UTF8 != "client-body-not-utf8" { return 108; }
+	if client.TAG_JSON_PARSE_FAILED != "client-json-parse-failed" { return 109; }
+	return 0;
+}
+
+fn scenario_config_defaults() nothrow -> Int {
+	val cfg = client.new_client_config();
+	if cfg.connect_timeout_ms != 5000 { return 201; }
+	if cfg.tls_handshake_timeout_ms != 10000 { return 202; }
+	if cfg.io_timeout_ms != 30000 { return 203; }
+	if cfg.max_response_body_bytes != 10485760 { return 204; }
+	return 0;
+}
+
+fn scenario_config_setters() nothrow -> Int {
+	var cfg = client.new_client_config();
+	client.with_connect_timeout(&mut cfg, 1000);
+	client.with_tls_handshake_timeout(&mut cfg, 2000);
+	client.with_io_timeout(&mut cfg, 3000);
+	client.with_max_response_body(&mut cfg, 1048576);
+	if cfg.connect_timeout_ms != 1000 { return 301; }
+	if cfg.tls_handshake_timeout_ms != 2000 { return 302; }
+	if cfg.io_timeout_ms != 3000 { return 303; }
+	if cfg.max_response_body_bytes != 1048576 { return 304; }
+	return 0;
+}
+
+fn scenario_config_rejects_invalid() nothrow -> Int {
+	var cfg = client.new_client_config();
+	// Zero and negative values should be ignored (defaults preserved).
+	client.with_connect_timeout(&mut cfg, 0);
+	if cfg.connect_timeout_ms != 5000 { return 401; }
+	client.with_connect_timeout(&mut cfg, -1);
+	if cfg.connect_timeout_ms != 5000 { return 402; }
+	client.with_tls_handshake_timeout(&mut cfg, 0);
+	if cfg.tls_handshake_timeout_ms != 10000 { return 403; }
+	client.with_io_timeout(&mut cfg, -100);
+	if cfg.io_timeout_ms != 30000 { return 404; }
+	client.with_max_response_body(&mut cfg, 0);
+	if cfg.max_response_body_bytes != 10485760 { return 405; }
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	val a = scenario_tag_values();
+	if a != 0 { return a; }
+	val b = scenario_config_defaults();
+	if b != 0 { return b; }
+	val c = scenario_config_setters();
+	if c != 0 { return c; }
+	val d = scenario_config_rejects_invalid();
+	if d != 0 { return d; }
+	return 0;
+}

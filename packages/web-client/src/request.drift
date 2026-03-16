@@ -1,0 +1,74 @@
+module web.client.request;
+
+import std.core as core;
+
+export {
+	ClientRequest,
+	new_request,
+	set_header,
+	set_body,
+	set_body_string,
+	set_json_body
+};
+
+pub struct ClientRequest {
+	pub method: String,
+	pub url: String,
+	pub header_keys: Array<String>,
+	pub header_values: Array<String>,
+	pub body: Array<Byte>
+}
+
+pub fn new_request(method: String, url: String) nothrow -> ClientRequest {
+	var hk: Array<String> = [];
+	var hv: Array<String> = [];
+	var b: Array<Byte> = [];
+	return ClientRequest(
+		method = method,
+		url = url,
+		header_keys = move hk,
+		header_values = move hv,
+		body = move b
+	);
+}
+
+pub fn set_header(req: &mut ClientRequest, name: String, value: String) nothrow -> Void {
+	req.header_keys.push(move name);
+	req.header_values.push(move value);
+}
+
+pub fn set_body(req: &mut ClientRequest, body: Array<Byte>) nothrow -> Void {
+	req.body = move body;
+}
+
+pub fn set_body_string(req: &mut ClientRequest, body: String) nothrow -> Void {
+	var out: Array<Byte> = [];
+	var i = 0;
+	val n = body.byte_length();
+	while i < n {
+		out.push(core.string_byte_at(&body, i));
+		i = i + 1;
+	}
+	req.body = move out;
+}
+
+pub fn set_json_body(req: &mut ClientRequest, json: String) nothrow -> Void {
+	var out: Array<Byte> = [];
+	var i = 0;
+	val n = json.byte_length();
+	while i < n {
+		out.push(core.string_byte_at(&json, i));
+		i = i + 1;
+	}
+	req.body = move out;
+	val ct = "Content-Type";
+	var j = 0;
+	while j < req.header_keys.len {
+		if req.header_keys[j] == ct {
+			return;
+		}
+		j = j + 1;
+	}
+	req.header_keys.push("Content-Type");
+	req.header_values.push("application/json");
+}
