@@ -9,8 +9,9 @@ downstream consumption via `driftc --package-root`.
 |---|---|---|
 | `web-jwt` | `web.jwt` | HS256 JWT sign/verify with temporal claims validation |
 | `web-rest` | `web.rest` | HTTP/1.1 REST server with routing, guards, and JSON body handling |
+| `web-client` | `web.client` | HTTP/1.1 and HTTPS client for outbound requests |
 
-`web-rest` depends on `web-jwt`. Most applications should depend on both.
+`web-rest` depends on `web-jwt`. `web-client` is independent and provides outbound HTTP/HTTPS.
 
 ## Quick start
 
@@ -47,6 +48,8 @@ for deploy.
 packages/
   web-jwt/        # JWT sign/verify
   web-rest/       # REST server framework
+  web-client/     # Outbound HTTP/HTTPS client
+examples/         # Small consumer examples
 docs/             # Usage guides and design docs
 tools/            # Test runners
 drift-package.json

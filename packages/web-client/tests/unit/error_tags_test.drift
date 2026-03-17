@@ -38,6 +38,16 @@ fn scenario_config_setters() nothrow -> Int {
 	return 0;
 }
 
+fn scenario_session_creation() nothrow -> Int {
+	var cfg = client.new_client_config();
+	var session = client.new_session(move cfg);
+	val url = "http://127.0.0.1:1/test";
+	match client.get(&session, url) {
+		core.Result::Ok(_) => { return 501; },
+		core.Result::Err(_) => { return 0; }
+	}
+}
+
 fn scenario_config_rejects_invalid() nothrow -> Int {
 	var cfg = client.new_client_config();
 	// Zero and negative values should be ignored (defaults preserved).
@@ -63,5 +73,7 @@ fn main() nothrow -> Int {
 	if c != 0 { return c; }
 	val d = scenario_config_rejects_invalid();
 	if d != 0 { return d; }
+	val e = scenario_session_creation();
+	if e != 0 { return e; }
 	return 0;
 }

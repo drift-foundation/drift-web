@@ -73,7 +73,9 @@
         "packages/web-client/src/errors.drift",
         "packages/web-client/src/transport.drift",
         "packages/web-client/src/http.drift",
-        "packages/web-client/src/url.drift"
+        "packages/web-client/src/url.drift",
+        "packages/web-client/src/session.drift",
+        "packages/web-client/src/cookie.drift"
       ],
       "package_deps": [
         {"name": "net-tls", "version": "0.3.2"}

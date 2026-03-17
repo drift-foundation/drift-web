@@ -142,3 +142,27 @@
 - Consumer model is now pinned and documented:
   - `driftc 0.27.59+` required initially; shared-root deploy validation completed on `0.27.62`
   - consumers use `--package-root <library-root>` plus exact `--dep web-jwt@0.1.0` / `--dep web-rest@0.1.0`
+
+## 2026-03-17
+
+- Advanced `web.client` to a session-first outbound HTTP/HTTPS client:
+  - `Session` is now the primary public client abstraction
+  - Arc-backed shared session state landed in `packages/web-client/src/session.drift`
+  - one-shot request sending was retained only as secondary `send_once(...)` sugar
+- Added first-pass session-backed cookie support to `web.client`:
+  - `Set-Cookie` parsing and storage in `packages/web-client/src/cookie.drift`
+  - host-only, domain, path, `Secure`, overwrite, and `Max-Age=0` handling
+  - integrated request/response cookie flow through the session send path
+- Tightened session concurrency shape after upstream stdlib fixes:
+  - restored `&Session` public API once `Mutex.lock(&self)` became available in Drift `0.27.68`
+  - reduced cookie locking scope so request I/O no longer holds a session-wide lock
+- Added supporting REST response-header support for cookie e2e coverage:
+  - `with_response_header(...)` on `web.rest.Response`
+  - HTTP response serialization now emits custom response headers
+- Expanded client validation:
+  - session-first HTTP and HTTPS e2e coverage
+  - integrated cookie e2e coverage for roundtrip, secure-on-HTTP rejection, path scoping, overwrite, deletion, and host/domain safety cases
+- Downstream TLS/package floor advanced:
+  - `net-tls@0.3.2` is the pinned external TLS dependency for `web-client`
+  - recommended minimum downstream Drift toolchain is now `0.27.71` / runtime ABI `6`
+  - `net-tls` consumption uses compressed signed package artifacts (`.zdmp` + `.sig`) under the standard package-root flow

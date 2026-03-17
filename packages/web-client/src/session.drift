@@ -1,0 +1,135 @@
+module web.client.session;
+
+import std.core as core;
+import std.concurrent as conc;
+import web.client.errors as errors;
+import web.client.request as request;
+import web.client.response as resp;
+import web.client.transport as transport;
+import web.client.url as url;
+import web.client.cookie as cookie;
+
+export {
+	Session,
+	SessionInner,
+	new_session,
+	session_send,
+	session_get,
+	session_post,
+	session_put,
+	session_delete
+};
+
+pub struct SessionInner {
+	pub config: transport.ClientConfig,
+	pub jar: conc.Mutex<cookie.CookieJar>
+}
+
+pub struct Session {
+	pub inner: conc.Arc<SessionInner>
+}
+
+pub fn new_session(cfg: transport.ClientConfig) nothrow -> Session {
+	val jar = cookie.new_cookie_jar();
+	val si = SessionInner(config = move cfg, jar = conc.mutex(move jar));
+	return Session(inner = conc.arc(move si));
+}
+
+pub fn session_send(session: &Session, req: request.ClientRequest) nothrow -> core.Result<resp.ClientResponse, errors.ClientError> {
+	// Parse URL for cookie matching.
+	var parsed = url.ParsedUrl(scheme = "", host = "", port = 0, path = "");
+	match url.parse_url(&req.url) {
+		core.Result::Ok(p) => { parsed = move p; },
+		core.Result::Err(e) => {
+			return core.Result::Err(move e);
+		}
+	}
+	val is_secure = parsed.scheme == "https";
+	val si = session.inner.get();
+
+	// Lock jar briefly: read matching cookies, then release.
+	var mut_req = move req;
+	val cookie_header = _read_cookies(&si.jar, &parsed.host, &parsed.path, is_secure);
+	if cookie_header.byte_length() > 0 {
+		request.set_header(&mut mut_req, "Cookie", cookie_header);
+	}
+
+	// Send — no lock held during I/O.
+	var result = transport.send(&si.config, move mut_req);
+
+	// Lock jar briefly: store response cookies, then release.
+	match &result {
+		core.Result::Ok(response) => {
+			_write_cookies(&si.jar, response, &parsed);
+		},
+		core.Result::Err(_) => {}
+	}
+
+	return move result;
+}
+
+// Lock jar, read matching cookies, release lock.
+fn _read_cookies(jar_mtx: &conc.Mutex<cookie.CookieJar>, host: &String, path: &String, is_secure: Bool) nothrow -> String {
+	var guard = jar_mtx.lock();
+	return cookie.cookies_for_request(guard.get_mut(), &*host, &*path, is_secure);
+}
+
+// Lock jar, store response cookies, release lock.
+fn _write_cookies(jar_mtx: &conc.Mutex<cookie.CookieJar>, response: &resp.ClientResponse, parsed: &url.ParsedUrl) nothrow -> Void {
+	var guard = jar_mtx.lock();
+	_store_cookies_from_response(guard.get_mut(), response, parsed);
+}
+
+fn _store_cookies_from_response(jar: &mut cookie.CookieJar, response: &resp.ClientResponse, parsed: &url.ParsedUrl) nothrow -> Void {
+	val is_secure = parsed.scheme == "https";
+	val set_cookie_name = "set-cookie";
+	var i = 0;
+	while i < response.header_keys.len {
+		if _ascii_eq_ci(&response.header_keys[i], &set_cookie_name) {
+			match cookie.parse_set_cookie(&response.header_values[i], &parsed.host, &parsed.path, is_secure) {
+				Optional::Some(c) => {
+					cookie.store_cookie(jar, move c);
+				},
+				Optional::None() => {}
+			}
+		}
+		i = i + 1;
+	}
+}
+
+fn _ascii_eq_ci(a: &String, b: &String) nothrow -> Bool {
+	val alen = a.byte_length();
+	if alen != b.byte_length() { return false; }
+	var i = 0;
+	while i < alen {
+		var ca = cast<Int>(core.string_byte_at(a, i));
+		var cb = cast<Int>(core.string_byte_at(b, i));
+		if ca >= 65 and ca <= 90 { ca = ca + 32; }
+		if cb >= 65 and cb <= 90 { cb = cb + 32; }
+		if ca != cb { return false; }
+		i = i + 1;
+	}
+	return true;
+}
+
+pub fn session_get(session: &Session, target_url: String) nothrow -> core.Result<resp.ClientResponse, errors.ClientError> {
+	var req = request.new_request("GET", target_url);
+	return session_send(session, move req);
+}
+
+pub fn session_post(session: &Session, target_url: String, body: Array<Byte>) nothrow -> core.Result<resp.ClientResponse, errors.ClientError> {
+	var req = request.new_request("POST", target_url);
+	request.set_body(&mut req, move body);
+	return session_send(session, move req);
+}
+
+pub fn session_put(session: &Session, target_url: String, body: Array<Byte>) nothrow -> core.Result<resp.ClientResponse, errors.ClientError> {
+	var req = request.new_request("PUT", target_url);
+	request.set_body(&mut req, move body);
+	return session_send(session, move req);
+}
+
+pub fn session_delete(session: &Session, target_url: String) nothrow -> core.Result<resp.ClientResponse, errors.ClientError> {
+	var req = request.new_request("DELETE", target_url);
+	return session_send(session, move req);
+}

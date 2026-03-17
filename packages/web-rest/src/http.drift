@@ -393,6 +393,17 @@ pub fn serialize_response_string(resp: &response.Response, conn_close: Bool) not
 		val ka = "keep-alive";
 		text.sb_append_string(&mut sb, &ka);
 	}
+	// Custom response headers.
+	var hi = 0;
+	while hi < resp.header_keys.len {
+		val crlf = "\r\n";
+		text.sb_append_string(&mut sb, &crlf);
+		text.sb_append_string(&mut sb, &resp.header_keys[hi]);
+		val sep = ": ";
+		text.sb_append_string(&mut sb, &sep);
+		text.sb_append_string(&mut sb, &resp.header_values[hi]);
+		hi = hi + 1;
+	}
 	val end = "\r\n\r\n";
 	text.sb_append_string(&mut sb, &end);
 	text.sb_append_string(&mut sb, &resp.body);

@@ -9,10 +9,12 @@ import web.client.response as resp;
 import web.client.transport as transport;
 import web.client.url as url_mod;
 import web.client.http as http;
+import web.client.session as session;
 
 export {
 	// Types
 	ClientConfig,
+	Session,
 	ClientRequest,
 	ClientResponse,
 	ClientError,
@@ -35,6 +37,13 @@ export {
 	with_io_timeout,
 	with_max_response_body,
 	with_tls_trust_store,
+	// Session (primary API)
+	new_session,
+	send,
+	get,
+	post,
+	put,
+	delete,
 	// Request construction
 	new_request,
 	set_header,
@@ -45,15 +54,16 @@ export {
 	response_header,
 	response_body_string,
 	response_body_json,
-	// Execution
-	send,
 	// URL parsing
-	parse_url
+	parse_url,
+	// Secondary one-shot helper
+	send_once
 };
 
 // --- Type aliases ---
 
 pub type ClientConfig = transport.ClientConfig;
+pub type Session = session.Session;
 pub type ClientRequest = request.ClientRequest;
 pub type ClientResponse = resp.ClientResponse;
 pub type ClientError = errors.ClientError;
@@ -98,6 +108,32 @@ pub fn with_tls_trust_store(cfg: &mut ClientConfig, store: TrustStore) nothrow -
 	return transport.with_tls_trust_store(cfg, move store);
 }
 
+// --- Session (primary API) ---
+
+pub fn new_session(cfg: ClientConfig) nothrow -> Session {
+	return session.new_session(move cfg);
+}
+
+pub fn send(s: &Session, req: ClientRequest) nothrow -> core.Result<ClientResponse, ClientError> {
+	return session.session_send(s, move req);
+}
+
+pub fn get(s: &Session, target_url: String) nothrow -> core.Result<ClientResponse, ClientError> {
+	return session.session_get(s, target_url);
+}
+
+pub fn post(s: &Session, target_url: String, body: Array<Byte>) nothrow -> core.Result<ClientResponse, ClientError> {
+	return session.session_post(s, target_url, move body);
+}
+
+pub fn put(s: &Session, target_url: String, body: Array<Byte>) nothrow -> core.Result<ClientResponse, ClientError> {
+	return session.session_put(s, target_url, move body);
+}
+
+pub fn delete(s: &Session, target_url: String) nothrow -> core.Result<ClientResponse, ClientError> {
+	return session.session_delete(s, target_url);
+}
+
 // --- Request construction ---
 
 pub fn new_request(method: String, target_url: String) nothrow -> ClientRequest {
@@ -134,14 +170,14 @@ pub fn response_body_json(r: &ClientResponse) nothrow -> core.Result<json.JsonHa
 	return resp.response_body_json(r);
 }
 
-// --- Execution ---
-
-pub fn send(cfg: &ClientConfig, req: ClientRequest) nothrow -> core.Result<ClientResponse, ClientError> {
-	return transport.send(cfg, move req);
-}
-
 // --- URL parsing ---
 
 pub fn parse_url(raw_url: &String) nothrow -> core.Result<ParsedUrl, ClientError> {
 	return url_mod.parse_url(raw_url);
+}
+
+// --- Secondary one-shot helper ---
+
+pub fn send_once(cfg: &ClientConfig, req: ClientRequest) nothrow -> core.Result<ClientResponse, ClientError> {
+	return transport.send(cfg, move req);
 }

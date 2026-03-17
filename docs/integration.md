@@ -1,42 +1,42 @@
 # drift-web Integration Guide
 
-Server-side web framework for Drift: routing, guards, JSON body handling,
-and HS256 JWT authentication.
+Web framework and HTTP client for Drift: inbound REST server, outbound
+HTTP/HTTPS client, and HS256 JWT authentication.
 
 ## Published packages
 
 | Package | Version | Module | Description |
 |---|---|---|---|
-| `web-jwt` | 0.1.0 | `web.jwt` | HS256 JWT sign/verify with temporal claims validation |
-| `web-rest` | 0.1.0 | `web.rest` | HTTP/1.1 REST server with routing, guards, and JSON body handling |
+| `web-jwt` | 0.2.0 | `web.jwt` | HS256 JWT sign/verify with temporal claims validation |
+| `web-rest` | 0.2.0 | `web.rest` | HTTP/1.1 REST server with routing, guards, and JSON body handling |
+| `web-client` | 0.2.0 | `web.client` | HTTP/1.1 and HTTPS client for outbound requests |
 
-`web-rest` depends on `web-jwt` — the dependency is declared in package
-metadata and resolved automatically. Typical REST applications depend on
-`web-rest`; the compiler pulls in `web-jwt` as a transitive dependency.
-
-If you only need JWT sign/verify without the REST framework, `web-jwt`
-can be consumed standalone.
+`web-rest` depends on `web-jwt` (resolved automatically). `web-client`
+is independent and provides outbound HTTP/HTTPS via `net-tls`.
 
 ## Consumer prerequisites
 
-- Drift toolchain with driftc **0.27.59** or later (ABI 5)
-- Both package artifacts (`.dmp` + `.sig` sidecars) under a shared
-  library root
+- Drift toolchain with driftc **0.27.71** or later (runtime ABI 6)
+- Package artifacts under a shared library root
 - A trust store authorizing the drift-web signing key for the
-  `web.jwt.*` and `web.rest.*` namespaces
+  `web.jwt.*`, `web.rest.*`, and `web.client.*` namespaces
 
 ### Package root layout
 
 ```
 <library-root>/
   web-jwt/
-    0.1.0/
-      web-jwt.dmp
-      web-jwt.dmp.sig
+    0.2.0/
+      web-jwt.zdmp
+      web-jwt.sig
   web-rest/
-    0.1.0/
-      web-rest.dmp
-      web-rest.dmp.sig
+    0.2.0/
+      web-rest.zdmp
+      web-rest.sig
+  web-client/
+    0.2.0/
+      web-client.zdmp
+      web-client.sig
 ```
 
 ### Trust store setup
@@ -56,14 +56,15 @@ authorizes the drift-web signing key:
   },
   "namespaces": {
     "web.jwt.*": ["ed25519:<kid>"],
-    "web.rest.*": ["ed25519:<kid>"]
+    "web.rest.*": ["ed25519:<kid>"],
+    "web.client.*": ["ed25519:<kid>"]
   },
   "revoked": []
 }
 ```
 
 The `kid` and `pubkey` values come from the `.sig` sidecar files
-installed alongside each `.dmp`. Then export the environment variable:
+installed alongside each package. Then export the environment variable:
 
 ```bash
 export DRIFT_TRUST_STORE="$HOME/.config/drift/trust.json"
@@ -71,31 +72,76 @@ export DRIFT_TRUST_STORE="$HOME/.config/drift/trust.json"
 
 ## Compilation
 
-```bash
-export DRIFT_TRUST_STORE="$HOME/.config/drift/trust.json"
+### REST server application
 
+```bash
 driftc --target-word-bits 64 \
     --package-root ~/opt/drift/libs \
-    --dep web-rest@0.1.0 \
-    --dep web-jwt@0.1.0 \
+    --dep web-rest@0.2.0 \
+    --dep web-jwt@0.2.0 \
     --entry main::main \
-    -o my_app \
-    my_app.drift
+    -o my_server \
+    my_server.drift
+```
+
+### HTTP client application
+
+```bash
+driftc --target-word-bits 64 \
+    --package-root ~/opt/drift/libs \
+    --dep web-client@0.2.0 \
+    --entry main::main \
+    -o my_client \
+    my_client.drift
 ```
 
 `--package-root` points to the library root (not the version directory).
-`--dep` selects exact versions. The compiler resolves each package at
-`<package-root>/<name>/<version>/<name>.dmp`.
+`--dep` selects exact versions. Pin all consumed packages explicitly.
 
-Pin exact versions with `--dep`. The compiler never silently picks
-"latest" — if multiple versions coexist and no `--dep` is provided,
-compilation fails. Both `web-rest` and `web-jwt` must be pinned
-explicitly when multiple versions are installed.
+## Minimal client example
 
-Consumers do not need `--allow-unsafe` or `--link-lib` flags. Neither
-package uses unsafe code or native dependencies.
+```drift
+module main;
 
-## Minimal example
+import std.core as core;
+import std.console as console;
+import std.format as fmt;
+import web.client as client;
+
+fn main() nothrow -> Int {
+    var cfg = client.new_client_config();
+    client.with_tls_trust_store(&mut cfg,
+        client.TrustStore::PemFile(path = "/etc/ssl/certs/ca-certificates.crt"));
+
+    var session = client.new_session(move cfg);
+
+    match client.get(&session, "https://api.example.com/health") {
+        core.Result::Ok(resp) => {
+            console.println("status=" + fmt.format_int(resp.status));
+            return 0;
+        },
+        core.Result::Err(e) => {
+            console.println("failed: " + e.tag);
+            return 1;
+        }
+    }
+}
+```
+
+For custom requests:
+
+```drift
+var req = client.new_request("POST", "https://api.example.com/items");
+client.set_header(&mut req, "Accept", "application/json");
+client.set_json_body(&mut req, "{\"name\":\"x\"}");
+
+match client.send(&session, move req) {
+    core.Result::Ok(resp) => { ... },
+    core.Result::Err(e) => { ... }
+}
+```
+
+## Minimal server example
 
 ```drift
 module main;
@@ -112,26 +158,25 @@ fn main() nothrow -> Int {
     var b = rest.new_app_builder();
     rest.bind(&mut b, "0.0.0.0", 8080);
 
-    var app = match rest.build_app(move b) {
-        core.Result::Ok(a) => { a },
-        core.Result::Err(_) => { return 1; }
-    };
-
-    match rest.add_route(&mut app, "GET", "/health", health_handler) {
-        core.Result::Ok(_) => {},
-        core.Result::Err(_) => { return 2; }
-    }
-
-    match rest.start(move app, conc.Duration(millis = 5000)) {
-        core.Result::Ok(srv) => {
-            // Server is running. Shut down on signal or after work.
-            var running = move srv;
-            match rest.shutdown(&mut running) {
-                core.Result::Ok(_) => { return 0; },
-                core.Result::Err(_) => { return 3; }
+    match rest.build_app(move b) {
+        core.Result::Err(_) => { return 1; },
+        core.Result::Ok(a) => {
+            var app = move a;
+            match rest.add_route(&mut app, "GET", "/health", health_handler) {
+                core.Result::Err(_) => { return 2; },
+                core.Result::Ok(_) => {}
             }
-        },
-        core.Result::Err(_) => { return 4; }
+            match rest.start(move app, conc.Duration(millis = 5000)) {
+                core.Result::Err(_) => { return 3; },
+                core.Result::Ok(srv) => {
+                    var running = move srv;
+                    match rest.shutdown(&mut running) {
+                        core.Result::Ok(_) => { return 0; },
+                        core.Result::Err(_) => { return 4; }
+                    }
+                }
+            }
+        }
     }
 }
 ```
@@ -148,6 +193,7 @@ fn main() nothrow -> Int {
 drift-web provides:
 
 - HTTP/1.1 REST server (inbound request handling)
+- HTTP/1.1 and HTTPS outbound client (session-based)
 - Route matching with path parameters
 - Guard and filter middleware
 - JSON body parsing and caching
@@ -156,10 +202,12 @@ drift-web provides:
 
 drift-web does not provide:
 
-- Outbound HTTP client
-- TLS termination (use a reverse proxy or `net-tls` for outbound)
+- TLS termination for inbound (use a reverse proxy)
 - WebSocket or streaming transport
 - Database connectivity
+- Connection pooling (planned)
+- Cookie management (planned)
+- Redirect following (planned)
 
 ## Troubleshooting
 
@@ -174,5 +222,5 @@ If package consumption fails, identify the phase:
 | **Link-time** | Undefined symbols |
 | **Runtime** | Crash or incorrect behavior after successful build |
 
-Ensure you are on driftc 0.27.59 or later. If the issue persists, report
+Ensure you are on driftc 0.27.71 or later. If the issue persists, report
 it with the failing phase and a minimized reproduction.

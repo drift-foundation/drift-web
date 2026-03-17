@@ -1,0 +1,503 @@
+module web.client.tests.e2e.cookie_e2e_test;
+
+import std.core as core;
+import std.concurrent as conc;
+import std.format as fmt;
+import std.console as console;
+import web.rest as rest;
+import web.client as client;
+
+// These tests prove that session_send() actually attaches cookies to outbound
+// requests and stores cookies from real Set-Cookie response headers.
+// The server detects misuse: handlers return 400 when the client sends cookies
+// it should not, and 400 when the client omits cookies it should send.
+
+// --- Server handlers ---
+
+// Sets a session cookie: sid=abc123; Path=/
+fn _set_cookie_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	var resp = rest.json_response(200, "{\"set\":true}");
+	rest.with_response_header(&mut resp, "Set-Cookie", "sid=abc123; Path=/");
+	return core.Result::Ok(move resp);
+}
+
+// Expects Cookie header containing "sid=abc123". Returns 200 if present, 400 if missing.
+fn _require_cookie_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	val cookie_name = "cookie";
+	match rest.header(req, &cookie_name) {
+		Optional::Some(v) => {
+			if _contains(&v, "sid=abc123") {
+				return core.Result::Ok(rest.json_response(200, "{\"ok\":true}"));
+			}
+			// Cookie header present but wrong value.
+			return core.Result::Ok(rest.json_response(400, "{\"err\":\"wrong-cookie\"}"));
+		},
+		Optional::None() => {
+			return core.Result::Ok(rest.json_response(400, "{\"err\":\"no-cookie\"}"));
+		}
+	}
+}
+
+// Returns 200 if NO cookie header is present. Returns 400 if cookies were sent.
+fn _reject_cookie_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	val cookie_name = "cookie";
+	match rest.header(req, &cookie_name) {
+		Optional::Some(_) => {
+			return core.Result::Ok(rest.json_response(400, "{\"err\":\"unexpected-cookie\"}"));
+		},
+		Optional::None() => {
+			return core.Result::Ok(rest.json_response(200, "{\"ok\":true}"));
+		}
+	}
+}
+
+// Sets a Secure cookie: sec=s1; Secure; Path=/
+fn _set_secure_cookie_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	var resp = rest.json_response(200, "{\"set\":true}");
+	rest.with_response_header(&mut resp, "Set-Cookie", "sec=s1; Secure; Path=/");
+	return core.Result::Ok(move resp);
+}
+
+// Sets a path-scoped cookie: pref=dark; Path=/settings
+fn _set_path_cookie_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	var resp = rest.json_response(200, "{\"set\":true}");
+	rest.with_response_header(&mut resp, "Set-Cookie", "pref=dark; Path=/settings");
+	return core.Result::Ok(move resp);
+}
+
+// Expects Cookie header containing "pref=dark".
+fn _require_path_cookie_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	val cookie_name = "cookie";
+	match rest.header(req, &cookie_name) {
+		Optional::Some(v) => {
+			if _contains(&v, "pref=dark") {
+				return core.Result::Ok(rest.json_response(200, "{\"ok\":true}"));
+			}
+			return core.Result::Ok(rest.json_response(400, "{\"err\":\"wrong-cookie\"}"));
+		},
+		Optional::None() => {
+			return core.Result::Ok(rest.json_response(400, "{\"err\":\"no-cookie\"}"));
+		}
+	}
+}
+
+// Sets a cookie then immediately deletes it: tok=x; Max-Age=0; Path=/
+fn _set_and_delete_cookie_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	var resp = rest.json_response(200, "{\"set\":true}");
+	rest.with_response_header(&mut resp, "Set-Cookie", "tok=x; Max-Age=0; Path=/");
+	return core.Result::Ok(move resp);
+}
+
+// Sets an overwrite cookie: sid=updated; Path=/
+fn _overwrite_cookie_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	var resp = rest.json_response(200, "{\"set\":true}");
+	rest.with_response_header(&mut resp, "Set-Cookie", "sid=updated; Path=/");
+	return core.Result::Ok(move resp);
+}
+
+// Expects Cookie header containing "sid=updated".
+fn _require_updated_cookie_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	val cookie_name = "cookie";
+	match rest.header(req, &cookie_name) {
+		Optional::Some(v) => {
+			if _contains(&v, "sid=updated") {
+				return core.Result::Ok(rest.json_response(200, "{\"ok\":true}"));
+			}
+			return core.Result::Ok(rest.json_response(400, "{\"err\":\"wrong-cookie\"}"));
+		},
+		Optional::None() => {
+			return core.Result::Ok(rest.json_response(400, "{\"err\":\"no-cookie\"}"));
+		}
+	}
+}
+
+// --- String helper ---
+
+fn _contains(haystack: &String, needle: &String) nothrow -> Bool {
+	val hlen = haystack.byte_length();
+	val nlen = needle.byte_length();
+	if nlen > hlen { return false; }
+	if nlen == 0 { return true; }
+	var i = 0;
+	val limit = hlen - nlen;
+	while i <= limit {
+		var j = 0;
+		var matching = true;
+		while matching and j < nlen {
+			if core.string_byte_at(haystack, i + j) != core.string_byte_at(needle, j) {
+				matching = false;
+			} else {
+				j = j + 1;
+			}
+		}
+		if matching { return true; }
+		i = i + 1;
+	}
+	return false;
+}
+
+// --- Scenarios ---
+
+// 1. Server sets cookie via Set-Cookie, next request must include it.
+fn scenario_cookie_roundtrip(session: &client.Session, port: Int) nothrow -> Int {
+	// First request: server sets sid=abc123.
+	val set_url = "http://127.0.0.1:" + fmt.format_int(port) + "/set-cookie";
+	match client.get(session, set_url) {
+		core.Result::Err(_) => { return 1001; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 1002; }
+		}
+	}
+
+	// Second request: server verifies cookie is attached.
+	val check_url = "http://127.0.0.1:" + fmt.format_int(port) + "/require-cookie";
+	match client.get(session, check_url) {
+		core.Result::Err(_) => { return 1003; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 1004; }
+			return 0;
+		}
+	}
+}
+
+// 2. First request (before any Set-Cookie) must NOT send cookies.
+fn scenario_no_initial_cookies(session: &client.Session, port: Int) nothrow -> Int {
+	val url = "http://127.0.0.1:" + fmt.format_int(port) + "/reject-cookie";
+	match client.get(session, url) {
+		core.Result::Err(_) => { return 2001; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 2002; }
+			return 0;
+		}
+	}
+}
+
+// 3. Secure cookie set over HTTP must NOT be stored (parse_set_cookie rejects
+//    Secure cookies on non-secure requests). Subsequent request must not send it.
+fn scenario_secure_cookie_over_http(session: &client.Session, port: Int) nothrow -> Int {
+	// Server sets a Secure cookie, but we're on HTTP.
+	val set_url = "http://127.0.0.1:" + fmt.format_int(port) + "/set-secure-cookie";
+	match client.get(session, set_url) {
+		core.Result::Err(_) => { return 3001; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 3002; }
+		}
+	}
+
+	// Next request: server should see no cookies (Secure cookie on HTTP = not stored).
+	val check_url = "http://127.0.0.1:" + fmt.format_int(port) + "/reject-cookie";
+	match client.get(session, check_url) {
+		core.Result::Err(_) => { return 3003; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 3004; }
+			return 0;
+		}
+	}
+}
+
+// 4. Path-scoped cookie: sent to matching paths, NOT sent to other paths.
+fn scenario_path_scoping(session: &client.Session, port: Int) nothrow -> Int {
+	// Server sets pref=dark; Path=/settings
+	val set_url = "http://127.0.0.1:" + fmt.format_int(port) + "/set-path-cookie";
+	match client.get(session, set_url) {
+		core.Result::Err(_) => { return 4001; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 4002; }
+		}
+	}
+
+	// Request to /settings/check: cookie should be present.
+	val match_url = "http://127.0.0.1:" + fmt.format_int(port) + "/settings/check";
+	match client.get(session, match_url) {
+		core.Result::Err(_) => { return 4003; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 4004; }
+		}
+	}
+
+	// Request to /reject-cookie (root path): path-scoped cookie must NOT be sent.
+	val no_match_url = "http://127.0.0.1:" + fmt.format_int(port) + "/reject-cookie";
+	match client.get(session, no_match_url) {
+		core.Result::Err(_) => { return 4005; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 4006; }
+			return 0;
+		}
+	}
+}
+
+// 5. Cookie overwrite: server updates cookie value, client sends the new value.
+fn scenario_cookie_overwrite(session: &client.Session, port: Int) nothrow -> Int {
+	// Set initial cookie sid=abc123.
+	val set_url = "http://127.0.0.1:" + fmt.format_int(port) + "/set-cookie";
+	match client.get(session, set_url) {
+		core.Result::Err(_) => { return 5001; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 5002; }
+		}
+	}
+
+	// Overwrite with sid=updated.
+	val overwrite_url = "http://127.0.0.1:" + fmt.format_int(port) + "/overwrite-cookie";
+	match client.get(session, overwrite_url) {
+		core.Result::Err(_) => { return 5003; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 5004; }
+		}
+	}
+
+	// Server checks for sid=updated.
+	val check_url = "http://127.0.0.1:" + fmt.format_int(port) + "/require-updated-cookie";
+	match client.get(session, check_url) {
+		core.Result::Err(_) => { return 5005; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 5006; }
+			return 0;
+		}
+	}
+}
+
+// 6. Max-Age=0 deletes a cookie: server won't see it on next request.
+fn scenario_max_age_delete(session: &client.Session, port: Int) nothrow -> Int {
+	// Set initial cookie.
+	val set_url = "http://127.0.0.1:" + fmt.format_int(port) + "/set-cookie";
+	match client.get(session, set_url) {
+		core.Result::Err(_) => { return 6001; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 6002; }
+		}
+	}
+
+	// Verify it's there.
+	val check_url = "http://127.0.0.1:" + fmt.format_int(port) + "/require-cookie";
+	match client.get(session, check_url) {
+		core.Result::Err(_) => { return 6003; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 6004; }
+		}
+	}
+
+	// Delete via Max-Age=0 (sets tok=x, but also implicitly: we need to delete sid).
+	// Actually, to delete sid, the Set-Cookie must use the same name.
+	// Let's use a separate route that deletes sid specifically.
+	val del_url = "http://127.0.0.1:" + fmt.format_int(port) + "/delete-cookie";
+	match client.get(session, del_url) {
+		core.Result::Err(_) => { return 6005; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 6006; }
+		}
+	}
+
+	// Server should see no sid cookie now.
+	val final_url = "http://127.0.0.1:" + fmt.format_int(port) + "/reject-cookie";
+	match client.get(session, final_url) {
+		core.Result::Err(_) => { return 6007; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 6008; }
+			return 0;
+		}
+	}
+}
+
+// Sets a cookie with Domain=evil.com (mismatched with request host 127.0.0.1).
+// parse_set_cookie should reject this — domain doesn't match request host.
+fn _set_cross_domain_cookie_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	var resp = rest.json_response(200, "{\"set\":true}");
+	rest.with_response_header(&mut resp, "Set-Cookie", "stolen=yes; Domain=evil.com; Path=/");
+	return core.Result::Ok(move resp);
+}
+
+// Sets a host-only cookie (no Domain attribute). Should only match exact host.
+fn _set_host_only_cookie_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	var resp = rest.json_response(200, "{\"set\":true}");
+	rest.with_response_header(&mut resp, "Set-Cookie", "hcook=h1; Path=/");
+	return core.Result::Ok(move resp);
+}
+
+// Expects Cookie header containing "hcook=h1".
+fn _require_host_cookie_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	val cookie_name = "cookie";
+	match rest.header(req, &cookie_name) {
+		Optional::Some(v) => {
+			if _contains(&v, "hcook=h1") {
+				return core.Result::Ok(rest.json_response(200, "{\"ok\":true}"));
+			}
+			return core.Result::Ok(rest.json_response(400, "{\"err\":\"wrong-cookie\"}"));
+		},
+		Optional::None() => {
+			return core.Result::Ok(rest.json_response(400, "{\"err\":\"no-cookie\"}"));
+		}
+	}
+}
+
+// Deletes sid cookie: sid=; Max-Age=0; Path=/
+fn _delete_sid_cookie_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	var resp = rest.json_response(200, "{\"deleted\":true}");
+	rest.with_response_header(&mut resp, "Set-Cookie", "sid=; Max-Age=0; Path=/");
+	return core.Result::Ok(move resp);
+}
+
+// 7. Cross-domain cookie rejection: server sets Domain=evil.com from 127.0.0.1.
+//    parse_set_cookie must reject it. Next request must not send any cookie.
+fn scenario_cross_domain_rejected(session: &client.Session, port: Int) nothrow -> Int {
+	// Server tries to set a cookie for evil.com from 127.0.0.1.
+	val set_url = "http://127.0.0.1:" + fmt.format_int(port) + "/set-cross-domain-cookie";
+	match client.get(session, set_url) {
+		core.Result::Err(_) => { return 7001; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 7002; }
+		}
+	}
+
+	// Server verifies no cookie was stored/sent.
+	val check_url = "http://127.0.0.1:" + fmt.format_int(port) + "/reject-cookie";
+	match client.get(session, check_url) {
+		core.Result::Err(_) => { return 7003; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 7004; }
+			return 0;
+		}
+	}
+}
+
+// 8. Host-only cookie scoping: positive replay to same host, negative
+//    non-replay to a different host.
+//    BLOCKED: std.net does not support DNS resolution — net.connect only
+//    accepts IP addresses, not hostnames. Until the runtime team adds
+//    getaddrinfo support, we cannot test cross-host cookie scoping through
+//    real HTTP round-trips with different hostnames.
+//    /etc/hosts entries exist: 127.0.0.1 api1.test.local api2.test.local
+//    The intended test shape:
+//      1. Set host-only cookie via api1.test.local
+//      2. Verify cookie replays to api1.test.local (positive)
+//      3. Verify cookie does NOT replay to api2.test.local (negative)
+//    This scenario currently tests same-host replay only (via 127.0.0.1).
+fn scenario_host_only_scoping(session: &client.Session, port: Int) nothrow -> Int {
+	// Set host-only cookie via 127.0.0.1 (no Domain attribute).
+	val set_url = "http://127.0.0.1:" + fmt.format_int(port) + "/set-host-only-cookie";
+	match client.get(session, set_url) {
+		core.Result::Err(_) => { return 8001; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 8002; }
+		}
+	}
+
+	// Same host (127.0.0.1): server verifies hcook=h1 is present.
+	val check_url = "http://127.0.0.1:" + fmt.format_int(port) + "/require-host-cookie";
+	match client.get(session, check_url) {
+		core.Result::Err(_) => { return 8003; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 8004; }
+			return 0;
+		}
+	}
+}
+
+// --- Main ---
+
+fn main() nothrow -> Int {
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(a) => {
+			var app = move a;
+
+			// Register all handlers.
+			match rest.add_route(&mut app, "GET", "/set-cookie", _set_cookie_handler) {
+				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
+			match rest.add_route(&mut app, "GET", "/require-cookie", _require_cookie_handler) {
+				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
+			match rest.add_route(&mut app, "GET", "/reject-cookie", _reject_cookie_handler) {
+				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
+			match rest.add_route(&mut app, "GET", "/set-secure-cookie", _set_secure_cookie_handler) {
+				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
+			match rest.add_route(&mut app, "GET", "/set-path-cookie", _set_path_cookie_handler) {
+				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
+			match rest.add_route(&mut app, "GET", "/settings/check", _require_path_cookie_handler) {
+				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
+			match rest.add_route(&mut app, "GET", "/overwrite-cookie", _overwrite_cookie_handler) {
+				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
+			match rest.add_route(&mut app, "GET", "/require-updated-cookie", _require_updated_cookie_handler) {
+				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
+			match rest.add_route(&mut app, "GET", "/delete-cookie", _delete_sid_cookie_handler) {
+				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
+			match rest.add_route(&mut app, "GET", "/set-and-delete-cookie", _set_and_delete_cookie_handler) {
+				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
+			match rest.add_route(&mut app, "GET", "/set-cross-domain-cookie", _set_cross_domain_cookie_handler) {
+				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
+			match rest.add_route(&mut app, "GET", "/set-host-only-cookie", _set_host_only_cookie_handler) {
+				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
+			match rest.add_route(&mut app, "GET", "/require-host-cookie", _require_host_cookie_handler) {
+				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
+
+			match rest.start(move app, conc.Duration(millis = 5000)) {
+				core.Result::Err(_) => { return 3; },
+				core.Result::Ok(srv) => {
+					var running = move srv;
+					val port = rest.server_port(&running);
+
+					// Each scenario gets a fresh session to isolate cookie state.
+					// Scenario 2 (no initial cookies) must run first with a clean session.
+					var cfg2 = client.new_client_config();
+					val s2 = client.new_session(move cfg2);
+					val r2 = scenario_no_initial_cookies(&s2, port);
+					if r2 != 0 { console.println("FAIL: no_initial_cookies " + fmt.format_int(r2)); _stop(&mut running); return r2; }
+
+					// Scenario 1: cookie roundtrip.
+					var cfg1 = client.new_client_config();
+					val s1 = client.new_session(move cfg1);
+					val r1 = scenario_cookie_roundtrip(&s1, port);
+					if r1 != 0 { console.println("FAIL: cookie_roundtrip " + fmt.format_int(r1)); _stop(&mut running); return r1; }
+
+					// Scenario 3: Secure cookie over HTTP.
+					var cfg3 = client.new_client_config();
+					val s3 = client.new_session(move cfg3);
+					val r3 = scenario_secure_cookie_over_http(&s3, port);
+					if r3 != 0 { console.println("FAIL: secure_cookie_over_http " + fmt.format_int(r3)); _stop(&mut running); return r3; }
+
+					// Scenario 4: path scoping.
+					var cfg4 = client.new_client_config();
+					val s4 = client.new_session(move cfg4);
+					val r4 = scenario_path_scoping(&s4, port);
+					if r4 != 0 { console.println("FAIL: path_scoping " + fmt.format_int(r4)); _stop(&mut running); return r4; }
+
+					// Scenario 5: cookie overwrite.
+					var cfg5 = client.new_client_config();
+					val s5 = client.new_session(move cfg5);
+					val r5 = scenario_cookie_overwrite(&s5, port);
+					if r5 != 0 { console.println("FAIL: cookie_overwrite " + fmt.format_int(r5)); _stop(&mut running); return r5; }
+
+					// Scenario 6: Max-Age=0 deletion.
+					var cfg6 = client.new_client_config();
+					val s6 = client.new_session(move cfg6);
+					val r6 = scenario_max_age_delete(&s6, port);
+					if r6 != 0 { console.println("FAIL: max_age_delete " + fmt.format_int(r6)); _stop(&mut running); return r6; }
+
+					// Scenario 7: cross-domain cookie rejection.
+					var cfg7 = client.new_client_config();
+					val s7 = client.new_session(move cfg7);
+					val r7 = scenario_cross_domain_rejected(&s7, port);
+					if r7 != 0 { console.println("FAIL: cross_domain_rejected " + fmt.format_int(r7)); _stop(&mut running); return r7; }
+
+					// Scenario 8: host-only cookie scoping.
+					var cfg8 = client.new_client_config();
+					val s8 = client.new_session(move cfg8);
+					val r8 = scenario_host_only_scoping(&s8, port);
+					if r8 != 0 { console.println("FAIL: host_only_scoping " + fmt.format_int(r8)); _stop(&mut running); return r8; }
+
+					console.println("cookie e2e: all passed");
+					_stop(&mut running);
+					return 0;
+				}
+			}
+		}
+	}
+}
+
+fn _stop(running: &mut rest.RunningServer) nothrow -> Void {
+	match rest.shutdown(running) {
+		core.Result::Ok(_) => {},
+		core.Result::Err(_) => {}
+	}
+}

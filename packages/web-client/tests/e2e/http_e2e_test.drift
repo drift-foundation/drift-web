@@ -12,17 +12,25 @@ fn _health_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.R
 }
 
 fn _echo_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
-	return core.Result::Ok(rest.json_response(200, "{\"echo\":\"hello\"}"));
+	// Reflect Content-Length back so the client can verify body was received.
+	val cl_name = "content-length";
+	match rest.header(req, &cl_name) {
+		Optional::None() => {
+			return core.Result::Ok(rest.json_response(200, "{\"cl\":\"none\"}"));
+		},
+		Optional::Some(cl_val) => {
+			val body = "{\"cl\":\"" + cl_val + "\"}";
+			return core.Result::Ok(rest.json_response(200, body));
+		}
+	}
 }
 
 // --- Scenarios ---
 
-// GET /health → 200, verify body.
-fn scenario_get_health(port: Int) nothrow -> Int {
-	var cfg = client.new_client_config();
+// GET via session verb helper.
+fn scenario_session_get(session: &client.Session, port: Int) nothrow -> Int {
 	val url = "http://127.0.0.1:" + fmt.format_int(port) + "/health";
-	var req = client.new_request("GET", url);
-	match client.send(&cfg, move req) {
+	match client.get(session, url) {
 		core.Result::Err(_) => { return 101; },
 		core.Result::Ok(resp) => {
 			if resp.status != 200 { return 102; }
@@ -38,21 +46,28 @@ fn scenario_get_health(port: Int) nothrow -> Int {
 	}
 }
 
-// POST /echo with JSON body → 200, verify response body.
-fn scenario_post_echo(port: Int) nothrow -> Int {
-	var cfg = client.new_client_config();
+// POST via session verb helper — verifies body is actually sent.
+fn scenario_session_post(session: &client.Session, port: Int) nothrow -> Int {
 	val url = "http://127.0.0.1:" + fmt.format_int(port) + "/echo";
-	var req = client.new_request("POST", url);
-	client.set_json_body(&mut req, "{\"body\":\"hello\"}");
-	match client.send(&cfg, move req) {
+	// Send a 13-byte JSON body. Server echoes back the Content-Length it received.
+	val json_body = "{\"key\":\"val\"}";
+	var body: Array<Byte> = [];
+	var i = 0;
+	val n = json_body.byte_length();
+	while i < n {
+		body.push(core.string_byte_at(&json_body, i));
+		i = i + 1;
+	}
+	match client.post(session, url, move body) {
 		core.Result::Err(_) => { return 201; },
 		core.Result::Ok(resp) => {
 			if resp.status != 200 { return 202; }
 			match client.response_body_string(&resp) {
 				core.Result::Err(_) => { return 203; },
-				core.Result::Ok(body) => {
-					val expected = "{\"echo\":\"hello\"}";
-					if body != expected { return 204; }
+				core.Result::Ok(body_str) => {
+					// Server should reflect cl=13 (the body we sent).
+					val expected = "{\"cl\":\"13\"}";
+					if body_str != expected { return 204; }
 					return 0;
 				}
 			}
@@ -60,20 +75,32 @@ fn scenario_post_echo(port: Int) nothrow -> Int {
 	}
 }
 
-// Verify response header lookup (case-insensitive).
-fn scenario_response_header(port: Int) nothrow -> Int {
-	var cfg = client.new_client_config();
-	val url = "http://127.0.0.1:" + fmt.format_int(port) + "/health";
-	var req = client.new_request("GET", url);
-	match client.send(&cfg, move req) {
+// Session send with custom request.
+fn scenario_session_send_custom(session: &client.Session, port: Int) nothrow -> Int {
+	val url = "http://127.0.0.1:" + fmt.format_int(port) + "/echo";
+	var req = client.new_request("POST", url);
+	client.set_json_body(&mut req, "{\"body\":\"hello\"}");
+	match client.send(session, move req) {
 		core.Result::Err(_) => { return 301; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 302; }
+			return 0;
+		}
+	}
+}
+
+// Response header lookup (case-insensitive).
+fn scenario_response_header(session: &client.Session, port: Int) nothrow -> Int {
+	val url = "http://127.0.0.1:" + fmt.format_int(port) + "/health";
+	match client.get(session, url) {
+		core.Result::Err(_) => { return 401; },
 		core.Result::Ok(resp) => {
 			val ct_name = "content-type";
 			match client.response_header(&resp, &ct_name) {
-				Optional::None() => { return 302; },
+				Optional::None() => { return 402; },
 				Optional::Some(v) => {
 					val expected = "application/json";
-					if v != expected { return 303; }
+					if v != expected { return 403; }
 					return 0;
 				}
 			}
@@ -81,45 +108,61 @@ fn scenario_response_header(port: Int) nothrow -> Int {
 	}
 }
 
-// Verify response_body_json succeeds on valid JSON.
-fn scenario_json_body_parse(port: Int) nothrow -> Int {
-	var cfg = client.new_client_config();
+// JSON body parse.
+fn scenario_json_body_parse(session: &client.Session, port: Int) nothrow -> Int {
 	val url = "http://127.0.0.1:" + fmt.format_int(port) + "/health";
-	var req = client.new_request("GET", url);
-	match client.send(&cfg, move req) {
-		core.Result::Err(_) => { return 401; },
+	match client.get(session, url) {
+		core.Result::Err(_) => { return 501; },
 		core.Result::Ok(resp) => {
 			match client.response_body_json(&resp) {
-				core.Result::Err(_) => { return 402; },
+				core.Result::Err(_) => { return 502; },
 				core.Result::Ok(_) => { return 0; }
 			}
 		}
 	}
 }
 
-// Verify that connecting to a bad port returns an error.
+// Error on bad port.
 fn scenario_error_on_bad_port() nothrow -> Int {
 	var cfg = client.new_client_config();
 	client.with_connect_timeout(&mut cfg, 1000);
+	var session = client.new_session(move cfg);
 	val url = "http://127.0.0.1:1/health";
-	var req = client.new_request("GET", url);
-	match client.send(&cfg, move req) {
-		core.Result::Ok(_) => { return 501; },
+	match client.get(&session, url) {
+		core.Result::Ok(_) => { return 601; },
 		core.Result::Err(_) => { return 0; }
 	}
 }
 
-fn _run_all(port: Int) nothrow -> Int {
-	val a = scenario_get_health(port);
+// send_once secondary helper still works.
+fn scenario_send_once(port: Int) nothrow -> Int {
+	var cfg = client.new_client_config();
+	val url = "http://127.0.0.1:" + fmt.format_int(port) + "/health";
+	var req = client.new_request("GET", url);
+	match client.send_once(&cfg, move req) {
+		core.Result::Err(_) => { return 701; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 702; }
+			return 0;
+		}
+	}
+}
+
+fn _run_all(session: &client.Session, port: Int) nothrow -> Int {
+	val a = scenario_session_get(session, port);
 	if a != 0 { return a; }
-	val b = scenario_post_echo(port);
+	val b = scenario_session_post(session, port);
 	if b != 0 { return b; }
-	val c = scenario_response_header(port);
+	val c = scenario_session_send_custom(session, port);
 	if c != 0 { return c; }
-	val d = scenario_json_body_parse(port);
+	val d = scenario_response_header(session, port);
 	if d != 0 { return d; }
-	val e = scenario_error_on_bad_port();
+	val e = scenario_json_body_parse(session, port);
 	if e != 0 { return e; }
+	val f = scenario_error_on_bad_port();
+	if f != 0 { return f; }
+	val g = scenario_send_once(port);
+	if g != 0 { return g; }
 	return 0;
 }
 
@@ -143,7 +186,12 @@ fn main() nothrow -> Int {
 				core.Result::Ok(srv) => {
 					var running = move srv;
 					val port = rest.server_port(&running);
-					val r = _run_all(port);
+
+					// Create session and run all scenarios.
+					var cfg = client.new_client_config();
+					var session = client.new_session(move cfg);
+					val r = _run_all(&session, port);
+
 					match rest.shutdown(&mut running) {
 						core.Result::Ok(_) => {},
 						core.Result::Err(_) => {}

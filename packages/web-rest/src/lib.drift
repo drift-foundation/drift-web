@@ -46,6 +46,7 @@ export {
 	add_field,
 	// Response
 	json_response,
+	with_response_header,
 	error_envelope,
 	// JSON field extraction
 	require_json_string,
@@ -139,6 +140,10 @@ pub fn add_field(err: &mut RestError, key: String, value: String) nothrow -> Voi
 
 pub fn json_response(status: Int, body: String) nothrow -> Response {
 	return response.json_response(status, body);
+}
+
+pub fn with_response_header(resp: &mut Response, key: String, value: String) nothrow -> Void {
+	return response.with_response_header(resp, key, value);
 }
 
 pub fn error_envelope(err: &RestError, event_id: &String) nothrow -> Response {

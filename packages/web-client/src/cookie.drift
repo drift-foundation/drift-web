@@ -1,0 +1,424 @@
+module web.client.cookie;
+
+import std.core as core;
+import std.io as io;
+import std.parse as parse;
+import std.time as time;
+
+export {
+	Cookie,
+	CookieJar,
+	new_cookie_jar,
+	parse_set_cookie,
+	store_cookie,
+	cookies_for_request
+};
+
+pub struct Cookie {
+	pub name: String,
+	pub value: String,
+	pub cookie_domain: String,
+	pub path: String,
+	pub secure: Bool,
+	pub host_only: Bool,
+	pub expires_unix: Int
+}
+
+pub struct CookieJar {
+	pub names: Array<String>,
+	pub values: Array<String>,
+	pub domains: Array<String>,
+	pub paths: Array<String>,
+	pub secure_flags: Array<Bool>,
+	pub host_only_flags: Array<Bool>,
+	pub expires: Array<Int>
+}
+
+pub fn new_cookie_jar() nothrow -> CookieJar {
+	var n: Array<String> = [];
+	var v: Array<String> = [];
+	var d: Array<String> = [];
+	var p: Array<String> = [];
+	var s: Array<Bool> = [];
+	var h: Array<Bool> = [];
+	var e: Array<Int> = [];
+	return CookieJar(
+		names = move n, values = move v, domains = move d,
+		paths = move p, secure_flags = move s, host_only_flags = move h,
+		expires = move e
+	);
+}
+
+// --- Set-Cookie parsing ---
+
+pub fn parse_set_cookie(header_value: &String, request_host: &String, request_path: &String, request_secure: Bool) nothrow -> Optional<Cookie> {
+	// Split name=value from attributes at first ';'.
+	val semi = _find_char(header_value, cast<Byte>(59));
+	var nv_end = header_value.byte_length();
+	if semi >= 0 { nv_end = semi; }
+
+	// Split name=value at first '='.
+	val eq = _find_char_range(header_value, 0, nv_end, cast<Byte>(61));
+	if eq < 0 { return Optional::None(); }
+	if eq == 0 { return Optional::None(); }
+
+	val name = _trim(_substring(header_value, 0, eq));
+	val value = _trim(_substring(header_value, eq + 1, nv_end));
+	if name.byte_length() == 0 { return Optional::None(); }
+
+	// Parse attributes.
+	var dom = "";
+	var path = "";
+	var secure = false;
+	var max_age = -1;
+	var has_max_age = false;
+
+	if semi >= 0 {
+		var pos = semi + 1;
+		val hlen = header_value.byte_length();
+		while pos < hlen {
+			val next_semi = _find_char_range(header_value, pos, hlen, cast<Byte>(59));
+			var attr_end = hlen;
+			if next_semi >= 0 { attr_end = next_semi; }
+
+			val attr = _trim(_substring(header_value, pos, attr_end));
+			val attr_eq = _find_char(&attr, cast<Byte>(61));
+			if attr_eq >= 0 {
+				val attr_name = _ascii_lower(_trim(_substring(&attr, 0, attr_eq)));
+				val attr_val = _trim(_substring(&attr, attr_eq + 1, attr.byte_length()));
+				if attr_name == "domain" {
+					dom = _ascii_lower(attr_val);
+					// Strip leading dot.
+					if dom.byte_length() > 0 {
+						if core.string_byte_at(&dom, 0) == cast<Byte>(46) {
+							dom = _substring(&dom, 1, dom.byte_length());
+						}
+					}
+				}
+				if attr_name == "path" {
+					path = attr_val;
+				}
+				if attr_name == "max-age" {
+					match parse.parse_int(attr_val) {
+						core.Result::Ok(v) => {
+							max_age = v;
+							has_max_age = true;
+						},
+						core.Result::Err(_) => {}
+					}
+				}
+			} else {
+				val attr_lower = _ascii_lower(attr);
+				if attr_lower == "secure" {
+					secure = true;
+				}
+			}
+
+			if next_semi >= 0 {
+				pos = next_semi + 1;
+			} else {
+				pos = hlen;
+			}
+		}
+	}
+
+	// Reject Secure cookies received over non-secure channels.
+	if secure and not request_secure {
+		return Optional::None();
+	}
+
+	// Apply defaults and rules.
+	var host_only = false;
+	if dom.byte_length() == 0 {
+		// No Domain attribute: host-only cookie.
+		dom = _ascii_lower(*request_host);
+		host_only = true;
+	} else {
+		// Domain attribute present: verify request host matches.
+		val lower_host = _ascii_lower(*request_host);
+		if not _domain_matches(&lower_host, &dom) {
+			return Optional::None();
+		}
+	}
+
+	if path.byte_length() == 0 {
+		path = _default_path(request_path);
+	}
+
+	// Compute expiry.
+	var expires_unix = 0; // 0 = session cookie (no expiry)
+	if has_max_age {
+		if max_age <= 0 {
+			expires_unix = 1; // Already expired — will be removed on store.
+		} else {
+			expires_unix = time.utc_unix_seconds_now() + max_age;
+		}
+	}
+
+	return Optional::Some(Cookie(
+		name = name, value = value, cookie_domain = dom, path = path,
+		secure = secure, host_only = host_only, expires_unix = expires_unix
+	));
+}
+
+// --- Cookie jar operations ---
+
+pub fn store_cookie(jar: &mut CookieJar, cookie: Cookie) nothrow -> Void {
+	// Check if expired (non-zero expiry in the past).
+	if cookie.expires_unix > 0 {
+		if cookie.expires_unix <= time.utc_unix_seconds_now() {
+			// Remove any existing cookie with same key.
+			_remove_cookie(jar, &cookie.name, &cookie.cookie_domain, &cookie.path);
+			return;
+		}
+	}
+
+	// Overwrite existing cookie with same name+domain+path.
+	var i = 0;
+	while i < jar.names.len {
+		if jar.names[i].byte_length() > 0 and jar.names[i] == cookie.name {
+			if jar.domains[i] == cookie.cookie_domain {
+				if jar.paths[i] == cookie.path {
+					jar.values[i] = cookie.value;
+					jar.secure_flags[i] = cookie.secure;
+					jar.host_only_flags[i] = cookie.host_only;
+					jar.expires[i] = cookie.expires_unix;
+					return;
+				}
+			}
+		}
+		i = i + 1;
+	}
+
+	// New cookie.
+	jar.names.push(cookie.name);
+	jar.values.push(cookie.value);
+	jar.domains.push(cookie.cookie_domain);
+	jar.paths.push(cookie.path);
+	jar.secure_flags.push(cookie.secure);
+	jar.host_only_flags.push(cookie.host_only);
+	jar.expires.push(cookie.expires_unix);
+}
+
+fn _remove_cookie(jar: &mut CookieJar, name: &String, dom_key: &String, path: &String) nothrow -> Void {
+	var i = 0;
+	while i < jar.names.len {
+		if jar.names[i] == *name {
+			if jar.domains[i] == *dom_key {
+				if jar.paths[i] == *path {
+					// Mark as deleted by clearing the name.
+					jar.names[i] = "";
+					jar.values[i] = "";
+					return;
+				}
+			}
+		}
+		i = i + 1;
+	}
+}
+
+// Return matching cookies as "name=value; name=value" header string.
+pub fn cookies_for_request(jar: &CookieJar, host: &String, path: &String, is_secure: Bool) nothrow -> String {
+	val lower_host = _ascii_lower(*host);
+	val now = time.utc_unix_seconds_now();
+	var result = "";
+	var i = 0;
+	while i < jar.names.len {
+		// Check expiry.
+		if jar.expires[i] > 0 {
+			if jar.expires[i] <= now {
+				i = i + 1;
+				// Skip expired (lazy cleanup).
+				// TODO: remove expired entries on next write.
+			} else {
+				if _cookie_matches(jar, i, &lower_host, path, is_secure) {
+					if result.byte_length() > 0 {
+						result = result + "; ";
+					}
+					result = result + jar.names[i] + "=" + jar.values[i];
+				}
+				i = i + 1;
+			}
+		} else {
+			// Session cookie (no expiry).
+			if _cookie_matches(jar, i, &lower_host, path, is_secure) {
+				if result.byte_length() > 0 {
+					result = result + "; ";
+				}
+				result = result + jar.names[i] + "=" + jar.values[i];
+			}
+			i = i + 1;
+		}
+	}
+	return result;
+}
+
+fn _cookie_matches(jar: &CookieJar, idx: Int, host: &String, path: &String, is_secure: Bool) nothrow -> Bool {
+	// Skip deleted entries.
+	if jar.names[idx].byte_length() == 0 { return false; }
+
+	// Secure check: secure cookies only over HTTPS.
+	if jar.secure_flags[idx] and not is_secure {
+		return false;
+	}
+
+	// Domain check.
+	if jar.host_only_flags[idx] {
+		// Host-only: exact match required.
+		if *host != jar.domains[idx] {
+			return false;
+		}
+	} else {
+		// Domain cookie: host must match or be a subdomain.
+		if not _domain_matches(host, &jar.domains[idx]) {
+			return false;
+		}
+	}
+
+	// Path check.
+	if not _path_matches(path, &jar.paths[idx]) {
+		return false;
+	}
+
+	return true;
+}
+
+// --- Domain/path matching ---
+
+fn _domain_matches(host: &String, dom_target: &String) nothrow -> Bool {
+	if *host == *dom_target { return true; }
+	val hlen = host.byte_length();
+	val dlen = dom_target.byte_length();
+	if hlen <= dlen { return false; }
+	// host must end with ".domain".
+	val offset = hlen - dlen;
+	if core.string_byte_at(host, offset - 1) != cast<Byte>(46) { return false; }
+	var i = 0;
+	while i < dlen {
+		if core.string_byte_at(host, offset + i) != core.string_byte_at(dom_target, i) {
+			return false;
+		}
+		i = i + 1;
+	}
+	return true;
+}
+
+fn _path_matches(request_path: &String, cookie_path: &String) nothrow -> Bool {
+	val rlen = request_path.byte_length();
+	val clen = cookie_path.byte_length();
+	if clen == 0 { return true; }
+	if rlen < clen { return false; }
+	// Request path must start with cookie path.
+	var i = 0;
+	while i < clen {
+		if core.string_byte_at(request_path, i) != core.string_byte_at(cookie_path, i) {
+			return false;
+		}
+		i = i + 1;
+	}
+	// Exact match or next char is '/'.
+	if rlen == clen { return true; }
+	if core.string_byte_at(cookie_path, clen - 1) == cast<Byte>(47) { return true; }
+	if core.string_byte_at(request_path, clen) == cast<Byte>(47) { return true; }
+	return false;
+}
+
+fn _default_path(request_path: &String) nothrow -> String {
+	val len = request_path.byte_length();
+	if len == 0 { return "/"; }
+	if core.string_byte_at(request_path, 0) != cast<Byte>(47) { return "/"; }
+	// Find last '/'.
+	var last_slash = 0;
+	var i = len - 1;
+	while i > 0 {
+		if core.string_byte_at(request_path, i) == cast<Byte>(47) {
+			last_slash = i;
+			i = 0; // break
+		} else {
+			i = i - 1;
+		}
+	}
+	if last_slash == 0 { return "/"; }
+	return _substring(request_path, 0, last_slash);
+}
+
+// --- String helpers ---
+
+fn _substring(s: &String, start: Int, end: Int) nothrow -> String {
+	val n = end - start;
+	if n <= 0 { return ""; }
+	var b = io.buffer(n);
+	var i = 0;
+	while i < n {
+		io.buffer_write(&mut b, i, core.string_byte_at(s, start + i));
+		i = i + 1;
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&b), n);
+}
+
+fn _find_char(s: &String, target: Byte) nothrow -> Int {
+	var i = 0;
+	val n = s.byte_length();
+	while i < n {
+		if core.string_byte_at(s, i) == target { return i; }
+		i = i + 1;
+	}
+	return -1;
+}
+
+fn _find_char_range(s: &String, start: Int, end: Int, target: Byte) nothrow -> Int {
+	var i = start;
+	while i < end {
+		if core.string_byte_at(s, i) == target { return i; }
+		i = i + 1;
+	}
+	return -1;
+}
+
+fn _trim(s: String) nothrow -> String {
+	val len = s.byte_length();
+	var start = 0;
+	var scanning = true;
+	while scanning {
+		if start >= len {
+			return "";
+		}
+		val b = core.string_byte_at(&s, start);
+		if b != cast<Byte>(32) and b != cast<Byte>(9) {
+			scanning = false;
+		} else {
+			start = start + 1;
+		}
+	}
+	return _trim_end(_substring(&s, start, len));
+}
+
+fn _trim_end(s: String) nothrow -> String {
+	val len = s.byte_length();
+	var end = len;
+	while end > 0 {
+		val b = core.string_byte_at(&s, end - 1);
+		if b != cast<Byte>(32) and b != cast<Byte>(9) {
+			return _substring(&s, 0, end);
+		}
+		end = end - 1;
+	}
+	return "";
+}
+
+fn _ascii_lower(s: String) nothrow -> String {
+	val len = s.byte_length();
+	if len == 0 { return s; }
+	var b = io.buffer(len);
+	var i = 0;
+	while i < len {
+		var ch = core.string_byte_at(&s, i);
+		val v = cast<Int>(ch);
+		if v >= 65 and v <= 90 {
+			ch = cast<Byte>(v + 32);
+		}
+		io.buffer_write(&mut b, i, ch);
+		i = i + 1;
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&b), len);
+}

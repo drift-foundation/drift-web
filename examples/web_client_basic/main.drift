@@ -1,0 +1,38 @@
+module main;
+
+import std.core as core;
+import std.console as console;
+import std.format as fmt;
+import web.client as client;
+
+fn main() nothrow -> Int {
+	var cfg = client.new_client_config();
+	client.with_connect_timeout(&mut cfg, 5000);
+	client.with_io_timeout(&mut cfg, 5000);
+
+	// Replace this path with the CA bundle appropriate for your machine.
+	client.with_tls_trust_store(&mut cfg, client.TrustStore::PemFile(path = "/etc/ssl/certs/ca-certificates.crt"));
+
+	var session = client.new_session(move cfg);
+
+	// Simple GET.
+	match client.get(&session, "https://example.com/") {
+		core.Result::Ok(resp) => {
+			console.println("status=" + fmt.format_int(resp.status));
+			match client.response_body_string(&resp) {
+				core.Result::Ok(body) => {
+					console.println(body);
+					return 0;
+				},
+				core.Result::Err(e) => {
+					console.println("body decode failed: " + e.tag);
+					return 2;
+				}
+			}
+		},
+		core.Result::Err(e) => {
+			console.println("request failed: " + e.tag + " " + e.message);
+			return 1;
+		}
+	}
+}

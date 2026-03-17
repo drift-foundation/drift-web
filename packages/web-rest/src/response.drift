@@ -13,11 +13,20 @@ export {
 
 pub struct Response {
 	pub status: Int,
-	pub body: String
+	pub body: String,
+	pub header_keys: Array<String>,
+	pub header_values: Array<String>
 }
 
 pub fn json_response(status: Int, body: String) nothrow -> Response {
-	return Response(status = status, body = body);
+	var hk: Array<String> = [];
+	var hv: Array<String> = [];
+	return Response(status = status, body = body, header_keys = move hk, header_values = move hv);
+}
+
+pub fn with_response_header(resp: &mut Response, key: String, value: String) nothrow -> Void {
+	resp.header_keys.push(key);
+	resp.header_values.push(value);
 }
 
 fn _dup_string(s: &String) nothrow -> String {
@@ -91,5 +100,7 @@ pub fn error_envelope(err: &errors.RestError, event_id: &String) nothrow -> Resp
 	val p5 = "}}";
 	text.sb_append_string(&mut sb, &p5);
 	val body = text.sb_build(&mut sb);
-	return Response(status = err.status, body = body);
+	var hk: Array<String> = [];
+	var hv: Array<String> = [];
+	return Response(status = err.status, body = body, header_keys = move hk, header_values = move hv);
 }

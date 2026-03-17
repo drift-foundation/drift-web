@@ -8,7 +8,6 @@ import std.env as env;
 import std.parse as parse;
 import web.client as client;
 
-// Read test config from environment variables set by run-https-e2e.sh.
 fn _get_port(var_name: String) nothrow -> Int {
 	match env.get(var_name) {
 		Optional::None() => { return -1; },
@@ -30,13 +29,10 @@ fn _get_ca_cert() nothrow -> String {
 
 // --- Scenarios ---
 
-// GET /health over HTTPS with correct CA trust → 200.
-fn scenario_https_get_health(port: Int, ca_path: &String) nothrow -> Int {
-	var cfg = client.new_client_config();
-	client.with_tls_trust_store(&mut cfg, client.TrustStore::PemFile(path = *ca_path));
+// GET /health over HTTPS with correct CA trust.
+fn scenario_https_get(session: &client.Session, port: Int) nothrow -> Int {
 	val url = "https://127.0.0.1:" + fmt.format_int(port) + "/health";
-	var req = client.new_request("GET", url);
-	match client.send(&cfg, move req) {
+	match client.get(session, url) {
 		core.Result::Err(e) => {
 			console.println("HTTPS GET failed: " + e.tag + " " + e.message);
 			return 101;
@@ -55,13 +51,10 @@ fn scenario_https_get_health(port: Int, ca_path: &String) nothrow -> Int {
 	}
 }
 
-// JSON response parsing over HTTPS.
-fn scenario_https_json_parse(port: Int, ca_path: &String) nothrow -> Int {
-	var cfg = client.new_client_config();
-	client.with_tls_trust_store(&mut cfg, client.TrustStore::PemFile(path = *ca_path));
+// JSON parse over HTTPS.
+fn scenario_https_json(session: &client.Session, port: Int) nothrow -> Int {
 	val url = "https://127.0.0.1:" + fmt.format_int(port) + "/health";
-	var req = client.new_request("GET", url);
-	match client.send(&cfg, move req) {
+	match client.get(session, url) {
 		core.Result::Err(_) => { return 201; },
 		core.Result::Ok(resp) => {
 			match client.response_body_json(&resp) {
@@ -72,14 +65,13 @@ fn scenario_https_json_parse(port: Int, ca_path: &String) nothrow -> Int {
 	}
 }
 
-// Hostname verification failure: connect to wrong-host server with server_name=127.0.0.1
-// but cert only has SAN=wrong.example.com.
+// Hostname mismatch.
 fn scenario_hostname_mismatch(wrong_host_port: Int, ca_path: &String) nothrow -> Int {
 	var cfg = client.new_client_config();
 	client.with_tls_trust_store(&mut cfg, client.TrustStore::PemFile(path = *ca_path));
+	var session = client.new_session(move cfg);
 	val url = "https://127.0.0.1:" + fmt.format_int(wrong_host_port) + "/health";
-	var req = client.new_request("GET", url);
-	match client.send(&cfg, move req) {
+	match client.get(&session, url) {
 		core.Result::Ok(_) => { return 301; },
 		core.Result::Err(e) => {
 			if e.tag != client.TAG_TLS_FAILED { return 302; }
@@ -88,14 +80,13 @@ fn scenario_hostname_mismatch(wrong_host_port: Int, ca_path: &String) nothrow ->
 	}
 }
 
-// Wrong CA path: use SystemDefault trust (won't have our test CA) → TLS failure.
+// Wrong trust store.
 fn scenario_wrong_trust(port: Int) nothrow -> Int {
 	var cfg = client.new_client_config();
-	// PemFile with a nonexistent path.
 	client.with_tls_trust_store(&mut cfg, client.TrustStore::PemFile(path = "/nonexistent/ca.crt"));
+	var session = client.new_session(move cfg);
 	val url = "https://127.0.0.1:" + fmt.format_int(port) + "/health";
-	var req = client.new_request("GET", url);
-	match client.send(&cfg, move req) {
+	match client.get(&session, url) {
 		core.Result::Ok(_) => { return 401; },
 		core.Result::Err(e) => {
 			if e.tag != client.TAG_TLS_FAILED { return 402; }
@@ -118,21 +109,24 @@ fn main() nothrow -> Int {
 		return 0;
 	}
 
-	console.println("HTTPS e2e: port=" + fmt.format_int(https_port) + " ca=" + ca_path);
+	// Create session with test CA trust.
+	var cfg = client.new_client_config();
+	client.with_tls_trust_store(&mut cfg, client.TrustStore::PemFile(path = ca_path));
+	var session = client.new_session(move cfg);
 
-	val a = scenario_https_get_health(https_port, &ca_path);
-	if a != 0 { console.println("FAIL: scenario_https_get_health " + fmt.format_int(a)); return a; }
+	val a = scenario_https_get(&session, https_port);
+	if a != 0 { return a; }
 
-	val b = scenario_https_json_parse(https_port, &ca_path);
-	if b != 0 { console.println("FAIL: scenario_https_json_parse " + fmt.format_int(b)); return b; }
+	val b = scenario_https_json(&session, https_port);
+	if b != 0 { return b; }
 
 	if wrong_host_port >= 0 {
 		val c = scenario_hostname_mismatch(wrong_host_port, &ca_path);
-		if c != 0 { console.println("FAIL: scenario_hostname_mismatch " + fmt.format_int(c)); return c; }
+		if c != 0 { return c; }
 	}
 
 	val d = scenario_wrong_trust(https_port);
-	if d != 0 { console.println("FAIL: scenario_wrong_trust " + fmt.format_int(d)); return d; }
+	if d != 0 { return d; }
 
 	console.println("HTTPS e2e: all passed");
 	return 0;
