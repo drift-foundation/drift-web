@@ -4,8 +4,8 @@
     "web-client": {
       "resolved": {
         "net-tls": {
-          "version": "0.3.2",
-          "integrity": "sha256:efdb4c1f64f041dd0647146ba3d63075c8eb506f312c965b5b06bb366a1b3781",
+          "version": "0.3.4",
+          "integrity": "sha256:c5c9b07ca31ed9720ad2646c67863a5aaf29a259eae5f2bae313bd26706ef954",
           "dep_type": "direct"
         }
       }
@@ -13,8 +13,8 @@
     "web-rest": {
       "resolved": {
         "web-jwt": {
-          "version": "0.2.0",
-          "integrity": "sha256:b90bab6d841cde1e6c5041f76c22bb253e794beb29793e19a8cc9c98448468bf",
+          "version": "0.2.1",
+          "integrity": "sha256:466d85fcd8eaea5db668e2e05554a83148384443b2c475bf8e7e1d5d08d6ac1c",
           "dep_type": "direct"
         }
       }
