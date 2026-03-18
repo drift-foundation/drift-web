@@ -166,3 +166,7 @@
   - `net-tls@0.3.2` is the pinned external TLS dependency for `web-client`
   - recommended minimum downstream Drift toolchain is now `0.27.71` / runtime ABI `6`
   - `net-tls` consumption uses compressed signed package artifacts (`.zdmp` + `.sig`) under the standard package-root flow
+- Bumped published `drift-web` package versions to `0.2.1`:
+  - `web-jwt@0.2.1`
+  - `web-rest@0.2.1`
+  - `web-client@0.2.1`

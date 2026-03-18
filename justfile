@@ -1,3 +1,6 @@
+# Dependency pins (source of truth: drift-package.json).
+net_tls_dep := "net-tls@0.3.4"
+
 # Full test suite.
 test:
     @just jwt-check-par
@@ -148,7 +151,7 @@ client-check-par:
       --src-root packages/web-client/src \
       --test-root packages/web-client/tests/unit \
       --package-root ~/opt/drift/libs \
-      --dep net-tls@0.3.2 \
+      --dep {{net_tls_dep}} \
       --link-search "$HOME/src/drift-net-tls/build/lib" \
       --target-word-bits 64
 
@@ -158,7 +161,7 @@ client-check-unit FILE:
       --src-root packages/web-client/src \
       --test-file "{{FILE}}" \
       --package-root ~/opt/drift/libs \
-      --dep net-tls@0.3.2 \
+      --dep {{net_tls_dep}} \
       --link-search "$HOME/src/drift-net-tls/build/lib" \
       --target-word-bits 64
 
@@ -170,7 +173,7 @@ client-e2e-par:
       --src-root packages/web-client/src \
       --test-root packages/web-client/tests/e2e \
       --package-root ~/opt/drift/libs \
-      --dep net-tls@0.3.2 \
+      --dep {{net_tls_dep}} \
       --link-search "$HOME/src/drift-net-tls/build/lib" \
       --target-word-bits 64
 
@@ -182,7 +185,7 @@ client-e2e-unit FILE:
       --src-root packages/web-client/src \
       --test-file "{{FILE}}" \
       --package-root ~/opt/drift/libs \
-      --dep net-tls@0.3.2 \
+      --dep {{net_tls_dep}} \
       --link-search "$HOME/src/drift-net-tls/build/lib" \
       --target-word-bits 64
 
@@ -196,7 +199,7 @@ client-https-e2e:
 	# Compile test binary.
 	"${DRIFTC}" --target-word-bits 64 \
 	  --package-root ~/opt/drift/libs \
-	  --dep net-tls@0.3.2 \
+	  --dep {{net_tls_dep}} \
 	  --link-search "$HOME/src/drift-net-tls/build/lib" \
 	  --entry "web.client.tests.e2e.https_e2e_test::main" \
 	  packages/web-jwt/src/*.drift packages/web-rest/src/*.drift packages/web-client/src/*.drift \
@@ -211,7 +214,7 @@ client-compile-check FILE="packages/web-client/src/lib.drift":
     @tools/drift_test_parallel_runner.sh compile \
       --src-root packages/web-client/src \
       --package-root ~/opt/drift/libs \
-      --dep net-tls@0.3.2 \
+      --dep {{net_tls_dep}} \
       --link-search "$HOME/src/drift-net-tls/build/lib" \
       --file "{{FILE}}" \
       --target-word-bits 64

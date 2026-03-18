@@ -7,9 +7,9 @@ HTTP/HTTPS client, and HS256 JWT authentication.
 
 | Package | Version | Module | Description |
 |---|---|---|---|
-| `web-jwt` | 0.2.0 | `web.jwt` | HS256 JWT sign/verify with temporal claims validation |
-| `web-rest` | 0.2.0 | `web.rest` | HTTP/1.1 REST server with routing, guards, and JSON body handling |
-| `web-client` | 0.2.0 | `web.client` | HTTP/1.1 and HTTPS client for outbound requests |
+| `web-jwt` | 0.2.1 | `web.jwt` | HS256 JWT sign/verify with temporal claims validation |
+| `web-rest` | 0.2.1 | `web.rest` | HTTP/1.1 REST server with routing, guards, and JSON body handling |
+| `web-client` | 0.2.1 | `web.client` | HTTP/1.1 and HTTPS client for outbound requests |
 
 `web-rest` depends on `web-jwt` (resolved automatically). `web-client`
 is independent and provides outbound HTTP/HTTPS via `net-tls`.
@@ -26,15 +26,15 @@ is independent and provides outbound HTTP/HTTPS via `net-tls`.
 ```
 <library-root>/
   web-jwt/
-    0.2.0/
+    0.2.1/
       web-jwt.zdmp
       web-jwt.sig
   web-rest/
-    0.2.0/
+    0.2.1/
       web-rest.zdmp
       web-rest.sig
   web-client/
-    0.2.0/
+    0.2.1/
       web-client.zdmp
       web-client.sig
 ```
@@ -77,8 +77,8 @@ export DRIFT_TRUST_STORE="$HOME/.config/drift/trust.json"
 ```bash
 driftc --target-word-bits 64 \
     --package-root ~/opt/drift/libs \
-    --dep web-rest@0.2.0 \
-    --dep web-jwt@0.2.0 \
+    --dep web-rest@0.2.1 \
+    --dep web-jwt@0.2.1 \
     --entry main::main \
     -o my_server \
     my_server.drift
@@ -89,7 +89,7 @@ driftc --target-word-bits 64 \
 ```bash
 driftc --target-word-bits 64 \
     --package-root ~/opt/drift/libs \
-    --dep web-client@0.2.0 \
+    --dep web-client@0.2.1 \
     --entry main::main \
     -o my_client \
     my_client.drift
