@@ -1,7 +1,7 @@
 # drift-web
 
-Server-side web framework for Drift. Published as signed packages for
-downstream consumption via `driftc --package-root`.
+Web framework and HTTP client for Drift. Published as signed packages
+for downstream consumption via `driftc --package-root`.
 
 ## Packages
 
@@ -15,13 +15,13 @@ downstream consumption via `driftc --package-root`.
 
 ## Quick start
 
-See [docs/integration.md](docs/integration.md) for full consumer setup,
-trust store configuration, and compilation instructions.
+See [docs/integration-guide.md](docs/integration-guide.md) for full
+consumer setup, trust store configuration, and compilation instructions.
 
 ## Documentation
 
-- [Integration guide](docs/integration.md) — package consumption, trust
-  setup, compilation
+- [Integration guide](docs/integration-guide.md) — package consumption,
+  trust setup, compilation
 - [Effective web-jwt](docs/effective-web-jwt.md) — JWT API reference and
   usage patterns
 - [Effective web-rest](docs/effective-web-rest.md) — REST server API,
@@ -36,11 +36,11 @@ export DRIFTC=/path/to/driftc
 export DRIFT_SIGN_KEY_FILE=/path/to/signing-key.seed
 
 just test                    # full test suite
-just deploy -- --dest=~/opt/drift/libs   # build, sign, smoke, publish
+just deploy                  # build, sign, smoke, publish
 ```
 
-Requirements: `just`, `bash`, `driftc` 0.27.59+, `DRIFT_SIGN_KEY_FILE`
-for deploy.
+Requirements: `just`, `bash`, `driftc` (ABI 6+),
+`DRIFT_SIGN_KEY_FILE` for deploy.
 
 ## Repository layout
 
@@ -52,6 +52,6 @@ packages/
 examples/         # Small consumer examples
 docs/             # Usage guides and design docs
 tools/            # Test runners
-drift-package.json
+drift-manifest.json
 drift/trust.json  # Project-local trust store
 ```

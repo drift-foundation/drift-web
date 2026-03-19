@@ -2,14 +2,15 @@
   "schema_version": 1,
   "project": {
     "name": "drift-web",
-    "license": "MIT"
+    "license": "MIT",
+    "author_profile": "the-drift-foundation.author-profile"
   },
   "artifacts": [
     {
       "kind": "package",
       "name": "web-jwt",
       "module_namespace": "web.jwt",
-      "version": "0.2.1",
+      "version": "0.2.4",
       "description": "HS256 JWT sign/verify with temporal claims validation",
       "entry_module": "packages/web-jwt/src/lib.drift",
       "modules": [
@@ -21,7 +22,7 @@
         "packages/web-jwt/src/errors.drift"
       ],
       "assets": [
-        "docs/integration.md",
+        "docs/integration-guide.md",
         "docs/effective-web-jwt.md",
         "README.md"
       ]
@@ -30,7 +31,7 @@
       "kind": "package",
       "name": "web-rest",
       "module_namespace": "web.rest",
-      "version": "0.2.1",
+      "version": "0.2.4",
       "description": "HTTP/1.1 REST server with routing, guards, and JSON body handling",
       "entry_module": "packages/web-rest/src/lib.drift",
       "modules": [
@@ -50,10 +51,10 @@
         "packages/web-rest/src/validators.drift"
       ],
       "package_deps": [
-        {"name": "web-jwt", "version": "0.2.1"}
+        {"name": "web-jwt", "version": "0.2.4"}
       ],
       "assets": [
-        "docs/integration.md",
+        "docs/integration-guide.md",
         "docs/effective-web-rest.md",
         "docs/effective-web-jwt.md",
         "README.md"
@@ -63,7 +64,7 @@
       "kind": "package",
       "name": "web-client",
       "module_namespace": "web.client",
-      "version": "0.2.1",
+      "version": "0.2.4",
       "description": "HTTP/1.1 and HTTPS client for outbound requests",
       "entry_module": "packages/web-client/src/lib.drift",
       "modules": [
@@ -78,10 +79,10 @@
         "packages/web-client/src/cookie.drift"
       ],
       "package_deps": [
-        {"name": "net-tls", "version": "0.3.4"}
+        {"name": "net-tls", "version": "0.3.8"}
       ],
       "assets": [
-        "docs/integration.md",
+        "docs/integration-guide.md",
         "README.md"
       ]
     }

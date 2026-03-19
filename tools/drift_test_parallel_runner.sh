@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-	echo "usage: $0 <run-all|run-one|compile|compile-one> [--src-root DIR] [--test-root DIR] [--test-file FILE] [--file FILE] [--target-word-bits N] [--jobs N]" >&2
+	echo "usage: $0 <run-all|run-one|compile|compile-one> [--manifest FILE --artifact NAME] [--src-root DIR] [--test-root DIR] [--test-file FILE] [--file FILE] [--target-word-bits N] [--jobs N]" >&2
 	exit 2
 }
 
@@ -10,10 +10,11 @@ MODE="${1:-}"
 [[ -n "${MODE}" ]] || usage
 shift || true
 
+MANIFEST=""
+ARTIFACT=""
 SRC_ROOTS=()
-SRC_ROOTS+=("packages/mariadb-wire-proto/src")
 SRC_ROOTS_OVERRIDDEN=0
-TEST_ROOT="packages/mariadb-wire-proto/tests/unit"
+TEST_ROOT=""
 TEST_FILE=""
 CHECK_FILE=""
 TARGET_WORD_BITS="64"
@@ -28,6 +29,14 @@ JOBS="${DRIFT_BUILD_JOBS:-${DEFAULT_JOBS}}"
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
+		--manifest)
+			MANIFEST="${2:-}"
+			shift 2
+			;;
+		--artifact)
+			ARTIFACT="${2:-}"
+			shift 2
+			;;
 		--src-root)
 			if [[ "${SRC_ROOTS_OVERRIDDEN}" == "0" ]]; then
 				SRC_ROOTS=()
@@ -78,6 +87,77 @@ while [[ $# -gt 0 ]]; do
 			;;
 	esac
 done
+
+resolve_manifest() {
+	[[ -f "${MANIFEST}" ]] || { echo "error: manifest not found: ${MANIFEST}" >&2; exit 2; }
+	[[ -n "${ARTIFACT}" ]] || { echo "error: --artifact is required with --manifest" >&2; exit 2; }
+	local manifest_dir
+	manifest_dir="$(cd "$(dirname "${MANIFEST}")" && pwd)"
+	local py="${DRIFT_PYTHON:-python3}"
+	local output
+	output="$("${py}" -c '
+import json, os, sys
+
+manifest_path, artifact_name = sys.argv[1], sys.argv[2]
+manifest_dir = os.path.dirname(os.path.abspath(manifest_path))
+
+with open(manifest_path) as f:
+    manifest = json.load(f)
+
+arts = {a["name"]: a for a in manifest.get("artifacts", [])}
+target = arts.get(artifact_name)
+if not target:
+    print(f"error: artifact {artifact_name!r} not found in manifest", file=sys.stderr)
+    sys.exit(2)
+
+# Collect src dirs from this artifact and any co-artifact deps.
+src_dirs = set()
+for mod in target.get("modules", []):
+    src_dirs.add(os.path.dirname(mod))
+
+deps = []
+for dep in target.get("package_deps", []):
+    name, ver = dep["name"], dep["version"]
+    co = arts.get(name)
+    if co:
+        # Co-artifact: include its src roots, no external --dep needed.
+        for mod in co.get("modules", []):
+            src_dirs.add(os.path.dirname(mod))
+    else:
+        deps.append(f"{name}@{ver}")
+
+for d in sorted(src_dirs):
+    print(f"SRC:{d}")
+for dep in deps:
+    print(f"DEP:{dep}")
+' "${MANIFEST}" "${ARTIFACT}")" || exit $?
+
+	local line
+	while IFS= read -r line; do
+		case "${line}" in
+			SRC:*)
+				if [[ "${SRC_ROOTS_OVERRIDDEN}" == "0" ]]; then
+					SRC_ROOTS=()
+					SRC_ROOTS_OVERRIDDEN=1
+				fi
+				SRC_ROOTS+=("${line#SRC:}")
+				;;
+			DEP:*)
+				DEP_PINS+=("${line#DEP:}")
+				;;
+		esac
+	done <<< "${output}"
+
+	# Use DRIFT_PACKAGE_ROOT if no explicit --package-root and we have deps.
+	if [[ "${#PACKAGE_ROOTS[@]}" -eq 0 && "${#DEP_PINS[@]}" -gt 0 && -n "${DRIFT_PACKAGE_ROOT:-}" ]]; then
+		PACKAGE_ROOTS+=("${DRIFT_PACKAGE_ROOT}")
+	fi
+}
+
+# Resolve manifest if provided (before any src/dep usage).
+if [[ -n "${MANIFEST}" ]]; then
+	resolve_manifest
+fi
 
 require_driftc() {
 	: "${DRIFTC:?set DRIFTC to your driftc path}"
