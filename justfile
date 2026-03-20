@@ -3,6 +3,8 @@ test:
     @just jwt-check-par
     @just jwt-e2e-par
     @just rest-check-par
+    @just client-check-par
+    @just client-e2e-par
 
 # All JWT unit tests (parallel compile, serial run).
 jwt-check-par:
@@ -165,6 +167,16 @@ client-e2e-unit FILE:
       --src-root packages/web-jwt/src \
       --src-root packages/web-rest/src \
       --test-file "{{FILE}}" \
+      --package-root ~/opt/drift/libs \
+      --target-word-bits 64
+
+# Client pool perf benchmark.
+client-perf:
+    @tools/drift_test_parallel_runner.sh run-one \
+      --manifest drift-manifest.json --artifact web-client \
+      --src-root packages/web-jwt/src \
+      --src-root packages/web-rest/src \
+      --test-file packages/web-client/tests/perf/pool_perf_test.drift \
       --package-root ~/opt/drift/libs \
       --target-word-bits 64
 

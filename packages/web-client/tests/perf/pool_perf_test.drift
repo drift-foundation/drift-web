@@ -1,0 +1,124 @@
+module web.client.tests.e2e.pool_perf_test;
+
+import std.core as core;
+import std.concurrent as conc;
+import std.format as fmt;
+import std.console as console;
+import std.time as time;
+import web.rest as rest;
+import web.client as client;
+
+// Pooled (session) vs unpooled (send_once) throughput comparison.
+// Reports ms and computes ratio. Measurement only, not a pass/fail gate.
+//
+// The pooled path benefits from both connection reuse and client-side
+// read coalescing (4096-byte reads often contain the next response,
+// avoiding per-request I/O waits). The ratio reflects both effects.
+//
+// For runtime floor measurements, use perf_smoke_test baseline-vt
+// and probe_test instead.
+
+fn _health_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	return core.Result::Ok(rest.json_response(200, "{\"ok\":true}"));
+}
+
+fn _stop(running: &mut rest.RunningServer) nothrow -> Void {
+	match rest.shutdown(running) {
+		core.Result::Ok(_) => {},
+		core.Result::Err(_) => {}
+	}
+}
+
+fn _bench_pooled(session: &client.Session, port: Int, n: Int) nothrow -> Int {
+	val start = time.now_monotonic();
+	var i = 0;
+	var failures = 0;
+	while i < n {
+		val url = "http://127.0.0.1:" + fmt.format_int(port) + "/health";
+		match client.get(session, url) {
+			core.Result::Err(_) => { failures = failures + 1; },
+			core.Result::Ok(resp) => {
+				if resp.status != 200 { failures = failures + 1; }
+			}
+		}
+		i = i + 1;
+	}
+	val elapsed = time.elapsed_ms(&start);
+	if failures > 0 {
+		console.println("  pooled: " + fmt.format_int(failures) + " failures in " + fmt.format_int(n) + " requests");
+	}
+	return elapsed;
+}
+
+fn _bench_unpooled(cfg: &client.ClientConfig, port: Int, n: Int) nothrow -> Int {
+	val start = time.now_monotonic();
+	var i = 0;
+	var failures = 0;
+	while i < n {
+		val url = "http://127.0.0.1:" + fmt.format_int(port) + "/health";
+		var req = client.new_request("GET", url);
+		match client.send_once(cfg, move req) {
+			core.Result::Err(_) => { failures = failures + 1; },
+			core.Result::Ok(resp) => {
+				if resp.status != 200 { failures = failures + 1; }
+			}
+		}
+		i = i + 1;
+	}
+	val elapsed = time.elapsed_ms(&start);
+	if failures > 0 {
+		console.println("  unpooled: " + fmt.format_int(failures) + " failures in " + fmt.format_int(n) + " requests");
+	}
+	return elapsed;
+}
+
+fn main() nothrow -> Int {
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest.add_route(&mut app, "GET", "/health", _health_handler) {
+				core.Result::Err(_) => { return 2; },
+				core.Result::Ok(_) => {}
+			}
+			match rest.start(move app, conc.Duration(millis = 5000)) {
+				core.Result::Err(_) => { return 3; },
+				core.Result::Ok(srv) => {
+					var running = move srv;
+					val port = rest.server_port(&running);
+
+					val n = 1000;
+
+					// Pooled (web.client session) — warm up first request on same session.
+					var cfg_pooled = client.new_client_config();
+					var session = client.new_session(move cfg_pooled);
+					val warmup_url = "http://127.0.0.1:" + fmt.format_int(port) + "/health";
+					match client.get(&session, warmup_url) {
+						core.Result::Ok(_) => {},
+						core.Result::Err(_) => {}
+					}
+					val pooled_ms = _bench_pooled(&session, port, n);
+
+					// Unpooled (web.client send_once — Connection: close).
+					var cfg_unpooled = client.new_client_config();
+					val unpooled_ms = _bench_unpooled(&cfg_unpooled, port, n);
+
+					// Report.
+					console.println("pool_perf_test: " + fmt.format_int(n) + " requests");
+					console.println("  pooled:   " + fmt.format_int(pooled_ms) + " ms");
+					console.println("  unpooled: " + fmt.format_int(unpooled_ms) + " ms");
+					if pooled_ms > 0 {
+						console.println("  ratio:    " + fmt.format_int(unpooled_ms / pooled_ms) + "x");
+					}
+
+					_stop(&mut running);
+					return 0;
+				}
+			}
+			return 4;
+		}
+	}
+	return 5;
+}
