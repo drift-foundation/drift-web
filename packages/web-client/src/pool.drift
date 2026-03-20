@@ -1,0 +1,109 @@
+module web.client.pool;
+
+import std.core as core;
+import std.net as net;
+import std.format as fmt;
+import std.mem as mem;
+import std.concurrent as conc;
+import net_tls.stream as tls_stream;
+
+export {
+	TcpPoolEntry,
+	TlsPoolEntry,
+	TcpPool,
+	TlsPool,
+	new_tcp_pool,
+	new_tls_pool,
+	pool_key,
+	take_tcp,
+	take_tls,
+	put_tcp,
+	put_tls
+};
+
+pub struct TcpPoolEntry {
+	pub stream: net.TcpStream,
+	pub read_buf: Array<Byte>
+}
+
+pub struct TlsPoolEntry {
+	pub stream: tls_stream.TlsStream,
+	pub read_buf: Array<Byte>
+}
+
+// Separate pool types to avoid triggering codegen issues with
+// mixed Optional<TcpStream>/Optional<TlsStream> in the same struct.
+
+pub struct TcpPool {
+	pub key: String,
+	pub entries: Array<TcpPoolEntry>
+}
+
+pub struct TlsPool {
+	pub key: String,
+	pub entries: Array<TlsPoolEntry>
+}
+
+pub fn new_tcp_pool() nothrow -> TcpPool {
+	var e: Array<TcpPoolEntry> = [];
+	return TcpPool(key = "", entries = move e);
+}
+
+pub fn new_tls_pool() nothrow -> TlsPool {
+	var e: Array<TlsPoolEntry> = [];
+	return TlsPool(key = "", entries = move e);
+}
+
+pub fn pool_key(scheme: &String, host: &String, port: Int) nothrow -> String {
+	return *scheme + "://" + *host + ":" + fmt.format_int(port);
+}
+
+// Take TCP entry if key matches. Returns true + puts entry into out_entry array.
+// Returns false if no match.
+pub fn take_tcp(p: &mut TcpPool, key: &String) nothrow -> Bool {
+	if p.entries.len > 0 {
+		if p.key == *key {
+			// Entry is here — caller will swap the entries array.
+			return true;
+		}
+	}
+	return false;
+}
+
+// Swap out the TCP entries array (take ownership).
+pub fn swap_tcp_entries(p: &mut TcpPool) nothrow -> Array<TcpPoolEntry> {
+	var empty: Array<TcpPoolEntry> = [];
+	val old = mem.replace(&mut p.entries, move empty);
+	p.key = "";
+	return move old;
+}
+
+pub fn put_tcp(p: &mut TcpPool, key: String, entry: TcpPoolEntry) nothrow -> Void {
+	var new_arr: Array<TcpPoolEntry> = [];
+	new_arr.push(move entry);
+	val old = mem.replace(&mut p.entries, move new_arr);
+	p.key = move key;
+}
+
+pub fn take_tls(p: &mut TlsPool, key: &String) nothrow -> Bool {
+	if p.entries.len > 0 {
+		if p.key == *key {
+			return true;
+		}
+	}
+	return false;
+}
+
+pub fn swap_tls_entries(p: &mut TlsPool) nothrow -> Array<TlsPoolEntry> {
+	var empty: Array<TlsPoolEntry> = [];
+	val old = mem.replace(&mut p.entries, move empty);
+	p.key = "";
+	return move old;
+}
+
+pub fn put_tls(p: &mut TlsPool, key: String, entry: TlsPoolEntry) nothrow -> Void {
+	var new_arr: Array<TlsPoolEntry> = [];
+	new_arr.push(move entry);
+	val old = mem.replace(&mut p.entries, move new_arr);
+	p.key = move key;
+}

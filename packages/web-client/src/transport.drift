@@ -17,13 +17,18 @@ import web.client.http as http;
 
 export {
 	ClientConfig,
+	PooledSendResult,
 	new_client_config,
 	with_connect_timeout,
 	with_tls_handshake_timeout,
 	with_io_timeout,
 	with_max_response_body,
 	with_tls_trust_store,
-	send
+	send,
+	connect_tcp,
+	connect_tls,
+	send_on_tcp,
+	send_on_tls
 };
 
 pub struct ClientConfig {
@@ -579,4 +584,386 @@ fn _extract_bytes(src: &Array<Byte>, start: Int, end: Int) nothrow -> Array<Byte
 	var i = start;
 	while i < end { out.push(src[i]); i = i + 1; }
 	return move out;
+}
+
+// --- Pooled connection support ---
+
+pub struct PooledSendResult {
+	pub response: resp.ClientResponse,
+	pub reusable: Bool,
+	pub remainder: Array<Byte>
+}
+
+pub fn connect_tcp(cfg: &ClientConfig, parsed: &url.ParsedUrl) nothrow -> core.Result<net.TcpStream, errors.ClientError> {
+	val connect_timeout = conc.Duration(millis = cfg.connect_timeout_ms);
+	var addr = net.socket_addr(parsed.host, parsed.port);
+	match net.connect(&addr, connect_timeout) {
+		core.Result::Err(_) => {
+			return core.Result::Err(errors.client_error(errors.TAG_CONNECT_FAILED, "TCP connect failed"));
+		},
+		core.Result::Ok(s) => {
+			return core.Result::Ok(move s);
+		}
+	}
+	return core.Result::Err(errors.client_error(errors.TAG_CONNECT_FAILED, "unreachable"));
+}
+
+pub fn connect_tls(cfg: &ClientConfig, parsed: &url.ParsedUrl, tcp: net.TcpStream) nothrow -> core.Result<tls_stream.TlsStream, errors.ClientError> {
+	var tls_builder = tls_config.new_client_config_builder();
+	tls_builder.with_server_name(parsed.host);
+	tls_builder.with_trust_store(cfg.tls_trust_store);
+	tls_builder.with_handshake_timeout_ms(cfg.tls_handshake_timeout_ms);
+	tls_builder.with_io_timeout_ms(cfg.io_timeout_ms);
+
+	match tls_config.build_client_config(move tls_builder) {
+		core.Result::Err(e) => {
+			var dead = move tcp;
+			val _ = dead.close(conc.Duration(millis = 1000));
+			return core.Result::Err(errors.client_error(errors.TAG_TLS_FAILED, "TLS config error: " + e.message));
+		},
+		core.Result::Ok(tls_cfg) => {
+			match tls_handshake.connect_tls(move tcp, &tls_cfg) {
+				core.Result::Err(e) => {
+					return core.Result::Err(errors.client_error(errors.TAG_TLS_FAILED, "TLS handshake failed: " + e.message));
+				},
+				core.Result::Ok(tls) => {
+					return core.Result::Ok(move tls);
+				}
+			}
+			return core.Result::Err(errors.client_error(errors.TAG_TLS_FAILED, "unreachable"));
+		}
+	}
+	return core.Result::Err(errors.client_error(errors.TAG_TLS_FAILED, "unreachable"));
+}
+
+pub fn send_on_tcp(stream: &net.TcpStream, initial_bytes: Array<Byte>, cfg: &ClientConfig, parsed: &url.ParsedUrl, req: &request.ClientRequest) nothrow -> core.Result<PooledSendResult, errors.ClientError> {
+	val io_timeout = conc.Duration(millis = cfg.io_timeout_ms);
+	val wire = http.serialize_request(parsed, req);
+
+	// Write request.
+	match _write_all_tcp(stream, &wire, io_timeout) {
+		core.Result::Err(e) => {
+			return core.Result::Err(move e);
+		},
+		core.Result::Ok(_) => {}
+	}
+
+	// Read response with pooled remainder tracking.
+	return _read_pooled_response_tcp(stream, move initial_bytes, io_timeout, cfg.max_response_body_bytes);
+}
+
+pub fn send_on_tls(tls: &mut tls_stream.TlsStream, initial_bytes: Array<Byte>, cfg: &ClientConfig, parsed: &url.ParsedUrl, req: &request.ClientRequest) nothrow -> core.Result<PooledSendResult, errors.ClientError> {
+	val wire = http.serialize_request(parsed, req);
+
+	// Write request.
+	match _write_all_tls(tls, &wire) {
+		core.Result::Err(e) => {
+			return core.Result::Err(move e);
+		},
+		core.Result::Ok(_) => {}
+	}
+
+	// Read response with pooled remainder tracking.
+	return _read_pooled_response_tls(tls, move initial_bytes, cfg.max_response_body_bytes);
+}
+
+// --- Pooled TCP response reader ---
+
+fn _read_pooled_response_tcp(stream: &net.TcpStream, initial_bytes: Array<Byte>, timeout: conc.Duration, max_body: Int) nothrow -> core.Result<PooledSendResult, errors.ClientError> {
+	// Start with any leftover bytes from previous response.
+	var collected = move initial_bytes;
+
+	// Read until we have complete headers.
+	var header_done = false;
+	if http.find_header_end_bytes(&collected) >= 0 {
+		header_done = true;
+	}
+	while not header_done {
+		if collected.len > 65536 {
+			return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "response headers too large"));
+		}
+		var buf = io.buffer(4096);
+		match stream.read(&mut buf, timeout) {
+			core.Result::Err(_) => {
+				return core.Result::Err(errors.client_error(errors.TAG_READ_FAILED, "failed to read response"));
+			},
+			core.Result::Ok(n) => {
+				if n == 0 {
+					if collected.len == 0 {
+						return core.Result::Err(errors.client_error(errors.TAG_READ_FAILED, "no data received"));
+					}
+					header_done = true;
+				} else {
+					var j = 0;
+					while j < n {
+						collected.push(io.buffer_read(&mut buf, j));
+						j = j + 1;
+					}
+					if http.find_header_end_bytes(&collected) >= 0 {
+						header_done = true;
+					}
+				}
+			}
+		}
+	}
+
+	// Parse headers.
+	var status = 0;
+	var hdr_keys = _empty_strings();
+	var hdr_values = _empty_strings();
+	var body_start = 0;
+	var content_length = -1;
+	var chunked = false;
+	var conn_close = false;
+	match http.parse_response_headers(&collected) {
+		core.Result::Ok(p) => {
+			status = p.status;
+			body_start = p.body_start;
+			content_length = p.content_length;
+			chunked = p.chunked;
+			conn_close = p.conn_close;
+			var mut_p = move p;
+			hdr_keys = mem.replace(&mut mut_p.header_keys, _empty_strings());
+			hdr_values = mem.replace(&mut mut_p.header_values, _empty_strings());
+		},
+		core.Result::Err(e) => {
+			return core.Result::Err(move e);
+		}
+	}
+
+	// Chunked or read-until-close: not reusable.
+	if chunked == true {
+		return _read_chunked_tcp_pooled(&collected, body_start, stream, timeout, max_body, status, move hdr_keys, move hdr_values);
+	}
+
+	if content_length >= 0 {
+		if content_length > max_body {
+			return core.Result::Err(errors.client_error(errors.TAG_BODY_TOO_LARGE, "response body exceeds size limit"));
+		}
+		val body_have = collected.len - body_start;
+		var body_need = content_length - body_have;
+		while body_need > 0 {
+			var buf = io.buffer(4096);
+			match stream.read(&mut buf, timeout) {
+				core.Result::Err(_) => {
+					return core.Result::Err(errors.client_error(errors.TAG_READ_FAILED, "incomplete response body"));
+				},
+				core.Result::Ok(n) => {
+					if n == 0 {
+						return core.Result::Err(errors.client_error(errors.TAG_READ_FAILED, "connection closed before full body"));
+					}
+					var j = 0;
+					while j < n {
+						collected.push(io.buffer_read(&mut buf, j));
+						j = j + 1;
+					}
+					body_need = body_need - n;
+				}
+			}
+		}
+		val body_end = body_start + content_length;
+		var body = _extract_bytes(&collected, body_start, body_end);
+		// Extract remainder bytes for caller.
+		var remainder = _extract_bytes(&collected, body_end, collected.len);
+		var reusable = true;
+		if conn_close == true {
+			reusable = false;
+		}
+		val response = resp.ClientResponse(
+			status = status, header_keys = move hdr_keys, header_values = move hdr_values, body = move body
+		);
+		return core.Result::Ok(PooledSendResult(response = move response, reusable = reusable, remainder = move remainder));
+	}
+
+	// Read until close — not reusable.
+	var reading = true;
+	while reading {
+		if collected.len - body_start > max_body {
+			return core.Result::Err(errors.client_error(errors.TAG_BODY_TOO_LARGE, "response body exceeds size limit"));
+		}
+		var buf = io.buffer(4096);
+		match stream.read(&mut buf, timeout) {
+			core.Result::Err(_) => {
+				return core.Result::Err(errors.client_error(errors.TAG_READ_FAILED, "read error during close-delimited body"));
+			},
+			core.Result::Ok(n) => {
+				if n == 0 { reading = false; } else {
+					var j = 0;
+					while j < n {
+						collected.push(io.buffer_read(&mut buf, j));
+						j = j + 1;
+					}
+				}
+			}
+		}
+	}
+	var body = _extract_bytes(&collected, body_start, collected.len);
+	val response = resp.ClientResponse(
+		status = status, header_keys = move hdr_keys, header_values = move hdr_values, body = move body
+	);
+	return core.Result::Ok(PooledSendResult(response = move response, reusable = false, remainder = _empty_bytes()));
+}
+
+// --- Pooled TLS response reader ---
+
+fn _read_pooled_response_tls(tls: &mut tls_stream.TlsStream, initial_bytes: Array<Byte>, max_body: Int) nothrow -> core.Result<PooledSendResult, errors.ClientError> {
+	// Start with any leftover bytes from previous response.
+	var collected = move initial_bytes;
+
+	// Read until we have complete headers.
+	var header_done = false;
+	if http.find_header_end_bytes(&collected) >= 0 {
+		header_done = true;
+	}
+	while not header_done {
+		if collected.len > 65536 {
+			return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "response headers too large"));
+		}
+		var tls_read_buf: Array<Byte> = [];
+		match tls_stream.tls_read(tls, &mut tls_read_buf, 4096) {
+			core.Result::Err(e) => {
+				if e.tag == tls_errors.TAG_STREAM_CLOSED {
+					if collected.len == 0 {
+						return core.Result::Err(errors.client_error(errors.TAG_READ_FAILED, "no data received"));
+					}
+					header_done = true;
+				} else {
+					return core.Result::Err(errors.client_error(errors.TAG_READ_FAILED, "TLS read failed: " + e.message));
+				}
+			},
+			core.Result::Ok(n) => {
+				if n == 0 {
+					if collected.len == 0 {
+						return core.Result::Err(errors.client_error(errors.TAG_READ_FAILED, "no data received"));
+					}
+					header_done = true;
+				} else {
+					var j = 0;
+					while j < n {
+						collected.push(tls_read_buf[j]);
+						j = j + 1;
+					}
+					if http.find_header_end_bytes(&collected) >= 0 {
+						header_done = true;
+					}
+				}
+			}
+		}
+	}
+
+	// Parse headers.
+	var status = 0;
+	var hdr_keys = _empty_strings();
+	var hdr_values = _empty_strings();
+	var body_start = 0;
+	var content_length = -1;
+	var chunked = false;
+	var conn_close = false;
+	match http.parse_response_headers(&collected) {
+		core.Result::Ok(p) => {
+			status = p.status;
+			body_start = p.body_start;
+			content_length = p.content_length;
+			chunked = p.chunked;
+			conn_close = p.conn_close;
+			var mut_p = move p;
+			hdr_keys = mem.replace(&mut mut_p.header_keys, _empty_strings());
+			hdr_values = mem.replace(&mut mut_p.header_values, _empty_strings());
+		},
+		core.Result::Err(e) => {
+			return core.Result::Err(move e);
+		}
+	}
+
+	if chunked == true {
+		return _read_chunked_tls_pooled(&collected, body_start, tls, max_body, status, move hdr_keys, move hdr_values);
+	}
+
+	if content_length >= 0 {
+		if content_length > max_body {
+			return core.Result::Err(errors.client_error(errors.TAG_BODY_TOO_LARGE, "response body exceeds size limit"));
+		}
+		val body_have = collected.len - body_start;
+		var body_need = content_length - body_have;
+		while body_need > 0 {
+			var tls_read_buf: Array<Byte> = [];
+			match tls_stream.tls_read(tls, &mut tls_read_buf, 4096) {
+				core.Result::Err(_) => {
+					return core.Result::Err(errors.client_error(errors.TAG_READ_FAILED, "incomplete response body over TLS"));
+				},
+				core.Result::Ok(n) => {
+					if n == 0 {
+						return core.Result::Err(errors.client_error(errors.TAG_READ_FAILED, "TLS stream closed before full body"));
+					}
+					var j = 0;
+					while j < n { collected.push(tls_read_buf[j]); j = j + 1; }
+					body_need = body_need - n;
+				}
+			}
+		}
+		val body_end = body_start + content_length;
+		var body = _extract_bytes(&collected, body_start, body_end);
+		var remainder = _extract_bytes(&collected, body_end, collected.len);
+		var reusable = true;
+		if conn_close == true {
+			reusable = false;
+		}
+		val response = resp.ClientResponse(
+			status = status, header_keys = move hdr_keys, header_values = move hdr_values, body = move body
+		);
+		return core.Result::Ok(PooledSendResult(response = move response, reusable = reusable, remainder = move remainder));
+	}
+
+	// Read until close — not reusable.
+	var reading = true;
+	while reading {
+		if collected.len - body_start > max_body {
+			return core.Result::Err(errors.client_error(errors.TAG_BODY_TOO_LARGE, "response body exceeds size limit"));
+		}
+		var tls_read_buf: Array<Byte> = [];
+		match tls_stream.tls_read(tls, &mut tls_read_buf, 4096) {
+			core.Result::Err(e) => {
+				if e.tag == tls_errors.TAG_STREAM_CLOSED {
+					reading = false;
+				} else {
+					return core.Result::Err(errors.client_error(errors.TAG_READ_FAILED, "TLS read error during close-delimited body"));
+				}
+			},
+			core.Result::Ok(n) => {
+				if n == 0 { reading = false; } else {
+					var j = 0;
+					while j < n { collected.push(tls_read_buf[j]); j = j + 1; }
+				}
+			}
+		}
+	}
+	var body = _extract_bytes(&collected, body_start, collected.len);
+	val response = resp.ClientResponse(
+		status = status, header_keys = move hdr_keys, header_values = move hdr_values, body = move body
+	);
+	return core.Result::Ok(PooledSendResult(response = move response, reusable = false, remainder = _empty_bytes()));
+}
+
+fn _read_chunked_tcp_pooled(initial: &Array<Byte>, body_start: Int, stream: &net.TcpStream, timeout: conc.Duration, max_body: Int, status: Int, hdr_keys: Array<String>, hdr_values: Array<String>) nothrow -> core.Result<PooledSendResult, errors.ClientError> {
+	match _read_chunked_tcp(initial, body_start, stream, timeout, max_body, status, move hdr_keys, move hdr_values) {
+		core.Result::Ok(response) => {
+			return core.Result::Ok(PooledSendResult(response = move response, reusable = false, remainder = _empty_bytes()));
+		},
+		core.Result::Err(e) => {
+			return core.Result::Err(move e);
+		}
+	}
+	return core.Result::Err(errors.client_error(errors.TAG_READ_FAILED, "unreachable"));
+}
+
+fn _read_chunked_tls_pooled(initial: &Array<Byte>, body_start: Int, tls: &mut tls_stream.TlsStream, max_body: Int, status: Int, hdr_keys: Array<String>, hdr_values: Array<String>) nothrow -> core.Result<PooledSendResult, errors.ClientError> {
+	match _read_chunked_tls(initial, body_start, tls, max_body, status, move hdr_keys, move hdr_values) {
+		core.Result::Ok(response) => {
+			return core.Result::Ok(PooledSendResult(response = move response, reusable = false, remainder = _empty_bytes()));
+		},
+		core.Result::Err(e) => {
+			return core.Result::Err(move e);
+		}
+	}
+	return core.Result::Err(errors.client_error(errors.TAG_READ_FAILED, "unreachable"));
 }

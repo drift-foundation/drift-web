@@ -235,7 +235,8 @@ pub struct ParsedResponse {
 	pub header_values: Array<String>,
 	pub body_start: Int,
 	pub content_length: Int,
-	pub chunked: Bool
+	pub chunked: Bool,
+	pub conn_close: Bool
 }
 
 pub fn parse_response_headers(raw: &Array<Byte>) nothrow -> core.Result<ParsedResponse, errors.ClientError> {
@@ -272,10 +273,13 @@ pub fn parse_response_headers(raw: &Array<Byte>) nothrow -> core.Result<ParsedRe
 	var hdr_values: Array<String> = [];
 	var content_length = -1;
 	var chunked = false;
+	var conn_close = false;
 	var pos = first_crlf + 2;
 	val cl_name = "content-length";
 	val te_name = "transfer-encoding";
 	val chunked_val = "chunked";
+	val conn_name = "connection";
+	val close_val = "close";
 
 	var parsing = true;
 	while parsing {
@@ -302,6 +306,11 @@ pub fn parse_response_headers(raw: &Array<Byte>) nothrow -> core.Result<ParsedRe
 							chunked = true;
 						}
 					}
+					if _ascii_eq_lower(raw, pos, colon, &conn_name) {
+						if _ascii_eq_lower(raw, val_start, line_end, &close_val) {
+							conn_close = true;
+						}
+					}
 					hdr_keys.push(move name);
 				hdr_values.push(move value);
 				}
@@ -316,7 +325,8 @@ pub fn parse_response_headers(raw: &Array<Byte>) nothrow -> core.Result<ParsedRe
 		header_values = move hdr_values,
 		body_start = header_end,
 		content_length = content_length,
-		chunked = chunked
+		chunked = chunked,
+		conn_close = conn_close
 	));
 }
 

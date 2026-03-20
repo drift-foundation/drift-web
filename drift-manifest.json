@@ -76,10 +76,11 @@
         "packages/web-client/src/http.drift",
         "packages/web-client/src/url.drift",
         "packages/web-client/src/session.drift",
-        "packages/web-client/src/cookie.drift"
+        "packages/web-client/src/cookie.drift",
+        "packages/web-client/src/pool.drift"
       ],
       "package_deps": [
-        {"name": "net-tls", "version": "0.3.8"}
+        {"name": "net-tls", "version": "0.3.9"}
       ],
       "assets": [
         "docs/integration-guide.md",

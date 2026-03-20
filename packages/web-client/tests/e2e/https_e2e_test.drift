@@ -80,6 +80,32 @@ fn scenario_hostname_mismatch(wrong_host_port: Int, ca_path: &String) nothrow ->
 	}
 }
 
+// HTTPS pool reuse: 3 sequential GETs on same session, all correct.
+fn scenario_https_pool_reuse(session: &client.Session, port: Int) nothrow -> Int {
+	var i = 0;
+	while i < 3 {
+		val url = "https://127.0.0.1:" + fmt.format_int(port) + "/health";
+		match client.get(session, url) {
+			core.Result::Err(e) => {
+				console.println("HTTPS pool reuse req " + fmt.format_int(i) + " failed: " + e.tag + " " + e.message);
+				return 501;
+			},
+			core.Result::Ok(resp) => {
+				if resp.status != 200 { return 502; }
+				match client.response_body_string(&resp) {
+					core.Result::Err(_) => { return 503; },
+					core.Result::Ok(body) => {
+						val expected = "{\"ok\": true}";
+						if body != expected { return 504; }
+					}
+				}
+			}
+		}
+		i = i + 1;
+	}
+	return 0;
+}
+
 // Wrong trust store.
 fn scenario_wrong_trust(port: Int) nothrow -> Int {
 	var cfg = client.new_client_config();
@@ -127,6 +153,9 @@ fn main() nothrow -> Int {
 
 	val d = scenario_wrong_trust(https_port);
 	if d != 0 { return d; }
+
+	val e = scenario_https_pool_reuse(&session, https_port);
+	if e != 0 { return e; }
 
 	console.println("HTTPS e2e: all passed");
 	return 0;

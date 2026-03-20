@@ -1,0 +1,247 @@
+module web.client.tests.e2e.pool_perf_test;
+
+import std.core as core;
+import std.io as io;
+import std.net as net;
+import std.concurrent as conc;
+import std.format as fmt;
+import std.console as console;
+import std.time as time;
+import web.rest as rest;
+import web.client as client;
+
+// Plain HTTP self-stack benchmark: pooled (session) vs unpooled (send_once)
+// vs raw TCP keep-alive roundtrip.
+// Reports req/sec for all three and computes speedup ratios.
+// This is a measurement, not a pass/fail gate.
+
+fn _health_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	return core.Result::Ok(rest.json_response(200, "{\"ok\":true}"));
+}
+
+fn _stop(running: &mut rest.RunningServer) nothrow -> Void {
+	match rest.shutdown(running) {
+		core.Result::Ok(_) => {},
+		core.Result::Err(_) => {}
+	}
+}
+
+// --- Raw TCP keep-alive probe ---
+// Sends pre-serialized HTTP/1.1 requests on a single TCP connection.
+// Measures pure VT scheduler + TCP roundtrip latency without web.client overhead.
+
+fn _push_str(out: &mut Array<Byte>, s: &String) nothrow -> Void {
+	var i = 0;
+	while i < s.byte_length() {
+		out.push(core.string_byte_at(s, i));
+		i = i + 1;
+	}
+}
+
+fn _bench_raw_tcp(port: Int, n: Int) nothrow -> Int {
+	// Pre-build the HTTP request bytes.
+	val req_str = "GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: keep-alive\r\n\r\n";
+	var req_bytes: Array<Byte> = [];
+	_push_str(&mut req_bytes, &req_str);
+
+	val connect_timeout = conc.Duration(millis = 5000);
+	val io_timeout = conc.Duration(millis = 5000);
+	var addr = net.socket_addr("127.0.0.1", port);
+
+	match net.connect(&addr, connect_timeout) {
+		core.Result::Err(_) => { return -1; },
+		core.Result::Ok(s) => {
+			var stream = move s;
+			val start = time.now_monotonic();
+			var i = 0;
+			var failures = 0;
+			while i < n {
+				// Write request.
+				var write_buf = io.buffer(req_bytes.len);
+				var wi = 0;
+				while wi < req_bytes.len {
+					io.buffer_write(&mut write_buf, wi, req_bytes[wi]);
+					wi = wi + 1;
+				}
+				match stream.write(&write_buf, io_timeout) {
+					core.Result::Err(_) => { failures = failures + 1; i = i + 1; },
+					core.Result::Ok(_) => {
+						// Read response — just read until we see \r\n\r\n then
+						// read Content-Length bytes for the body.
+						var resp_buf: Array<Byte> = [];
+						var done = false;
+						while not done {
+							var rbuf = io.buffer(4096);
+							match stream.read(&mut rbuf, io_timeout) {
+								core.Result::Err(_) => { failures = failures + 1; done = true; },
+								core.Result::Ok(rn) => {
+									if rn == 0 { failures = failures + 1; done = true; } else {
+										var ri = 0;
+										while ri < rn {
+											resp_buf.push(io.buffer_read(&mut rbuf, ri));
+											ri = ri + 1;
+										}
+										// Check if we have the full response.
+										// Server sends Content-Length, so look for \r\n\r\n
+										// then verify we have enough body bytes.
+										if _has_full_response(&resp_buf) {
+											done = true;
+										}
+									}
+								}
+							}
+						}
+						i = i + 1;
+					}
+				}
+			}
+			val elapsed = time.elapsed_ms(&start);
+			val _ = stream.close(io_timeout);
+			if failures > 0 {
+				console.println("  raw tcp: " + fmt.format_int(failures) + " failures in " + fmt.format_int(n) + " requests");
+			}
+			return elapsed;
+		}
+	}
+	return -1;
+}
+
+fn _has_full_response(buf: &Array<Byte>) nothrow -> Bool {
+	// Find \r\n\r\n (header end).
+	val blen = buf.len;
+	if blen < 4 { return false; }
+	var i = 0;
+	val limit = blen - 3;
+	var header_end = -1;
+	while i < limit {
+		if buf[i] == cast<Byte>(13) {
+			if buf[i + 1] == cast<Byte>(10) {
+				if buf[i + 2] == cast<Byte>(13) {
+					if buf[i + 3] == cast<Byte>(10) {
+						header_end = i + 4;
+						i = limit;
+					}
+				}
+			}
+		}
+		i = i + 1;
+	}
+	if header_end < 0 { return false; }
+	// For this benchmark the body is small and usually arrives in one read.
+	// Just check we have at least header_end + 10 bytes (body is {"ok":true}).
+	if blen >= header_end + 10 { return true; }
+	return false;
+}
+
+// --- Web-client benchmarks ---
+
+fn _bench_pooled(session: &client.Session, port: Int, n: Int) nothrow -> Int {
+	val start = time.now_monotonic();
+	var i = 0;
+	var failures = 0;
+	while i < n {
+		val url = "http://127.0.0.1:" + fmt.format_int(port) + "/health";
+		match client.get(session, url) {
+			core.Result::Err(_) => { failures = failures + 1; },
+			core.Result::Ok(resp) => {
+				if resp.status != 200 { failures = failures + 1; }
+			}
+		}
+		i = i + 1;
+	}
+	val elapsed = time.elapsed_ms(&start);
+	if failures > 0 {
+		console.println("  pooled: " + fmt.format_int(failures) + " failures in " + fmt.format_int(n) + " requests");
+	}
+	return elapsed;
+}
+
+fn _bench_unpooled(cfg: &client.ClientConfig, port: Int, n: Int) nothrow -> Int {
+	val start = time.now_monotonic();
+	var i = 0;
+	var failures = 0;
+	while i < n {
+		val url = "http://127.0.0.1:" + fmt.format_int(port) + "/health";
+		var req = client.new_request("GET", url);
+		match client.send_once(cfg, move req) {
+			core.Result::Err(_) => { failures = failures + 1; },
+			core.Result::Ok(resp) => {
+				if resp.status != 200 { failures = failures + 1; }
+			}
+		}
+		i = i + 1;
+	}
+	val elapsed = time.elapsed_ms(&start);
+	if failures > 0 {
+		console.println("  unpooled: " + fmt.format_int(failures) + " failures in " + fmt.format_int(n) + " requests");
+	}
+	return elapsed;
+}
+
+fn main() nothrow -> Int {
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest.add_route(&mut app, "GET", "/health", _health_handler) {
+				core.Result::Err(_) => { return 2; },
+				core.Result::Ok(_) => {}
+			}
+			match rest.start(move app, conc.Duration(millis = 5000)) {
+				core.Result::Err(_) => { return 3; },
+				core.Result::Ok(srv) => {
+					var running = move srv;
+					val port = rest.server_port(&running);
+
+					val n = 1000;
+
+					// Warm up pooled path.
+					var warmup_cfg = client.new_client_config();
+					var warmup_session = client.new_session(move warmup_cfg);
+					var wi = 0;
+					while wi < 10 {
+						val url = "http://127.0.0.1:" + fmt.format_int(port) + "/health";
+						match client.get(&warmup_session, url) {
+							core.Result::Ok(_) => {},
+							core.Result::Err(_) => {}
+						}
+						wi = wi + 1;
+					}
+
+					// Raw TCP keep-alive (bypasses web.client entirely).
+					val raw_ms = _bench_raw_tcp(port, n);
+
+					// Pooled (web.client session).
+					var cfg_pooled = client.new_client_config();
+					var session = client.new_session(move cfg_pooled);
+					val pooled_ms = _bench_pooled(&session, port, n);
+
+					// Unpooled (web.client send_once — Connection: close).
+					var cfg_unpooled = client.new_client_config();
+					val unpooled_ms = _bench_unpooled(&cfg_unpooled, port, n);
+
+					// Report.
+					console.println("pool_perf_test: " + fmt.format_int(n) + " requests");
+					if raw_ms >= 0 {
+						console.println("  raw tcp:  " + fmt.format_int(raw_ms) + " ms");
+					}
+					console.println("  pooled:   " + fmt.format_int(pooled_ms) + " ms");
+					console.println("  unpooled: " + fmt.format_int(unpooled_ms) + " ms");
+					if raw_ms > 0 {
+						console.println("  pooled/raw:    " + fmt.format_int(pooled_ms / raw_ms) + "x overhead");
+					}
+					if pooled_ms > 0 {
+						console.println("  unpooled/pooled: " + fmt.format_int(unpooled_ms / pooled_ms) + "x");
+					}
+
+					_stop(&mut running);
+					return 0;
+				}
+			}
+			return 4;
+		}
+	}
+	return 5;
+}

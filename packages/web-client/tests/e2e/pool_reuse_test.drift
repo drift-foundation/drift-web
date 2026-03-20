@@ -1,0 +1,308 @@
+module web.client.tests.e2e.pool_reuse_test;
+
+import std.core as core;
+import std.concurrent as conc;
+import std.format as fmt;
+import std.console as console;
+import web.rest as rest;
+import web.client as client;
+
+// --- Server handlers ---
+
+fn _health_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	return core.Result::Ok(rest.json_response(200, "{\"ok\":true}"));
+}
+
+fn _echo_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	val cl_name = "content-length";
+	match rest.header(req, &cl_name) {
+		Optional::None() => {
+			return core.Result::Ok(rest.json_response(200, "{\"cl\":\"none\"}"));
+		},
+		Optional::Some(cl_val) => {
+			val body = "{\"cl\":\"" + cl_val + "\"}";
+			return core.Result::Ok(rest.json_response(200, body));
+		}
+	}
+}
+
+// --- Scenarios ---
+
+// 1. Sequential GET reuse: 5 GETs to same origin, all correct.
+fn scenario_sequential_get(session: &client.Session, port: Int) nothrow -> Int {
+	var i = 0;
+	while i < 5 {
+		val url = "http://127.0.0.1:" + fmt.format_int(port) + "/health";
+		match client.get(session, url) {
+			core.Result::Err(_) => { return 1001; },
+			core.Result::Ok(resp) => {
+				if resp.status != 200 { return 1002; }
+				match client.response_body_string(&resp) {
+					core.Result::Err(_) => { return 1003; },
+					core.Result::Ok(body) => {
+						val expected = "{\"ok\":true}";
+						if body != expected { return 1004; }
+					}
+				}
+			}
+		}
+		i = i + 1;
+	}
+	return 0;
+}
+
+// 2. Mixed verbs on same origin: GET then POST then GET.
+fn scenario_mixed_verbs(session: &client.Session, port: Int) nothrow -> Int {
+	val base = "http://127.0.0.1:" + fmt.format_int(port);
+
+	// GET /health
+	val url1 = base + "/health";
+	match client.get(session, url1) {
+		core.Result::Err(_) => { return 2001; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 2002; }
+		}
+	}
+
+	// POST /echo
+	val url2 = base + "/echo";
+	val json_body = "{\"x\":1}";
+	var body: Array<Byte> = [];
+	var j = 0;
+	while j < json_body.byte_length() {
+		body.push(core.string_byte_at(&json_body, j));
+		j = j + 1;
+	}
+	match client.post(session, url2, move body) {
+		core.Result::Err(_) => { return 2003; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 2004; }
+		}
+	}
+
+	// GET /health again
+	val url3 = base + "/health";
+	match client.get(session, url3) {
+		core.Result::Err(_) => { return 2005; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 2006; }
+			match client.response_body_string(&resp) {
+				core.Result::Err(_) => { return 2007; },
+				core.Result::Ok(body_str) => {
+					val expected = "{\"ok\":true}";
+					if body_str != expected { return 2008; }
+				}
+			}
+		}
+	}
+	return 0;
+}
+
+// 3. Different paths same origin.
+fn scenario_different_paths(session: &client.Session, port: Int) nothrow -> Int {
+	val base = "http://127.0.0.1:" + fmt.format_int(port);
+
+	val url1 = base + "/health";
+	match client.get(session, url1) {
+		core.Result::Err(_) => { return 3001; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 3002; }
+		}
+	}
+
+	val url2 = base + "/echo";
+	match client.get(session, url2) {
+		core.Result::Err(_) => { return 3003; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 3004; }
+		}
+	}
+	return 0;
+}
+
+// 4. Different origins no cross-reuse.
+fn scenario_different_origins(session: &client.Session, port1: Int, port2: Int) nothrow -> Int {
+	val url1 = "http://127.0.0.1:" + fmt.format_int(port1) + "/health";
+	val url2 = "http://127.0.0.1:" + fmt.format_int(port2) + "/health";
+
+	match client.get(session, url1) {
+		core.Result::Err(_) => { return 4001; },
+		core.Result::Ok(resp) => { if resp.status != 200 { return 4002; } }
+	}
+	match client.get(session, url2) {
+		core.Result::Err(_) => { return 4003; },
+		core.Result::Ok(resp) => { if resp.status != 200 { return 4004; } }
+	}
+	match client.get(session, url1) {
+		core.Result::Err(_) => { return 4005; },
+		core.Result::Ok(resp) => { if resp.status != 200 { return 4006; } }
+	}
+	match client.get(session, url2) {
+		core.Result::Err(_) => { return 4007; },
+		core.Result::Ok(resp) => { if resp.status != 200 { return 4008; } }
+	}
+	return 0;
+}
+
+// 5. Connection: close fallback — force close on one request, next still works.
+fn scenario_close_fallback(port: Int) nothrow -> Int {
+	var cfg = client.new_client_config();
+	var session = client.new_session(move cfg);
+	val base = "http://127.0.0.1:" + fmt.format_int(port);
+
+	// First request with explicit Connection: close.
+	val url1 = base + "/health";
+	var req = client.new_request("GET", url1);
+	client.set_header(&mut req, "Connection", "close");
+	match client.send(&session, move req) {
+		core.Result::Err(_) => { return 5001; },
+		core.Result::Ok(resp) => { if resp.status != 200 { return 5002; } }
+	}
+
+	// Second request should still succeed (new connection).
+	val url2 = base + "/health";
+	match client.get(&session, url2) {
+		core.Result::Err(_) => { return 5003; },
+		core.Result::Ok(resp) => { if resp.status != 200 { return 5004; } }
+	}
+	return 0;
+}
+
+// 6. Session isolation.
+fn scenario_session_isolation(port: Int) nothrow -> Int {
+	var cfg1 = client.new_client_config();
+	var s1 = client.new_session(move cfg1);
+	var cfg2 = client.new_client_config();
+	var s2 = client.new_session(move cfg2);
+	val url = "http://127.0.0.1:" + fmt.format_int(port) + "/health";
+
+	match client.get(&s1, url) {
+		core.Result::Err(_) => { return 6001; },
+		core.Result::Ok(resp) => { if resp.status != 200 { return 6002; } }
+	}
+	match client.get(&s2, url) {
+		core.Result::Err(_) => { return 6003; },
+		core.Result::Ok(resp) => { if resp.status != 200 { return 6004; } }
+	}
+	match client.get(&s1, url) {
+		core.Result::Err(_) => { return 6005; },
+		core.Result::Ok(resp) => { if resp.status != 200 { return 6006; } }
+	}
+	return 0;
+}
+
+// 7. send_once still works (no pooling).
+fn scenario_send_once(port: Int) nothrow -> Int {
+	var cfg = client.new_client_config();
+	val url = "http://127.0.0.1:" + fmt.format_int(port) + "/health";
+	var req = client.new_request("GET", url);
+	match client.send_once(&cfg, move req) {
+		core.Result::Err(_) => { return 7001; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 7002; }
+			match client.response_body_string(&resp) {
+				core.Result::Err(_) => { return 7003; },
+				core.Result::Ok(body) => {
+					val expected = "{\"ok\":true}";
+					if body != expected { return 7004; }
+				}
+			}
+		}
+	}
+	return 0;
+}
+
+// --- Helpers ---
+
+fn _stop(running: &mut rest.RunningServer) nothrow -> Void {
+	match rest.shutdown(running) {
+		core.Result::Ok(_) => {},
+		core.Result::Err(_) => {}
+	}
+}
+
+fn _start_server() nothrow -> core.Result<rest.RunningServer, Int> {
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return core.Result::Err(1); },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest.add_route(&mut app, "GET", "/health", _health_handler) {
+				core.Result::Err(_) => { return core.Result::Err(2); },
+				core.Result::Ok(_) => {}
+			}
+			match rest.add_route(&mut app, "POST", "/echo", _echo_handler) {
+				core.Result::Err(_) => { return core.Result::Err(3); },
+				core.Result::Ok(_) => {}
+			}
+			match rest.add_route(&mut app, "GET", "/echo", _echo_handler) {
+				core.Result::Err(_) => { return core.Result::Err(3); },
+				core.Result::Ok(_) => {}
+			}
+			match rest.start(move app, conc.Duration(millis = 5000)) {
+				core.Result::Err(_) => { return core.Result::Err(4); },
+				core.Result::Ok(srv) => {
+					return core.Result::Ok(move srv);
+				}
+			}
+			return core.Result::Err(5);
+		}
+	}
+	return core.Result::Err(6);
+}
+
+// --- Main ---
+
+fn main() nothrow -> Int {
+	// Start two servers for the different-origins test.
+	var srv1_r = _start_server();
+	var srv2_r = _start_server();
+	var srv1_port = 0;
+	var srv2_port = 0;
+	match srv1_r {
+		core.Result::Err(c) => { return c; },
+		core.Result::Ok(s) => {
+			var running1 = move s;
+			srv1_port = rest.server_port(&running1);
+			match srv2_r {
+				core.Result::Err(c) => { _stop(&mut running1); return c; },
+				core.Result::Ok(s2) => {
+					var running2 = move s2;
+					srv2_port = rest.server_port(&running2);
+
+					var cfg = client.new_client_config();
+					var session = client.new_session(move cfg);
+
+					val r1 = scenario_sequential_get(&session, srv1_port);
+					if r1 != 0 { console.println("FAIL: sequential_get " + fmt.format_int(r1)); _stop(&mut running1); _stop(&mut running2); return r1; }
+
+					val r2 = scenario_mixed_verbs(&session, srv1_port);
+					if r2 != 0 { console.println("FAIL: mixed_verbs " + fmt.format_int(r2)); _stop(&mut running1); _stop(&mut running2); return r2; }
+
+					val r3 = scenario_different_paths(&session, srv1_port);
+					if r3 != 0 { console.println("FAIL: different_paths " + fmt.format_int(r3)); _stop(&mut running1); _stop(&mut running2); return r3; }
+
+					val r4 = scenario_different_origins(&session, srv1_port, srv2_port);
+					if r4 != 0 { console.println("FAIL: different_origins " + fmt.format_int(r4)); _stop(&mut running1); _stop(&mut running2); return r4; }
+
+					val r5 = scenario_close_fallback(srv1_port);
+					if r5 != 0 { console.println("FAIL: close_fallback " + fmt.format_int(r5)); _stop(&mut running1); _stop(&mut running2); return r5; }
+
+					val r6 = scenario_session_isolation(srv1_port);
+					if r6 != 0 { console.println("FAIL: session_isolation " + fmt.format_int(r6)); _stop(&mut running1); _stop(&mut running2); return r6; }
+
+					val r7 = scenario_send_once(srv1_port);
+					if r7 != 0 { console.println("FAIL: send_once " + fmt.format_int(r7)); _stop(&mut running1); _stop(&mut running2); return r7; }
+
+					console.println("pool reuse e2e: all 7 scenarios passed");
+					_stop(&mut running1);
+					_stop(&mut running2);
+					return 0;
+				}
+			}
+			return 6;
+		}
+	}
+	return 7;
+}
