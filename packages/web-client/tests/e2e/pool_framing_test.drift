@@ -1,0 +1,258 @@
+module web.client.tests.e2e.pool_framing_test;
+
+import std.core as core;
+import std.concurrent as conc;
+import std.format as fmt;
+import std.console as console;
+import web.rest as rest;
+import web.client as client;
+
+// Tests that pooled connection reuse handles response framing correctly:
+// 1. Large body spanning multiple reads — remainder bytes correct
+// 2. Varying body sizes — framing boundary does not drift
+// 3. Connection: close from server — pool discards, next request still works
+// 4. Sequential requests after a close-delimited response path
+
+// --- Server handlers ---
+
+// Returns a JSON body of approximately n bytes.
+fn _sized_body(n: Int) nothrow -> String {
+	// Build {"data":"AAA...A"} where A count = n - 12
+	var body = "{\"data\":\"";
+	var fill = n - 12;
+	if fill < 0 { fill = 0; }
+	var i = 0;
+	while i < fill {
+		body = body + "A";
+		i = i + 1;
+	}
+	body = body + "\"}";
+	return body;
+}
+
+fn _health_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	return core.Result::Ok(rest.json_response(200, "{\"ok\":true}"));
+}
+
+// Returns ~8KB body (spans multiple 4096-byte reads).
+fn _large_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	val body = _sized_body(8000);
+	return core.Result::Ok(rest.json_response(200, body));
+}
+
+// Returns ~100 byte body.
+fn _small_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	val body = _sized_body(100);
+	return core.Result::Ok(rest.json_response(200, body));
+}
+
+// Returns response with Connection: close header.
+fn _close_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	var resp = rest.json_response(200, "{\"closed\":true}");
+	rest.with_response_header(&mut resp, "Connection", "close");
+	return core.Result::Ok(move resp);
+}
+
+// --- Scenarios ---
+
+// 1. Large body reuse: request with 8KB response, then small request.
+//    Verifies remainder bytes from the large response don't corrupt the next.
+fn scenario_large_then_small(session: &client.Session, port: Int) nothrow -> Int {
+	val base = "http://127.0.0.1:" + fmt.format_int(port);
+
+	// Large response.
+	val url1 = base + "/large";
+	match client.get(session, url1) {
+		core.Result::Err(_) => { return 1001; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 1002; }
+			match client.response_body_string(&resp) {
+				core.Result::Err(_) => { return 1003; },
+				core.Result::Ok(body) => {
+					if body.byte_length() < 7900 { return 1004; }
+				}
+			}
+		}
+	}
+
+	// Small response — must be correct, not leftover from large.
+	val url2 = base + "/small";
+	match client.get(session, url2) {
+		core.Result::Err(_) => { return 1005; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 1006; }
+			match client.response_body_string(&resp) {
+				core.Result::Err(_) => { return 1007; },
+				core.Result::Ok(body) => {
+					if body.byte_length() < 90 { return 1008; }
+					if body.byte_length() > 110 { return 1009; }
+				}
+			}
+		}
+	}
+
+	return 0;
+}
+
+// 2. Alternating sizes: small, large, small, large, small — all correct.
+fn scenario_alternating_sizes(session: &client.Session, port: Int) nothrow -> Int {
+	val base = "http://127.0.0.1:" + fmt.format_int(port);
+	var i = 0;
+	while i < 5 {
+		var url = base + "/small";
+		var expected_min = 90;
+		var expected_max = 110;
+		if i == 1 {
+			url = base + "/large";
+			expected_min = 7900;
+			expected_max = 8100;
+		}
+		if i == 3 {
+			url = base + "/large";
+			expected_min = 7900;
+			expected_max = 8100;
+		}
+		match client.get(session, url) {
+			core.Result::Err(_) => { return 2000 + i * 10 + 1; },
+			core.Result::Ok(resp) => {
+				if resp.status != 200 { return 2000 + i * 10 + 2; }
+				match client.response_body_string(&resp) {
+					core.Result::Err(_) => { return 2000 + i * 10 + 3; },
+					core.Result::Ok(body) => {
+						if body.byte_length() < expected_min { return 2000 + i * 10 + 4; }
+						if body.byte_length() > expected_max { return 2000 + i * 10 + 5; }
+					}
+				}
+			}
+		}
+		i = i + 1;
+	}
+	return 0;
+}
+
+// 3. Server sends Connection: close — pool must discard, next request works.
+fn scenario_server_close(session: &client.Session, port: Int) nothrow -> Int {
+	val base = "http://127.0.0.1:" + fmt.format_int(port);
+
+	// First: normal request to establish pooled connection.
+	val url1 = base + "/health";
+	match client.get(session, url1) {
+		core.Result::Err(_) => { return 3001; },
+		core.Result::Ok(resp) => { if resp.status != 200 { return 3002; } }
+	}
+
+	// Second: server responds with Connection: close. Pool should discard.
+	val url2 = base + "/close";
+	match client.get(session, url2) {
+		core.Result::Err(_) => { return 3003; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 3004; }
+			match client.response_body_string(&resp) {
+				core.Result::Err(_) => { return 3005; },
+				core.Result::Ok(body) => {
+					val expected = "{\"closed\":true}";
+					if body != expected { return 3006; }
+				}
+			}
+		}
+	}
+
+	// Third: must succeed on a new connection (pool was cleared).
+	val url3 = base + "/health";
+	match client.get(session, url3) {
+		core.Result::Err(_) => { return 3007; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 3008; }
+			match client.response_body_string(&resp) {
+				core.Result::Err(_) => { return 3009; },
+				core.Result::Ok(body) => {
+					val expected = "{\"ok\":true}";
+					if body != expected { return 3010; }
+				}
+			}
+		}
+	}
+
+	return 0;
+}
+
+// 4. Many sequential requests with exact body validation.
+//    Catches remainder drift over many iterations.
+fn scenario_many_exact(session: &client.Session, port: Int) nothrow -> Int {
+	val base = "http://127.0.0.1:" + fmt.format_int(port);
+	val expected = "{\"ok\":true}";
+	var i = 0;
+	while i < 50 {
+		val url = base + "/health";
+		match client.get(session, url) {
+			core.Result::Err(_) => { return 4000 + i; },
+			core.Result::Ok(resp) => {
+				if resp.status != 200 { return 4100 + i; }
+				match client.response_body_string(&resp) {
+					core.Result::Err(_) => { return 4200 + i; },
+					core.Result::Ok(body) => {
+						if body != expected { return 4300 + i; }
+					}
+				}
+			}
+		}
+		i = i + 1;
+	}
+	return 0;
+}
+
+// --- Main ---
+
+fn _stop(running: &mut rest.RunningServer) nothrow -> Void {
+	match rest.shutdown(running) {
+		core.Result::Ok(_) => {},
+		core.Result::Err(_) => {}
+	}
+}
+
+fn main() nothrow -> Int {
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest.add_route(&mut app, "GET", "/health", _health_handler) {
+				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
+			match rest.add_route(&mut app, "GET", "/large", _large_handler) {
+				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
+			match rest.add_route(&mut app, "GET", "/small", _small_handler) {
+				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
+			match rest.add_route(&mut app, "GET", "/close", _close_handler) {
+				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
+			match rest.start(move app, conc.Duration(millis = 5000)) {
+				core.Result::Err(_) => { return 3; },
+				core.Result::Ok(srv) => {
+					var running = move srv;
+					val port = rest.server_port(&running);
+
+					var cfg = client.new_client_config();
+					var session = client.new_session(move cfg);
+
+					val r1 = scenario_large_then_small(&session, port);
+					if r1 != 0 { console.println("FAIL: large_then_small " + fmt.format_int(r1)); _stop(&mut running); return r1; }
+
+					val r2 = scenario_alternating_sizes(&session, port);
+					if r2 != 0 { console.println("FAIL: alternating_sizes " + fmt.format_int(r2)); _stop(&mut running); return r2; }
+
+					val r3 = scenario_server_close(&session, port);
+					if r3 != 0 { console.println("FAIL: server_close " + fmt.format_int(r3)); _stop(&mut running); return r3; }
+
+					val r4 = scenario_many_exact(&session, port);
+					if r4 != 0 { console.println("FAIL: many_exact " + fmt.format_int(r4)); _stop(&mut running); return r4; }
+
+					console.println("pool framing e2e: all 4 scenarios passed");
+					_stop(&mut running);
+					return 0;
+				}
+			}
+			return 4;
+		}
+	}
+	return 5;
+}
