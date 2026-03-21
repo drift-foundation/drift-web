@@ -170,3 +170,28 @@
   - `web-jwt@0.2.1`
   - `web-rest@0.2.1`
   - `web-client@0.2.1`
+
+## 2026-03-20
+
+- Added session-backed connection pooling to `web.client`:
+  - TCP and TLS pool state in `packages/web-client/src/pool.drift`
+  - pooled send/remainder tracking in `packages/web-client/src/transport.drift`
+  - session-level pooled request flow in `packages/web-client/src/session.drift`
+- Hardened pooling correctness after review:
+  - pooled retries are now limited to idempotent methods plus narrow stale-connection signals
+  - caller-specified `Connection` headers are preserved without duplicate `Connection: keep-alive` injection
+  - cookie/session state remains compatible with pooled request flow
+- Expanded client validation:
+  - HTTP pool reuse e2e coverage in `packages/web-client/tests/e2e/pool_reuse_test.drift`
+  - HTTPS same-session repeated-request validation in `packages/web-client/tests/e2e/https_e2e_test.drift`
+  - pooled client perf harness added in `packages/web-client/tests/perf/pool_perf_test.drift`
+- Aligned downstream package-root handling with staged certification flows:
+  - client `justfile` recipes now read package roots from environment instead of hardcoding `~/opt/drift/libs`
+  - resolution order supports staged overrides before falling back to the local interactive default
+- Advanced downstream TLS dependency/toolchain alignment:
+  - `web-client` now consumes `net-tls@0.3.10`
+  - repository/toolchain work tracks current compiler releases through the opaque-pointer and codegen hygiene fixes
+- Bumped published `drift-web` package versions to `0.2.7`:
+  - `web-jwt@0.2.7`
+  - `web-rest@0.2.7`
+  - `web-client@0.2.7`

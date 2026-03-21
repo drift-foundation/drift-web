@@ -1,3 +1,5 @@
+PKG_ROOT := env("DRIFT_PKG_ROOT", env("DRIFT_PACKAGE_ROOT", "~/opt/drift/libs"))
+
 # Full test suite.
 test:
     @just jwt-check-par
@@ -139,7 +141,7 @@ client-check-par:
     @tools/drift_test_parallel_runner.sh run-all \
       --manifest drift-manifest.json --artifact web-client \
       --test-root packages/web-client/tests/unit \
-      --package-root ~/opt/drift/libs \
+      --package-root {{PKG_ROOT}} \
       --target-word-bits 64
 
 # Single client unit test.
@@ -147,7 +149,7 @@ client-check-unit FILE:
     @tools/drift_test_parallel_runner.sh run-one \
       --manifest drift-manifest.json --artifact web-client \
       --test-file "{{FILE}}" \
-      --package-root ~/opt/drift/libs \
+      --package-root {{PKG_ROOT}} \
       --target-word-bits 64
 
 # Client e2e tests (HTTP + HTTPS against local servers).
@@ -157,7 +159,7 @@ client-e2e-par:
       --src-root packages/web-jwt/src \
       --src-root packages/web-rest/src \
       --test-root packages/web-client/tests/e2e \
-      --package-root ~/opt/drift/libs \
+      --package-root {{PKG_ROOT}} \
       --target-word-bits 64
 
 # Single client e2e test.
@@ -167,7 +169,7 @@ client-e2e-unit FILE:
       --src-root packages/web-jwt/src \
       --src-root packages/web-rest/src \
       --test-file "{{FILE}}" \
-      --package-root ~/opt/drift/libs \
+      --package-root {{PKG_ROOT}} \
       --target-word-bits 64
 
 # Client pool perf benchmark.
@@ -177,7 +179,7 @@ client-perf:
       --src-root packages/web-jwt/src \
       --src-root packages/web-rest/src \
       --test-file packages/web-client/tests/perf/pool_perf_test.drift \
-      --package-root ~/opt/drift/libs \
+      --package-root {{PKG_ROOT}} \
       --target-word-bits 64
 
 # Client HTTPS e2e test (local Python HTTPS server + net-tls).
@@ -189,7 +191,7 @@ client-https-e2e:
 	trap 'rm -rf "${TMPDIR}"' EXIT
 	# Compile test binary.
 	"${DRIFTC}" --target-word-bits 64 \
-	  --package-root ~/opt/drift/libs \
+	  --package-root {{PKG_ROOT}} \
 	  --dep "$(python3 -c 'import json; m=json.load(open("drift-manifest.json")); d=[d for a in m["artifacts"] if a["name"]=="web-client" for d in a.get("package_deps",[]) if d["name"]=="net-tls"][0]; print(f"{d[\"name\"]}@{d[\"version\"]}")')" \
 	  --entry "web.client.tests.e2e.https_e2e_test::main" \
 	  packages/web-jwt/src/*.drift packages/web-rest/src/*.drift packages/web-client/src/*.drift \
@@ -202,7 +204,7 @@ client-https-e2e:
 client-compile-check FILE="packages/web-client/src/lib.drift":
     @tools/drift_test_parallel_runner.sh compile \
       --manifest drift-manifest.json --artifact web-client \
-      --package-root ~/opt/drift/libs \
+      --package-root {{PKG_ROOT}} \
       --file "{{FILE}}" \
       --target-word-bits 64
 
