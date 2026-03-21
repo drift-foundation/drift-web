@@ -1,0 +1,173 @@
+module web.client.tests.stress.tls_contamination_test;
+
+import std.core as core;
+import std.concurrent as conc;
+import std.format as fmt;
+import std.console as console;
+import std.env as env;
+import std.parse as parse;
+import web.client as client;
+
+// Scenario B: TLS negative-path → valid-path contamination stress.
+//
+// Defect class: a failed TLS handshake (wrong trust store, hostname mismatch)
+// leaves residue (OpenSSL error queue, session state, pool entry) that
+// corrupts a subsequent valid request on a different or same session.
+//
+// Shape: 20 cycles of good → bad → good.
+//   1. GET /health on trusted session → 200
+//   2. Expected TLS failure on a fresh bad session
+//   3. GET /health on the SAME trusted session → 200
+//
+// If any cycle's step 3 fails, negative-path state contaminated the
+// valid session. Exit code encodes cycle + step for diagnosis.
+
+fn _get_port(var_name: String) nothrow -> Int {
+	match env.get(var_name) {
+		Optional::None() => { return -1; },
+		Optional::Some(v) => {
+			match parse.parse_int(v) {
+				core.Result::Ok(p) => { return p; },
+				core.Result::Err(_) => { return -1; }
+			}
+		}
+	}
+}
+
+fn _get_env(var_name: String) nothrow -> String {
+	match env.get(var_name) {
+		Optional::None() => { return ""; },
+		Optional::Some(v) => { return v; }
+	}
+}
+
+// Verify GET /health returns 200 with expected body.
+fn _assert_health(session: &client.Session, port: Int, label: &String) nothrow -> Int {
+	val url = "https://127.0.0.1:" + fmt.format_int(port) + "/health";
+	match client.get(session, url) {
+		core.Result::Err(e) => {
+			console.println(*label + " GET failed: " + e.tag + " " + e.message);
+			return 1;
+		},
+		core.Result::Ok(resp) => {
+			if resp.status != 200 {
+				console.println(*label + " status " + fmt.format_int(resp.status));
+				return 2;
+			}
+			match client.response_body_string(&resp) {
+				core.Result::Err(_) => { return 3; },
+				core.Result::Ok(body) => {
+					val expected = "{\"ok\": true}";
+					if body != expected {
+						console.println(*label + " body mismatch");
+						return 4;
+					}
+					return 0;
+				}
+			}
+		}
+	}
+}
+
+// Verify TLS failure on a session with wrong trust.
+fn _assert_tls_fail_wrong_trust(port: Int) nothrow -> Int {
+	var cfg = client.new_client_config();
+	client.with_tls_trust_store(&mut cfg, client.TrustStore::PemFile(path = "/nonexistent/ca.crt"));
+	var session = client.new_session(move cfg);
+	val url = "https://127.0.0.1:" + fmt.format_int(port) + "/health";
+	match client.get(&session, url) {
+		core.Result::Ok(_) => { return 1; },
+		core.Result::Err(e) => {
+			if e.tag != client.TAG_TLS_FAILED { return 2; }
+			return 0;
+		}
+	}
+}
+
+// Verify TLS failure on hostname mismatch.
+fn _assert_tls_fail_hostname(wrong_host_port: Int, ca_path: &String) nothrow -> Int {
+	var cfg = client.new_client_config();
+	client.with_tls_trust_store(&mut cfg, client.TrustStore::PemFile(path = *ca_path));
+	var session = client.new_session(move cfg);
+	val url = "https://127.0.0.1:" + fmt.format_int(wrong_host_port) + "/health";
+	match client.get(&session, url) {
+		core.Result::Ok(_) => { return 1; },
+		core.Result::Err(e) => {
+			if e.tag != client.TAG_TLS_FAILED { return 2; }
+			return 0;
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	val https_port = _get_port("HTTPS_TEST_PORT");
+	val wrong_host_port = _get_port("HTTPS_WRONG_HOST_PORT");
+	val ca_path = _get_env("HTTPS_CA_CERT");
+
+	if https_port < 0 {
+		console.println("HTTPS_TEST_PORT not set; skipping");
+		return 0;
+	}
+	if ca_path == "" {
+		console.println("HTTPS_CA_CERT not set; skipping");
+		return 0;
+	}
+
+	// Create the "good" session — lives across all 20 cycles.
+	var cfg = client.new_client_config();
+	client.with_tls_trust_store(&mut cfg, client.TrustStore::PemFile(path = ca_path));
+	var good_session = client.new_session(move cfg);
+
+	val cycles = 20;
+	var i = 0;
+	while i < cycles {
+		val cycle_label = "cycle " + fmt.format_int(i);
+		val base = (i + 1) * 10;
+
+		// Step 1: good session → 200
+		val pre_label = cycle_label + " pre";
+		val s1 = _assert_health(&good_session, https_port, &pre_label);
+		if s1 != 0 {
+			console.println("FAIL: " + cycle_label + " step 1 (pre-good) code " + fmt.format_int(s1));
+			return base + 1;
+		}
+
+		// Step 2: negative path (alternate between wrong-trust and hostname-mismatch)
+		val even = i - ((i / 2) * 2);
+		if even == 0 {
+			val s2 = _assert_tls_fail_wrong_trust(https_port);
+			if s2 != 0 {
+				console.println("FAIL: " + cycle_label + " step 2 (wrong-trust) code " + fmt.format_int(s2));
+				return base + 2;
+			}
+		} else {
+			if wrong_host_port >= 0 {
+				val s2 = _assert_tls_fail_hostname(wrong_host_port, &ca_path);
+				if s2 != 0 {
+					console.println("FAIL: " + cycle_label + " step 2 (hostname-mismatch) code " + fmt.format_int(s2));
+					return base + 3;
+				}
+			} else {
+				// No wrong-host port available, use wrong-trust again
+				val s2 = _assert_tls_fail_wrong_trust(https_port);
+				if s2 != 0 {
+					console.println("FAIL: " + cycle_label + " step 2 (wrong-trust fallback) code " + fmt.format_int(s2));
+					return base + 2;
+				}
+			}
+		}
+
+		// Step 3: good session again — the contamination check
+		val post_label = cycle_label + " post";
+		val s3 = _assert_health(&good_session, https_port, &post_label);
+		if s3 != 0 {
+			console.println("FAIL: " + cycle_label + " step 3 (post-good) code " + fmt.format_int(s3));
+			return base + 4;
+		}
+
+		i = i + 1;
+	}
+
+	console.println("tls-contamination: " + fmt.format_int(cycles) + " cycles passed");
+	return 0;
+}

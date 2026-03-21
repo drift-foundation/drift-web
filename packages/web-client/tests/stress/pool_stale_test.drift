@@ -1,0 +1,129 @@
+module web.client.tests.stress.pool_stale_test;
+
+import std.core as core;
+import std.concurrent as conc;
+import std.format as fmt;
+import std.console as console;
+import std.env as env;
+import std.parse as parse;
+import web.client as client;
+
+// Scenario C: Pool reuse / stale-connection stress.
+//
+// Defect class: client reuses a pooled TLS connection whose server side has
+// already closed the socket WITHOUT announcing it (no Connection: close).
+// The client discovers the dead socket on write (EPIPE) or read (EOF) and
+// must reconnect transparently without leaking state.
+//
+// Shape: 10 cycles, each cycle is:
+//   1. GET /health          — pool reuse or fresh connect, expect 200
+//   2. GET /health-drop     — server responds 200 then silently closes socket
+//                             (no Connection: close header). Pool still holds
+//                             the now-dead connection.
+//   3. GET /health          — client tries the dead pooled socket, must detect
+//                             failure and reconnect. This is the stale-recovery
+//                             assertion. Expect 200.
+//
+// Total: 30 requests, 10 stale-socket recovery events.
+// If the client fails to recover from a dead pooled socket, step 3 fails.
+
+fn _get_port(var_name: String) nothrow -> Int {
+	match env.get(var_name) {
+		Optional::None() => { return -1; },
+		Optional::Some(v) => {
+			match parse.parse_int(v) {
+				core.Result::Ok(p) => { return p; },
+				core.Result::Err(_) => { return -1; }
+			}
+		}
+	}
+}
+
+fn _get_env(var_name: String) nothrow -> String {
+	match env.get(var_name) {
+		Optional::None() => { return ""; },
+		Optional::Some(v) => { return v; }
+	}
+}
+
+fn _assert_get(session: &client.Session, url: &String, label: &String) nothrow -> Int {
+	match client.get(session, *url) {
+		core.Result::Err(e) => {
+			console.println("FAIL: " + *label + " error: " + e.tag + " " + e.message);
+			return 1;
+		},
+		core.Result::Ok(resp) => {
+			if resp.status != 200 {
+				console.println("FAIL: " + *label + " status " + fmt.format_int(resp.status));
+				return 2;
+			}
+			match client.response_body_string(&resp) {
+				core.Result::Err(_) => {
+					console.println("FAIL: " + *label + " body read");
+					return 3;
+				},
+				core.Result::Ok(body) => {
+					val expected = "{\"ok\": true}";
+					if body != expected {
+						console.println("FAIL: " + *label + " body mismatch");
+						return 4;
+					}
+					return 0;
+				}
+			}
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	val https_port = _get_port("HTTPS_TEST_PORT");
+	val ca_path = _get_env("HTTPS_CA_CERT");
+
+	if https_port < 0 {
+		console.println("HTTPS_TEST_PORT not set; skipping");
+		return 0;
+	}
+	if ca_path == "" {
+		console.println("HTTPS_CA_CERT not set; skipping");
+		return 0;
+	}
+
+	var cfg = client.new_client_config();
+	client.with_tls_trust_store(&mut cfg, client.TrustStore::PemFile(path = ca_path));
+	var session = client.new_session(move cfg);
+
+	val base_url = "https://127.0.0.1:" + fmt.format_int(https_port);
+	val health_url = base_url + "/health";
+	val drop_url = base_url + "/health-drop";
+
+	val cycles = 10;
+	var i = 0;
+	while i < cycles {
+		val base = (i + 1) * 10;
+		val cycle_str = fmt.format_int(i);
+
+		// Step 1: normal request (pool reuse or fresh)
+		val label1 = "cycle " + cycle_str + " step 1 (normal)";
+		val r1 = _assert_get(&session, &health_url, &label1);
+		if r1 != 0 { return base + 1; }
+
+		// Step 2: server responds then silently drops the socket
+		val label2 = "cycle " + cycle_str + " step 2 (drop)";
+		val r2 = _assert_get(&session, &drop_url, &label2);
+		if r2 != 0 { return base + 2; }
+
+		// Step 3: stale-recovery assertion — client must detect dead socket
+		// and reconnect. This is the core of the test.
+		val label3 = "cycle " + cycle_str + " step 3 (stale-recovery)";
+		val r3 = _assert_get(&session, &health_url, &label3);
+		if r3 != 0 {
+			console.println("FAIL: stale-connection recovery failed on cycle " + cycle_str);
+			return base + 3;
+		}
+
+		i = i + 1;
+	}
+
+	console.println("pool-stale: " + fmt.format_int(cycles) + " cycles, " + fmt.format_int(cycles) + " stale-socket recoveries passed");
+	return 0;
+}

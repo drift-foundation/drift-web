@@ -1,0 +1,10 @@
+{
+  "8bb9310c2b63494db25197f9406fc9bc": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "sampled_at": "2026-03-21",
+    "sample_count": 20,
+    "raw_tcp_cost": {"min": 0.86, "mean": 1.11, "median": 1.14, "p95": 1.19, "max": 1.19, "threshold": 1.37},
+    "rest_cost": {"min": 0.56, "mean": 0.71, "median": 0.71, "p95": 0.76, "max": 0.76, "threshold": 0.88},
+    "framework_cost": {"min": 1.49, "mean": 1.55, "median": 1.54, "p95": 1.67, "max": 1.67, "threshold": 1.92}
+  }
+}

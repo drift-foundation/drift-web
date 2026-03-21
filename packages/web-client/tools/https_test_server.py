@@ -30,6 +30,30 @@ class TestHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+        elif self.path == "/health-close":
+            # Same response as /health but announces connection close.
+            # Exercises clean pool eviction (client knows connection is done).
+            body = json.dumps({"ok": True}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(body)
+            self.close_connection = True
+        elif self.path == "/health-drop":
+            # Same response as /health but silently closes the socket after.
+            # No Connection: close header — client pool thinks the connection
+            # is still alive. Next reuse attempt hits a dead socket (EPIPE/EOF).
+            # Exercises stale-connection detection and reconnect recovery.
+            body = json.dumps({"ok": True}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            self.wfile.flush()
+            self.close_connection = True
         else:
             self.send_error(404)
 

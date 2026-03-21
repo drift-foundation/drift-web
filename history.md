@@ -195,3 +195,30 @@
   - `web-jwt@0.2.7`
   - `web-rest@0.2.7`
   - `web-client@0.2.7`
+
+## 2026-03-21
+
+- Standardized `drift-web` around the new public certification surface:
+  - `just test` is now the correctness gate and runs the full suite under:
+    - plain
+    - `DRIFT_ASAN=1`
+    - `DRIFT_MEMCHECK=1`
+  - `just perf` is now a machine-keyed pass/fail anomaly gate:
+    - baselines live in `perf-baselines.json`
+    - unknown hosts fail closed
+    - baseline sampling is driven by `tools/perf_baseline_sample.sh`
+  - `just stress` is now the repo-owned stability/state gate:
+    - REST concurrency/state stress via `packages/web-rest/tests/stress/stress_test.drift`
+    - TLS negative-path contamination stress via `packages/web-client/tests/stress/tls_contamination_test.drift`
+    - stale pooled-connection recovery stress via `packages/web-client/tests/stress/pool_stale_test.drift`
+- Hardened the client HTTPS harness and stress tooling:
+  - replaced the old bind-close-rebind / fake-READY flow with server-owned `:0` binding and atomic JSON port publication
+  - added dedicated client stress harness support in `tools/run-stress-client.sh`
+  - added `/health-drop` / forced stale-socket coverage so pool stress now exercises real dead-socket recovery instead of only orderly close handling
+- Advanced downstream client/toolchain alignment:
+  - `web-client` now consumes `net-tls@0.3.11`
+  - current downstream/runtime guidance tracks the `0.27.99` SIGPIPE runtime fix for network failure paths
+- Bumped published `drift-web` package versions to `0.2.9`:
+  - `web-jwt@0.2.9`
+  - `web-rest@0.2.9`
+  - `web-client@0.2.9`

@@ -51,5 +51,9 @@ echo "HTTPS server on port ${HTTPS_PORT}"
 echo "Wrong-host HTTPS server on port ${WRONG_HOST_PORT}"
 echo "READY"
 
-# Run the test binary (passed as args).
-"$@"
+# Run the test binary, honoring instrumentation env vars.
+if [[ "${DRIFT_MEMCHECK:-0}" == "1" ]]; then
+    valgrind --tool=memcheck --error-exitcode=97 --leak-check=full "$@"
+else
+    "$@"
+fi

@@ -1,7 +1,26 @@
 PKG_ROOT := env("DRIFT_PKG_ROOT", env("DRIFT_PACKAGE_ROOT", "~/opt/drift/libs"))
 
-# Full test suite.
+# Certification gate: correctness + safety instrumentation.
+# Runs the full suite under plain, ASAN, and memcheck sequentially.
 test:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "=== test pass: plain ==="
+    just _test-suite
+    echo "=== test pass: plain — PASS ==="
+
+    echo "=== test pass: asan ==="
+    DRIFT_ASAN=1 just _test-suite
+    echo "=== test pass: asan — PASS ==="
+
+    echo "=== test pass: memcheck ==="
+    DRIFT_MEMCHECK=1 just _test-suite
+    echo "=== test pass: memcheck — PASS ==="
+
+    echo "=== all test passes complete ==="
+
+# Internal: full test suite (single pass).
+_test-suite:
     @just jwt-check-par
     @just jwt-e2e-par
     @just rest-check-par
@@ -58,17 +77,41 @@ rest-check-unit FILE:
       --test-file "{{FILE}}" \
       --target-word-bits 64
 
-# REST stress tests (separate gate, not in default test target).
-stress-test:
+# Certification gate: stability/state stress shaped around real defect classes.
+# Scenario A: REST concurrency/state (concurrent clients, mixed request types,
+#             guards, JSON caching, keep-alive, malformed recovery, lifecycle).
+# Scenario B: Client TLS negative-path → valid-path contamination.
+# Scenario C: Pool reuse / stale-connection / forced-reconnect stress.
+stress:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "=== scenario A: REST concurrency/state stress ==="
+    just _stress-rest
+    echo "=== scenario A: PASS ==="
+    echo ""
+    just _stress-client
+    echo ""
+    echo "=== all stress scenarios complete ==="
+
+# Internal: REST server stress (scenario A).
+_stress-rest:
     @tools/drift_test_parallel_runner.sh run-one \
       --manifest drift-manifest.json --artifact web-rest \
       --test-file packages/web-rest/tests/stress/stress_test.drift \
       --target-word-bits 64
 
-# Performance smoke guard: ratio-based comparative check vs Go baselines.
-# Not part of `just test`. Run as a pre-merge/release quality gate.
-# Requires: go in PATH, DRIFTC set, DRIFT_PYTHON set.
+# Internal: Client TLS/pool stress (scenarios B + C).
+_stress-client:
+    @tools/run-stress-client.sh
+
+# Certification gate: performance anomaly detection.
+# Machine-keyed pass/fail against baselines in perf-baselines.json.
+# Requires: go in PATH, DRIFTC set, DRIFT_PYTHON set, jq.
 # Do not run under DRIFT_MEMCHECK or DRIFT_ASAN.
+perf:
+    @tools/perf_gate_runner.sh
+
+# Performance smoke (informational, hardcoded thresholds).
 perf-smoke:
     @tools/perf_smoke_runner.sh
 
