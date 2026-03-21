@@ -10,36 +10,46 @@ if [[ ! -f "${FIXTURE_DIR}/server.crt" ]]; then
     "${TOOLS_DIR}/gen-test-certs.sh"
 fi
 
-# Pick free ports.
-HTTPS_PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1]); s.close()")
-WRONG_HOST_PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1]); s.close()")
-
-# Start HTTPS test servers.
-python3 "${TOOLS_DIR}/https_test_server.py" \
-    --port "${HTTPS_PORT}" \
-    --cert "${FIXTURE_DIR}/server.crt" \
-    --key "${FIXTURE_DIR}/server.key" \
-    --wrong-host-port "${WRONG_HOST_PORT}" \
-    --wrong-host-cert "${FIXTURE_DIR}/wrong-host.crt" \
-    --wrong-host-key "${FIXTURE_DIR}/wrong-host.key" &
-SERVER_PID=$!
-
-# Wait for READY.
-timeout 10 bash -c 'while ! grep -q READY /proc/'"${SERVER_PID}"'/fd/1 2>/dev/null; do sleep 0.1; done' 2>/dev/null || sleep 1
+TMPDIR="$(mktemp -d)"
+PORT_FILE="${TMPDIR}/ports.json"
 
 cleanup() {
     kill "${SERVER_PID}" 2>/dev/null || true
     wait "${SERVER_PID}" 2>/dev/null || true
+    rm -rf "${TMPDIR}"
 }
 trap cleanup EXIT
 
-# Export ports for the test binary.
+# Start HTTPS test servers. Server binds to ephemeral ports and writes
+# the actual bound ports to PORT_FILE (atomic rename, no race).
+python3 "${TOOLS_DIR}/https_test_server.py" \
+    --cert "${FIXTURE_DIR}/server.crt" \
+    --key "${FIXTURE_DIR}/server.key" \
+    --wrong-host-cert "${FIXTURE_DIR}/wrong-host.crt" \
+    --wrong-host-key "${FIXTURE_DIR}/wrong-host.key" \
+    --port-file "${PORT_FILE}" &
+SERVER_PID=$!
+
+# Wait for port file (server is listening once it appears).
+for _i in $(seq 1 100); do
+    if [[ -f "${PORT_FILE}" ]]; then break; fi
+    sleep 0.1
+done
+if [[ ! -f "${PORT_FILE}" ]]; then
+    echo "error: HTTPS server did not produce port file" >&2
+    exit 1
+fi
+
+HTTPS_PORT="$(jq -r .port "${PORT_FILE}")"
+WRONG_HOST_PORT="$(jq -r .wrong_host_port "${PORT_FILE}")"
+
 export HTTPS_TEST_PORT="${HTTPS_PORT}"
 export HTTPS_WRONG_HOST_PORT="${WRONG_HOST_PORT}"
 export HTTPS_CA_CERT="${FIXTURE_DIR}/ca.crt"
 
-echo "HTTPS test servers: port=${HTTPS_PORT} wrong-host=${WRONG_HOST_PORT}"
-echo "CA cert: ${HTTPS_CA_CERT}"
+echo "HTTPS server on port ${HTTPS_PORT}"
+echo "Wrong-host HTTPS server on port ${WRONG_HOST_PORT}"
+echo "READY"
 
 # Run the test binary (passed as args).
 "$@"

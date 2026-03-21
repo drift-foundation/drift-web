@@ -2,12 +2,18 @@
 """Minimal HTTPS test server for web.client e2e tests.
 
 Usage:
-    python3 https_test_server.py --port PORT --cert CERT --key KEY [--wrong-host-port PORT --wrong-host-cert CERT --wrong-host-key KEY]
+    python3 https_test_server.py --cert CERT --key KEY [--wrong-host-cert CERT --wrong-host-key KEY]
+
+Binds to ephemeral ports (no race). Prints machine-readable port lines:
+    PORT <port>
+    WRONG_HOST_PORT <port>
+    READY
 
 Serves JSON responses over HTTPS for deterministic local testing.
 """
 import argparse
 import json
+import os
 import ssl
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -44,10 +50,10 @@ class TestHandler(BaseHTTPRequestHandler):
         pass  # Silence request logs.
 
 
-def start_server(port, certfile, keyfile):
+def start_server(certfile, keyfile):
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(certfile, keyfile)
-    server = HTTPServer(("127.0.0.1", port), TestHandler)
+    server = HTTPServer(("127.0.0.1", 0), TestHandler)
     server.socket = ctx.wrap_socket(server.socket, server_side=True)
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
@@ -56,31 +62,39 @@ def start_server(port, certfile, keyfile):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--port", type=int, required=True)
     p.add_argument("--cert", required=True)
     p.add_argument("--key", required=True)
-    p.add_argument("--wrong-host-port", type=int, default=0)
     p.add_argument("--wrong-host-cert", default="")
     p.add_argument("--wrong-host-key", default="")
+    p.add_argument("--port-file", default="",
+                   help="Write JSON {port, wrong_host_port} to this file when ready")
     args = p.parse_args()
 
-    srv = start_server(args.port, args.cert, args.key)
-    print(f"HTTPS server on port {args.port}", flush=True)
+    srv = start_server(args.cert, args.key)
+    port = srv.server_address[1]
 
-    wrong_srv = None
-    if args.wrong_host_port > 0 and args.wrong_host_cert:
-        wrong_srv = start_server(args.wrong_host_port, args.wrong_host_cert, args.wrong_host_key)
-        print(f"Wrong-host HTTPS server on port {args.wrong_host_port}", flush=True)
+    wrong_port = 0
+    if args.wrong_host_cert and args.wrong_host_key:
+        wrong_srv = start_server(args.wrong_host_cert, args.wrong_host_key)
+        wrong_port = wrong_srv.server_address[1]
 
-    print("READY", flush=True)
+    # Signal readiness via port file (atomic rename) or stdout.
+    if args.port_file:
+        tmp = args.port_file + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"port": port, "wrong_host_port": wrong_port}, f)
+        os.rename(tmp, args.port_file)
+    else:
+        print(f"PORT {port}", flush=True)
+        if wrong_port:
+            print(f"WRONG_HOST_PORT {wrong_port}", flush=True)
+        print("READY", flush=True)
 
     # Block until killed.
     try:
         threading.Event().wait()
     except KeyboardInterrupt:
         srv.shutdown()
-        if wrong_srv:
-            wrong_srv.shutdown()
 
 
 if __name__ == "__main__":
