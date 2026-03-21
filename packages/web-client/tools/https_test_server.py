@@ -14,6 +14,8 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 
 
 class TestHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
     def do_GET(self):
         if self.path == "/health":
             body = json.dumps({"ok": True}).encode()

@@ -7,6 +7,7 @@ test:
     @just rest-check-par
     @just client-check-par
     @just client-e2e-par
+    @just client-https-e2e
 
 # All JWT unit tests (parallel compile, serial run).
 jwt-check-par:
@@ -192,10 +193,10 @@ client-https-e2e:
 	# Compile test binary.
 	"${DRIFTC}" --target-word-bits 64 \
 	  --package-root {{PKG_ROOT}} \
-	  --dep "$(python3 -c 'import json; m=json.load(open("drift-manifest.json")); d=[d for a in m["artifacts"] if a["name"]=="web-client" for d in a.get("package_deps",[]) if d["name"]=="net-tls"][0]; print(f"{d[\"name\"]}@{d[\"version\"]}")')" \
-	  --entry "web.client.tests.e2e.https_e2e_test::main" \
+	  --dep "$(jq -r '.artifacts[] | select(.name=="web-client") | .package_deps[] | select(.name=="net-tls") | "\(.name)@\(.version)"' drift-manifest.json)" \
+	  --entry "web.client.tests.https.https_e2e_test::main" \
 	  packages/web-jwt/src/*.drift packages/web-rest/src/*.drift packages/web-client/src/*.drift \
-	  packages/web-client/tests/e2e/https_e2e_test.drift \
+	  packages/web-client/tests/https/https_e2e_test.drift \
 	  -o "${TMPDIR}/https_e2e_test"
 	# Run with HTTPS test server.
 	packages/web-client/tools/run-https-e2e.sh "${TMPDIR}/https_e2e_test"

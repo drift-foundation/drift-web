@@ -1,0 +1,103 @@
+module web.client.tests.https.sigpipe_repro_test;
+
+// Minimal repro: SIGPIPE when writing to a stale pooled TLS connection.
+//
+// Setup: an HTTPS server that closes the connection after the first response
+// (HTTP/1.0 behavior, or server-initiated close). The client pool caches the
+// connection. On the second request, the pool reuses the stale connection.
+// The runtime's write() hits a broken pipe.
+//
+// Expected: pool detects the stale connection, retries on a fresh one, and
+// returns Result::Ok with the response.
+//
+// Actual (bug): the runtime uses raw write() without MSG_NOSIGNAL, so the
+// kernel delivers SIGPIPE (signal 13, exit 141) instead of returning EPIPE.
+// The process is killed before the pool can detect or recover from the error.
+//
+// Two defects:
+// 1. Runtime I/O: write() should use MSG_NOSIGNAL or mask SIGPIPE at startup
+//    so broken-pipe surfaces as EPIPE, not a fatal signal.
+// 2. Connection pool: should handle EPIPE on a reused connection by retrying
+//    on a fresh connection.
+//
+// To run: start an HTTP/1.0 HTTPS server, then:
+//   HTTPS_TEST_PORT=<port> HTTPS_CA_CERT=<ca.crt> <binary>
+//
+// With the HTTP/1.1 test server (normal harness), this test passes because
+// the server keeps connections alive. To trigger the bug, use an HTTP/1.0
+// server or one that sends Connection: close.
+
+import std.core as core;
+import std.format as fmt;
+import std.console as console;
+import std.env as env;
+import std.parse as parse;
+import web.client as client;
+
+fn _get_port(var_name: String) nothrow -> Int {
+	match env.get(var_name) {
+		Optional::None() => { return -1; },
+		Optional::Some(v) => {
+			match parse.parse_int(v) {
+				core.Result::Ok(p) => { return p; },
+				core.Result::Err(_) => { return -1; }
+			}
+		}
+	}
+}
+
+fn _get_ca_cert() nothrow -> String {
+	match env.get("HTTPS_CA_CERT") {
+		Optional::None() => { return ""; },
+		Optional::Some(v) => { return v; }
+	}
+}
+
+fn main() nothrow -> Int {
+	val https_port = _get_port("HTTPS_TEST_PORT");
+	val ca_path = _get_ca_cert();
+
+	if https_port < 0 {
+		console.println("HTTPS_TEST_PORT not set; cannot run SIGPIPE repro");
+		return 2;
+	}
+	if ca_path == "" {
+		console.println("HTTPS_CA_CERT not set; cannot run SIGPIPE repro");
+		return 2;
+	}
+
+	var cfg = client.new_client_config();
+	client.with_tls_trust_store(&mut cfg, client.TrustStore::PemFile(path = ca_path));
+	var session = client.new_session(move cfg);
+
+	val url = "https://127.0.0.1:" + fmt.format_int(https_port) + "/health";
+
+	// First request: succeeds, server closes connection after response.
+	console.println("request 1...");
+	match client.get(&session, url) {
+		core.Result::Err(e) => {
+			console.println("request 1 failed: " + e.tag + " " + e.message);
+			return 1;
+		},
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 2; }
+		}
+	}
+
+	// Second request: pool tries to reuse closed connection.
+	// BUG: write() to closed socket -> SIGPIPE (exit 141).
+	// FIXED: should reconnect and succeed.
+	console.println("request 2 (reuse stale connection)...");
+	match client.get(&session, url) {
+		core.Result::Err(e) => {
+			console.println("request 2 failed: " + e.tag + " " + e.message);
+			return 3;
+		},
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 4; }
+		}
+	}
+
+	console.println("SIGPIPE repro: passed (pool handled stale connection)");
+	return 0;
+}

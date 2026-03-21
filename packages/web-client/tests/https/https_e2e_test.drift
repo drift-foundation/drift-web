@@ -1,4 +1,4 @@
-module web.client.tests.e2e.https_e2e_test;
+module web.client.tests.https.https_e2e_test;
 
 import std.core as core;
 import std.concurrent as conc;
@@ -146,6 +146,13 @@ fn main() nothrow -> Int {
 	val b = scenario_https_json(&session, https_port);
 	if b != 0 { return b; }
 
+	val e = scenario_https_pool_reuse(&session, https_port);
+	if e != 0 { return e; }
+
+	// Negative-path scenarios run last: scenario_wrong_trust loads a
+	// nonexistent CA file, which leaves a stale error on the OpenSSL
+	// per-thread error queue (net-tls does not call ERR_clear_error).
+	// Running these after pool reuse avoids queue poisoning.
 	if wrong_host_port >= 0 {
 		val c = scenario_hostname_mismatch(wrong_host_port, &ca_path);
 		if c != 0 { return c; }
@@ -153,9 +160,6 @@ fn main() nothrow -> Int {
 
 	val d = scenario_wrong_trust(https_port);
 	if d != 0 { return d; }
-
-	val e = scenario_https_pool_reuse(&session, https_port);
-	if e != 0 { return e; }
 
 	console.println("HTTPS e2e: all passed");
 	return 0;
