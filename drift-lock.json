@@ -4,8 +4,8 @@
     "web-client": {
       "resolved": {
         "net-tls": {
-          "version": "0.3.11",
-          "integrity": "sha256:9b266791339e48a1bc1a2ba7d16fcf0a69368238162d21f04b7be1f84444f5a2",
+          "version": "0.3.13",
+          "integrity": "sha256:4950610d59dabae2ee6231fa00fe3df53b1f0ee0f0aa121346ed55b6f2f1e711",
           "dep_type": "direct"
         }
       }
@@ -13,7 +13,7 @@
     "web-rest": {
       "resolved": {
         "web-jwt": {
-          "version": "0.2.9",
+          "version": "0.2.10",
           "integrity": "sha256:co-artifact",
           "dep_type": "co-artifact"
         }

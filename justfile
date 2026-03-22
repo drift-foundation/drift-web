@@ -1,8 +1,23 @@
+# Toolchain resolution.
+# Certification gates (test, stress, perf) require DRIFT_TOOLCHAIN_ROOT.
+# Local dev targets fall back to DRIFTC/DRIFT env vars or PATH.
+export DRIFTC := `if [ -n "${DRIFT_TOOLCHAIN_ROOT:-}" ]; then echo "${DRIFT_TOOLCHAIN_ROOT}/bin/driftc"; else echo "${DRIFTC:-driftc}"; fi`
+export DRIFT  := `if [ -n "${DRIFT_TOOLCHAIN_ROOT:-}" ]; then echo "${DRIFT_TOOLCHAIN_ROOT}/bin/drift"; else echo "${DRIFT:-drift}"; fi`
+
 PKG_ROOT := env("DRIFT_PKG_ROOT", env("DRIFT_PACKAGE_ROOT", "~/opt/drift/libs"))
+
+# Guard: certification gates must have DRIFT_TOOLCHAIN_ROOT set.
+_require-toolchain-root:
+    #!/usr/bin/env bash
+    if [[ -z "${DRIFT_TOOLCHAIN_ROOT:-}" ]]; then
+        echo "error: DRIFT_TOOLCHAIN_ROOT is required for certification gates" >&2
+        echo "  set it to the toolchain root, e.g.: export DRIFT_TOOLCHAIN_ROOT=\$HOME/opt/drift/current" >&2
+        exit 1
+    fi
 
 # Certification gate: correctness + safety instrumentation.
 # Runs the full suite under plain, ASAN, and memcheck sequentially.
-test:
+test: _require-toolchain-root
     #!/usr/bin/env bash
     set -euo pipefail
     echo "=== test pass: plain ==="
@@ -82,7 +97,7 @@ rest-check-unit FILE:
 #             guards, JSON caching, keep-alive, malformed recovery, lifecycle).
 # Scenario B: Client TLS negative-path → valid-path contamination.
 # Scenario C: Pool reuse / stale-connection / forced-reconnect stress.
-stress:
+stress: _require-toolchain-root
     #!/usr/bin/env bash
     set -euo pipefail
     echo "=== scenario A: REST concurrency/state stress ==="
@@ -106,9 +121,9 @@ _stress-client:
 
 # Certification gate: performance anomaly detection.
 # Machine-keyed pass/fail against baselines in perf-baselines.json.
-# Requires: go in PATH, DRIFTC set, DRIFT_PYTHON set, jq.
+# Requires: go in PATH, DRIFT_TOOLCHAIN_ROOT set, DRIFT_PYTHON set, jq.
 # Do not run under DRIFT_MEMCHECK or DRIFT_ASAN.
-perf:
+perf: _require-toolchain-root
     @tools/perf_gate_runner.sh
 
 # Performance smoke (informational, hardcoded thresholds).
@@ -230,7 +245,6 @@ client-perf:
 client-https-e2e:
 	#!/usr/bin/env bash
 	set -euo pipefail
-	: "${DRIFTC:?set DRIFTC to your driftc path}"
 	TMPDIR="$(mktemp -d)"
 	trap 'rm -rf "${TMPDIR}"' EXIT
 	# Compile test binary.
@@ -254,15 +268,15 @@ client-compile-check FILE="packages/web-client/src/lib.drift":
 
 # Build package artifact locally (manifest-driven).
 build ARTIFACT="":
-    drift build {{ARTIFACT}} --driftc "${DRIFTC}"
+    {{DRIFT}} build {{ARTIFACT}} --driftc "${DRIFTC}"
 
 # Prepare lockfile (resolve dependencies against dest).
-prepare:
-    drift prepare --dest ~/opt/drift/libs
+prepare: _require-toolchain-root
+    {{DRIFT}} prepare --dest ~/opt/drift/libs
 
 # Deploy (build, sign, smoke, publish).
 deploy *ARGS:
-    drift deploy --dest ~/opt/drift/libs --driftc "${DRIFTC}" {{ARGS}}
+    {{DRIFT}} deploy --dest ~/opt/drift/libs --driftc "${DRIFTC}" {{ARGS}}
 
 # Show driftc version info.
 driftc-help:

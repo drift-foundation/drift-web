@@ -222,3 +222,13 @@
   - `web-jwt@0.2.9`
   - `web-rest@0.2.9`
   - `web-client@0.2.9`
+
+- Tightened certification/release toolchain alignment:
+  - public certification gates are being aligned to the strict `DRIFT_TOOLCHAIN_ROOT` contract
+  - orchestrator-facing flows no longer treat ambient `PATH` as an acceptable source of `drift` / `driftc`
+- Advanced downstream TLS dependency again:
+  - `web-client` now consumes `net-tls@0.3.13`
+- Bumped published `drift-web` package versions to `0.2.10`:
+  - `web-jwt@0.2.10`
+  - `web-rest@0.2.10`
+  - `web-client@0.2.10`
