@@ -1,17 +1,17 @@
-# Toolchain resolution.
-# Certification gates (test, stress, perf) require DRIFT_TOOLCHAIN_ROOT.
-# Local dev targets fall back to DRIFTC/DRIFT env vars or PATH.
-export DRIFTC := `if [ -n "${DRIFT_TOOLCHAIN_ROOT:-}" ]; then echo "${DRIFT_TOOLCHAIN_ROOT}/bin/driftc"; else echo "${DRIFTC:-driftc}"; fi`
-export DRIFT  := `if [ -n "${DRIFT_TOOLCHAIN_ROOT:-}" ]; then echo "${DRIFT_TOOLCHAIN_ROOT}/bin/drift"; else echo "${DRIFT:-drift}"; fi`
+# Toolchain resolution from DRIFT_TOOLCHAIN_ROOT.
+# All recipes resolve tools from $DRIFT_TOOLCHAIN_ROOT/bin/{driftc,drift}.
+# _require-toolchain-root enforces this at gate entry.
+export DRIFTC := env("DRIFT_TOOLCHAIN_ROOT", "") / "bin" / "driftc"
+export DRIFT  := env("DRIFT_TOOLCHAIN_ROOT", "") / "bin" / "drift"
 
-PKG_ROOT := env("DRIFT_PKG_ROOT", env("DRIFT_PACKAGE_ROOT", "~/opt/drift/libs"))
+PKG_ROOT := env("DRIFT_PKG_ROOT", env("DRIFT_PACKAGE_ROOT", ""))
 
 # Guard: certification gates must have DRIFT_TOOLCHAIN_ROOT set.
 _require-toolchain-root:
     #!/usr/bin/env bash
     if [[ -z "${DRIFT_TOOLCHAIN_ROOT:-}" ]]; then
         echo "error: DRIFT_TOOLCHAIN_ROOT is required for certification gates" >&2
-        echo "  set it to the toolchain root, e.g.: export DRIFT_TOOLCHAIN_ROOT=\$HOME/opt/drift/current" >&2
+        echo "  set it to the toolchain root, e.g.: export DRIFT_TOOLCHAIN_ROOT=/path/to/toolchain" >&2
         exit 1
     fi
 
@@ -270,13 +270,13 @@ client-compile-check FILE="packages/web-client/src/lib.drift":
 build ARTIFACT="":
     {{DRIFT}} build {{ARTIFACT}} --driftc "${DRIFTC}"
 
-# Prepare lockfile (resolve dependencies against dest).
+# Prepare lockfile (resolve dependencies against package root).
 prepare: _require-toolchain-root
-    {{DRIFT}} prepare --dest ~/opt/drift/libs
+    {{DRIFT}} prepare --dest "${DRIFT_PKG_ROOT:?set DRIFT_PKG_ROOT to the package root}"
 
-# Deploy (build, sign, smoke, publish).
+# Deploy to staging (build, sign, smoke, publish).
 deploy *ARGS:
-    {{DRIFT}} deploy --dest ~/opt/drift/libs --driftc "${DRIFTC}" {{ARGS}}
+    {{DRIFT}} deploy --dest "${DRIFT_PKG_ROOT:?set DRIFT_PKG_ROOT to the package root}" --driftc "${DRIFTC}" {{ARGS}}
 
 # Show driftc version info.
 driftc-help:

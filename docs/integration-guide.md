@@ -48,7 +48,7 @@ Obtain the publisher's `.author-profile` (included in the published
 artifact directory) and import it:
 
 ```bash
-drift trust ~/opt/drift/libs/web-rest/<version>/.author-profile
+drift trust $DRIFT_PKG_ROOT/web-rest/<version>/.author-profile
 ```
 
 Drift shows the publisher metadata, key fingerprint, and namespace
@@ -100,7 +100,7 @@ import the `.author-profile` via `drift trust` to establish trust.
 
 ```bash
 driftc --target-word-bits 64 \
-    --package-root ~/opt/drift/libs \
+    --package-root "$DRIFT_PKG_ROOT" \
     --dep web-rest@<version> \
     --dep web-jwt@<version> \
     --entry main::main \
@@ -112,7 +112,7 @@ driftc --target-word-bits 64 \
 
 ```bash
 driftc --target-word-bits 64 \
-    --package-root ~/opt/drift/libs \
+    --package-root "$DRIFT_PKG_ROOT" \
     --dep web-client@<version> \
     --entry main::main \
     -o my_client \

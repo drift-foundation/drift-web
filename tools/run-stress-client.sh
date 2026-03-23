@@ -13,7 +13,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CLIENT_TOOLS="${ROOT_DIR}/packages/web-client/tools"
 FIXTURE_DIR="${ROOT_DIR}/packages/web-client/tests/fixtures"
-PKG_ROOT="${DRIFT_PKG_ROOT:-${DRIFT_PACKAGE_ROOT:-${HOME}/opt/drift/libs}}"
+PKG_ROOT="${DRIFT_PKG_ROOT:-${DRIFT_PACKAGE_ROOT:?set DRIFT_PKG_ROOT or DRIFT_PACKAGE_ROOT to the package root}}"
 
 # Generate certs if missing.
 if [[ ! -f "${FIXTURE_DIR}/server.crt" ]]; then
