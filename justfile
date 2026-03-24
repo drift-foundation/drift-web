@@ -39,6 +39,7 @@ _test-suite:
     @just jwt-check-par
     @just jwt-e2e-par
     @just rest-check-par
+    @just rest-e2e-par
     @just client-check-par
     @just client-e2e-par
     @just client-https-e2e
@@ -83,6 +84,13 @@ rest-check-par:
     @tools/drift_test_parallel_runner.sh run-all \
       --manifest drift-manifest.json --artifact web-rest \
       --test-root packages/web-rest/tests/unit \
+      --target-word-bits 64
+
+# REST e2e tests (startup path, integration-level coverage).
+rest-e2e-par:
+    @tools/drift_test_parallel_runner.sh run-all \
+      --manifest drift-manifest.json --artifact web-rest \
+      --test-root packages/web-rest/tests/e2e \
       --target-word-bits 64
 
 # Single REST unit test.

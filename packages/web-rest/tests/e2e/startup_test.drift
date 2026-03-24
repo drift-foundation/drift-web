@@ -1,0 +1,65 @@
+module web.rest.tests.e2e.startup_test;
+
+import std.core as core;
+import std.concurrent as conc;
+import std.console as console;
+import std.format as fmt;
+import web.rest as rest;
+
+// Minimal startup e2e: proves the tiny-server-boots path works.
+//
+// Covers: rest.start() -> spawn_cb -> server VT running -> shutdown -> join.
+// This is regression coverage for the rest.start() -> std.concurrent::spawn_cb
+// codegen path (LLVM lowering contract failure on 0.27.107).
+
+fn _health_handler(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	return core.Result::Ok(rest.json_response(200, "{\"ok\":true}"));
+}
+
+fn main() nothrow -> Int {
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+
+	match rest.build_app(move b) {
+		core.Result::Err(_) => {
+			console.println("FAIL: build_app");
+			return 1;
+		},
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+				core.Result::Err(_) => {
+					console.println("FAIL: add_route");
+					return 2;
+				},
+				core.Result::Ok(_) => {}
+			}
+
+			match rest.start(move app, conc.Duration(millis = 5000)) {
+				core.Result::Err(e) => {
+					console.println("FAIL: start: " + e.message);
+					return 3;
+				},
+				core.Result::Ok(rs) => {
+					var running = move rs;
+					val port = rest.server_port(&running);
+					if port <= 0 {
+						console.println("FAIL: bad port");
+						return 4;
+					}
+
+					match rest.shutdown(&mut running) {
+						core.Result::Err(e) => {
+							console.println("FAIL: shutdown: " + e.message);
+							return 5;
+						},
+						core.Result::Ok(_) => {
+							console.println("startup e2e: passed (port=" + fmt.format_int(port) + ")");
+							return 0;
+						}
+					}
+				}
+			}
+		}
+	}
+}

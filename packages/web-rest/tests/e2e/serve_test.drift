@@ -1,0 +1,191 @@
+module web.rest.tests.e2e.serve_test;
+
+import std.core as core;
+import std.io as io;
+import std.net as net;
+import std.concurrent as conc;
+import std.console as console;
+import std.format as fmt;
+import web.rest as rest;
+
+// Minimal serve e2e: proves the smallest "server boots, handles one request,
+// shuts down" path works end-to-end.
+//
+// Covers: rest.start() -> accept -> parse -> route -> handler -> response ->
+// rest.shutdown(). Complements startup_test.drift which only proves the
+// start/shutdown lifecycle without traffic.
+
+fn _health_handler(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	return core.Result::Ok(rest.json_response(200, "{\"ok\":true}"));
+}
+
+fn _to_bytes(s: &String) nothrow -> Array<Byte> {
+	var out: Array<Byte> = [];
+	var i = 0;
+	val n = s.byte_length();
+	while i < n {
+		out.push(core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return move out;
+}
+
+fn _bytes_to_string(raw: &Array<Byte>) nothrow -> String {
+	val n = raw.len;
+	if n == 0 { return ""; }
+	var b = io.buffer(n);
+	var i = 0;
+	while i < n {
+		io.buffer_write(&mut b, i, raw[i]);
+		i = i + 1;
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&b), n);
+}
+
+fn _contains(haystack: &String, needle: &String) nothrow -> Bool {
+	val h_len = haystack.byte_length();
+	val n_len = needle.byte_length();
+	if n_len > h_len { return false; }
+	var i = 0;
+	val limit = h_len - n_len + 1;
+	while i < limit {
+		var matched = true;
+		var j = 0;
+		while j < n_len {
+			if core.string_byte_at(haystack, i + j) != core.string_byte_at(needle, j) {
+				matched = false;
+				j = n_len;
+			} else {
+				j = j + 1;
+			}
+		}
+		if matched { return true; }
+		i = i + 1;
+	}
+	return false;
+}
+
+fn _starts_with(s: &String, prefix: &String) nothrow -> Bool {
+	val p_len = prefix.byte_length();
+	if s.byte_length() < p_len { return false; }
+	var i = 0;
+	while i < p_len {
+		if core.string_byte_at(s, i) != core.string_byte_at(prefix, i) { return false; }
+		i = i + 1;
+	}
+	return true;
+}
+
+fn main() nothrow -> Int {
+	val timeout = conc.Duration(millis = 5000);
+
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+
+	match rest.build_app(move b) {
+		core.Result::Err(_) => {
+			console.println("FAIL: build_app");
+			return 1;
+		},
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+				core.Result::Err(_) => {
+					console.println("FAIL: add_route");
+					return 2;
+				},
+				core.Result::Ok(_) => {}
+			}
+
+			match rest.start(move app, timeout) {
+				core.Result::Err(e) => {
+					console.println("FAIL: start: " + e.message);
+					return 3;
+				},
+				core.Result::Ok(rs) => {
+					var running = move rs;
+					val port = rest.server_port(&running);
+
+					// Send one real HTTP request.
+					val raw_req = "GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+					var addr = net.socket_addr("127.0.0.1", port);
+					match net.connect(&addr, timeout) {
+						core.Result::Err(_) => {
+							console.println("FAIL: connect");
+							val _ = rest.shutdown(&mut running);
+							return 4;
+						},
+						core.Result::Ok(conn) => {
+							var stream = move conn;
+							val req_bytes = _to_bytes(&raw_req);
+							var wbuf = io.buffer(req_bytes.len);
+							var i = 0;
+							while i < req_bytes.len {
+								io.buffer_write(&mut wbuf, i, req_bytes[i]);
+								i = i + 1;
+							}
+							match stream.write(&wbuf, timeout) {
+								core.Result::Err(_) => {
+									console.println("FAIL: write");
+									val _ = stream.close(timeout);
+									val _ = rest.shutdown(&mut running);
+									return 5;
+								},
+								core.Result::Ok(_) => {}
+							}
+
+							// Read response.
+							var collected: Array<Byte> = [];
+							var done = false;
+							while !done {
+								var rbuf = io.buffer(4096);
+								match stream.read(&mut rbuf, timeout) {
+									core.Result::Err(_) => { done = true; },
+									core.Result::Ok(n) => {
+										if n == 0 { done = true; }
+										else {
+											var j = 0;
+											while j < n {
+												collected.push(io.buffer_read(&mut rbuf, j));
+												j = j + 1;
+											}
+										}
+									}
+								}
+							}
+							val _ = stream.close(timeout);
+
+							val resp_str = _bytes_to_string(&collected);
+
+							// Verify response.
+							val s_200 = "HTTP/1.1 200 OK";
+							if !_starts_with(&resp_str, &s_200) {
+								console.println("FAIL: expected 200, got: " + resp_str);
+								val _ = rest.shutdown(&mut running);
+								return 6;
+							}
+							val m_health = "{\"ok\":true}";
+							if !_contains(&resp_str, &m_health) {
+								console.println("FAIL: missing health body");
+								val _ = rest.shutdown(&mut running);
+								return 7;
+							}
+						}
+					}
+
+					// Clean shutdown.
+					match rest.shutdown(&mut running) {
+						core.Result::Err(e) => {
+							console.println("FAIL: shutdown: " + e.message);
+							return 8;
+						},
+						core.Result::Ok(_) => {
+							console.println("serve e2e: passed");
+							return 0;
+						}
+					}
+				}
+			}
+		}
+	}
+}

@@ -232,3 +232,12 @@
   - `web-jwt@0.2.10`
   - `web-rest@0.2.10`
   - `web-client@0.2.10`
+
+- Strengthened the `web.rest` certification floor with new REST-owned e2e baselines:
+  - `packages/web-rest/tests/e2e/startup_test.drift` now pins the minimal `rest.start()` -> `rest.shutdown()` lifecycle
+  - `packages/web-rest/tests/e2e/serve_test.drift` now proves the smallest real boot + serve one request + shutdown path
+  - both are wired into `just test` via `rest-e2e-par`, so toolchain regressions in the public `rest.start()` path fail certification earlier
+- Bumped published `drift-web` package versions to `0.2.11`:
+  - `web-jwt@0.2.11`
+  - `web-rest@0.2.11`
+  - `web-client@0.2.11`
