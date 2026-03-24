@@ -1,0 +1,42 @@
+module consumer.rest_startup_test;
+
+import std.core as core;
+import std.concurrent as conc;
+import std.console as console;
+import web.rest as rest;
+
+// Consumer-path test: web-rest minimal startup.
+// Consumes web-rest + web-jwt as published packages.
+// Proves: package load, type import, rest.start() -> shutdown codegen.
+
+fn health(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	return core.Result::Ok(rest.json_response(200, "{\"ok\":true}"));
+}
+
+fn main() nothrow -> Int {
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest.add_route(&mut app, "GET", "/health", core.callback2(health)) {
+				core.Result::Err(_) => { return 2; },
+				core.Result::Ok(_) => {}
+			}
+			match rest.start(move app, conc.Duration(millis = 5000)) {
+				core.Result::Err(_) => { return 3; },
+				core.Result::Ok(rs) => {
+					var running = move rs;
+					match rest.shutdown(&mut running) {
+						core.Result::Err(_) => { return 4; },
+						core.Result::Ok(_) => {
+							console.println("consumer rest-startup: passed");
+							return 0;
+						}
+					}
+				}
+			}
+		}
+	}
+}

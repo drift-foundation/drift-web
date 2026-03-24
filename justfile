@@ -53,6 +53,7 @@ _test-suite:
     @just client-check-par
     @just client-e2e-par
     @just client-https-e2e
+    @just consumer-check
 
 # All JWT unit tests (parallel compile, serial run).
 jwt-check-par: _require-env
@@ -275,6 +276,10 @@ client-https-e2e: _require-env
 	  -o "${TMPDIR}/https_e2e_test"
 	# Run with HTTPS test server.
 	packages/web-client/tools/run-https-e2e.sh "${TMPDIR}/https_e2e_test"
+
+# Consumer-path package tests: compile + run against published .zdmp artifacts.
+consumer-check: _require-env
+    @tools/run-consumer-tests.sh
 
 # Compile-only check for client (no execution).
 client-compile-check FILE="packages/web-client/src/lib.drift": _require-env

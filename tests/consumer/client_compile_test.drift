@@ -1,0 +1,31 @@
+module consumer.client_compile_test;
+
+import std.core as core;
+import std.console as console;
+import web.client as client;
+
+// Consumer-path test: web-client minimal compile.
+// Consumes web-client (+ net-tls) as published packages.
+// Proves: package load, type import, public API surface compiles.
+
+fn main() nothrow -> Int {
+	// Exercise the config/session/request construction path.
+	var cfg = client.new_client_config();
+	client.with_connect_timeout(&mut cfg, 5000);
+	client.with_io_timeout(&mut cfg, 5000);
+	client.with_max_response_body(&mut cfg, 1048576);
+	var session = client.new_session(move cfg);
+
+	// Construct a request (not sent — no server).
+	var req = client.new_request("GET", "https://example.com/health");
+	client.set_header(&mut req, "Accept", "application/json");
+
+	// Exercise URL parsing.
+	match client.parse_url(&"https://example.com:8080/path?q=1") {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(_) => {}
+	}
+
+	console.println("consumer client-compile: passed");
+	return 0;
+}

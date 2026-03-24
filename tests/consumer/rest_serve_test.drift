@@ -1,0 +1,117 @@
+module consumer.rest_serve_test;
+
+import std.core as core;
+import std.io as io;
+import std.net as net;
+import std.concurrent as conc;
+import std.console as console;
+import std.format as fmt;
+import web.rest as rest;
+
+// Consumer-path test: web-rest tiny serve.
+// Consumes web-rest + web-jwt as published packages.
+// Proves: package load, start, accept, route, handler, response, shutdown.
+
+fn health(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	return core.Result::Ok(rest.json_response(200, "{\"ok\":true}"));
+}
+
+fn main() nothrow -> Int {
+	val timeout = conc.Duration(millis = 5000);
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest.add_route(&mut app, "GET", "/health", core.callback2(health)) {
+				core.Result::Err(_) => { return 2; },
+				core.Result::Ok(_) => {}
+			}
+			match rest.start(move app, timeout) {
+				core.Result::Err(_) => { return 3; },
+				core.Result::Ok(rs) => {
+					var running = move rs;
+					val port = rest.server_port(&running);
+
+					// Send one HTTP request.
+					val raw_req = "GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+					var addr = net.socket_addr("127.0.0.1", port);
+					match net.connect(&addr, timeout) {
+						core.Result::Err(_) => {
+							val _ = rest.shutdown(&mut running);
+							return 4;
+						},
+						core.Result::Ok(conn) => {
+							var stream = move conn;
+							// Write request.
+							val bytes = raw_req.byte_length();
+							var wbuf = io.buffer(bytes);
+							var i = 0;
+							while i < bytes {
+								io.buffer_write(&mut wbuf, i, core.string_byte_at(&raw_req, i));
+								i = i + 1;
+							}
+							match stream.write(&wbuf, timeout) {
+								core.Result::Err(_) => {
+									val _ = stream.close(timeout);
+									val _ = rest.shutdown(&mut running);
+									return 5;
+								},
+								core.Result::Ok(_) => {}
+							}
+							// Read response.
+							var resp: Array<Byte> = [];
+							var done = false;
+							while !done {
+								var rbuf = io.buffer(4096);
+								match stream.read(&mut rbuf, timeout) {
+									core.Result::Err(_) => { done = true; },
+									core.Result::Ok(n) => {
+										if n == 0 { done = true; }
+										else {
+											var j = 0;
+											while j < n {
+												resp.push(io.buffer_read(&mut rbuf, j));
+												j = j + 1;
+											}
+										}
+									}
+								}
+							}
+							val _ = stream.close(timeout);
+
+							// Check for "200 OK" in response bytes.
+							// Look for byte sequence: 50 48 54 84 80 47 49 46 49 32 50 48 48 = "HTTP/1.1 200"
+							if resp.len < 12 {
+								val _ = rest.shutdown(&mut running);
+								return 6;
+							}
+							// Check "200" at positions 9,10,11.
+							if resp[9] != cast<Byte>(50) {
+								val _ = rest.shutdown(&mut running);
+								return 7;
+							}
+							if resp[10] != cast<Byte>(48) {
+								val _ = rest.shutdown(&mut running);
+								return 7;
+							}
+							if resp[11] != cast<Byte>(48) {
+								val _ = rest.shutdown(&mut running);
+								return 7;
+							}
+						}
+					}
+
+					match rest.shutdown(&mut running) {
+						core.Result::Err(_) => { return 8; },
+						core.Result::Ok(_) => {
+							console.println("consumer rest-serve: passed");
+							return 0;
+						}
+					}
+				}
+			}
+		}
+	}
+}

@@ -1,0 +1,41 @@
+module consumer.jwt_compile_test;
+
+import std.core as core;
+import std.console as console;
+import std.time as time;
+import std.format as fmt;
+import web.jwt as jwt;
+
+// Consumer-path test: web-jwt minimal compile + sign/verify.
+// Consumes web-jwt as a published package.
+// Proves: package load, type import, sign/verify codegen.
+
+fn main() nothrow -> Int {
+	var secret: Array<Byte> = [cast<Byte>(115), cast<Byte>(101), cast<Byte>(99)];
+	val now = time.utc_unix_seconds_now();
+
+	// Sign a token using the public API.
+	val header = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}";
+	val payload = "{\"sub\":\"test-user\",\"iat\":" + fmt.format_int(now) + "}";
+	val opts = jwt.new_sign_options();
+	match jwt.sign_hs256(&header, &payload, &secret, &opts) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(token) => {
+			// Verify the token.
+			var pb = jwt.new_verify_policy_builder();
+			pb.require_typ_jwt = false;
+			match jwt.build_verify_policy(move pb) {
+				core.Result::Err(_) => { return 2; },
+				core.Result::Ok(policy) => {
+					match jwt.verify_hs256(&token, &secret, now, &policy) {
+						core.Result::Err(_) => { return 3; },
+						core.Result::Ok(_) => {}
+					}
+				}
+			}
+		}
+	}
+
+	console.println("consumer jwt-compile: passed");
+	return 0;
+}

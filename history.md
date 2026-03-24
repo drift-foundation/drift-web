@@ -241,3 +241,16 @@
   - `web-jwt@0.2.11`
   - `web-rest@0.2.11`
   - `web-client@0.2.11`
+
+- Added package-consumer regression coverage to the default test surface:
+  - `tools/run-consumer-tests.sh` now compiles tiny downstream-style programs against published packages via `--package-root` + `--dep`
+  - initial consumer-path coverage includes:
+    - `web-jwt` minimal consumer compile
+    - `web-rest` startup consumer compile
+    - `web-rest` tiny serve consumer compile/run
+    - `web-client` minimal consumer compile
+  - this closes a missing coverage class where package consumption can fail even when in-repo source-built tests pass
+- Bumped published `drift-web` package versions to `0.2.12`:
+  - `web-jwt@0.2.12`
+  - `web-rest@0.2.12`
+  - `web-client@0.2.12`
