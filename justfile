@@ -1,23 +1,33 @@
 # Toolchain resolution from DRIFT_TOOLCHAIN_ROOT.
 # All recipes resolve tools from $DRIFT_TOOLCHAIN_ROOT/bin/{driftc,drift}.
-# _require-toolchain-root enforces this at gate entry.
+# _require-env enforces this at gate entry.
 export DRIFTC := env("DRIFT_TOOLCHAIN_ROOT", "") / "bin" / "driftc"
 export DRIFT  := env("DRIFT_TOOLCHAIN_ROOT", "") / "bin" / "drift"
 
 PKG_ROOT := env("DRIFT_PKG_ROOT", env("DRIFT_PACKAGE_ROOT", ""))
 
-# Guard: certification gates must have DRIFT_TOOLCHAIN_ROOT set.
-_require-toolchain-root:
+# Guard: all recipes require DRIFT_TOOLCHAIN_ROOT and DRIFT_PKG_ROOT.
+_require-env:
     #!/usr/bin/env bash
+    fail=0
     if [[ -z "${DRIFT_TOOLCHAIN_ROOT:-}" ]]; then
-        echo "error: DRIFT_TOOLCHAIN_ROOT is required for certification gates" >&2
-        echo "  set it to the toolchain root, e.g.: export DRIFT_TOOLCHAIN_ROOT=/path/to/toolchain" >&2
+        echo "error: DRIFT_TOOLCHAIN_ROOT is required" >&2
+        fail=1
+    fi
+    if [[ -z "${DRIFT_PKG_ROOT:-}" ]]; then
+        echo "error: DRIFT_PKG_ROOT is required" >&2
+        fail=1
+    fi
+    if [[ "${fail}" -ne 0 ]]; then
+        echo "  example:" >&2
+        echo "    export DRIFT_TOOLCHAIN_ROOT=\$HOME/opt/drift/certified/current/toolchain/current" >&2
+        echo "    export DRIFT_PKG_ROOT=\$HOME/opt/drift/certified/current/libs" >&2
         exit 1
     fi
 
 # Certification gate: correctness + safety instrumentation.
 # Runs the full suite under plain, ASAN, and memcheck sequentially.
-test: _require-toolchain-root
+test: _require-env
     #!/usr/bin/env bash
     set -euo pipefail
     echo "=== test pass: plain ==="
@@ -45,56 +55,56 @@ _test-suite:
     @just client-https-e2e
 
 # All JWT unit tests (parallel compile, serial run).
-jwt-check-par:
+jwt-check-par: _require-env
     @tools/drift_test_parallel_runner.sh run-all \
       --manifest drift-manifest.json --artifact web-jwt \
       --test-root packages/web-jwt/tests/unit \
       --target-word-bits 64
 
 # Single JWT unit test.
-jwt-check-unit FILE:
+jwt-check-unit FILE: _require-env
     @tools/drift_test_parallel_runner.sh run-one \
       --manifest drift-manifest.json --artifact web-jwt \
       --test-file "{{FILE}}" \
       --target-word-bits 64
 
 # JWT e2e-style tests (no external services).
-jwt-e2e-par:
+jwt-e2e-par: _require-env
     @tools/drift_test_parallel_runner.sh run-all \
       --manifest drift-manifest.json --artifact web-jwt \
       --test-root packages/web-jwt/tests/e2e \
       --target-word-bits 64
 
 # Compile-only check (no execution).
-jwt-compile-check FILE="packages/web-jwt/src/lib.drift":
+jwt-compile-check FILE="packages/web-jwt/src/lib.drift": _require-env
     @tools/drift_test_parallel_runner.sh compile \
       --manifest drift-manifest.json --artifact web-jwt \
       --file "{{FILE}}" \
       --target-word-bits 64
 
 # Compile all unit tests without running.
-jwt-compile-check-par:
+jwt-compile-check-par: _require-env
     @tools/drift_test_parallel_runner.sh compile \
       --manifest drift-manifest.json --artifact web-jwt \
       --test-root packages/web-jwt/tests/unit \
       --target-word-bits 64
 
 # All REST unit tests (parallel compile, serial run).
-rest-check-par:
+rest-check-par: _require-env
     @tools/drift_test_parallel_runner.sh run-all \
       --manifest drift-manifest.json --artifact web-rest \
       --test-root packages/web-rest/tests/unit \
       --target-word-bits 64
 
 # REST e2e tests (startup path, integration-level coverage).
-rest-e2e-par:
+rest-e2e-par: _require-env
     @tools/drift_test_parallel_runner.sh run-all \
       --manifest drift-manifest.json --artifact web-rest \
       --test-root packages/web-rest/tests/e2e \
       --target-word-bits 64
 
 # Single REST unit test.
-rest-check-unit FILE:
+rest-check-unit FILE: _require-env
     @tools/drift_test_parallel_runner.sh run-one \
       --manifest drift-manifest.json --artifact web-rest \
       --test-file "{{FILE}}" \
@@ -105,7 +115,7 @@ rest-check-unit FILE:
 #             guards, JSON caching, keep-alive, malformed recovery, lifecycle).
 # Scenario B: Client TLS negative-path → valid-path contamination.
 # Scenario C: Pool reuse / stale-connection / forced-reconnect stress.
-stress: _require-toolchain-root
+stress: _require-env
     #!/usr/bin/env bash
     set -euo pipefail
     echo "=== scenario A: REST concurrency/state stress ==="
@@ -131,15 +141,15 @@ _stress-client:
 # Machine-keyed pass/fail against baselines in perf-baselines.json.
 # Requires: go in PATH, DRIFT_TOOLCHAIN_ROOT set, DRIFT_PYTHON set, jq.
 # Do not run under DRIFT_MEMCHECK or DRIFT_ASAN.
-perf: _require-toolchain-root
+perf: _require-env
     @tools/perf_gate_runner.sh
 
 # Performance smoke (informational, hardcoded thresholds).
-perf-smoke:
+perf-smoke: _require-env
     @tools/perf_smoke_runner.sh
 
 # Build optimized perf binary to a stable path for strace/perf profiling.
-perf-build:
+perf-build: _require-env
     @mkdir -p work/rest/bench/bin
     @DRIFT_OPTIMIZED=1 tools/drift_test_parallel_runner.sh compile \
       --manifest drift-manifest.json --artifact web-rest \
@@ -155,7 +165,7 @@ perf-build:
 # Performance benchmarks: Go + Drift side-by-side (optimized).
 # Runs Go raw-TCP, Go net/http, Drift raw-TCP, Drift REST.
 # Do not run under DRIFT_MEMCHECK or DRIFT_ASAN.
-perf-test:
+perf-test: _require-env
     @echo "=== Go baselines ==="
     @go run benchmarks/go/raw_tcp_bench.go
     @go run benchmarks/go/net_http_bench.go
@@ -166,7 +176,7 @@ perf-test:
       --test-file packages/web-rest/tests/perf/perf_test.drift \
       --target-word-bits 64
 # Raw TCP with TCP_NODELAY — compare against baseline-vt in perf-test.
-perf-nodelay:
+perf-nodelay: _require-env
     @DRIFT_OPTIMIZED=1 tools/drift_test_parallel_runner.sh run-one \
       --manifest drift-manifest.json --artifact web-rest \
       --test-file packages/web-rest/tests/perf/nodelay_test.drift \
@@ -174,7 +184,7 @@ perf-nodelay:
 
 # REST probes: timeout sensitivity, read-call count, raw ping-pong.
 # Do not run under DRIFT_MEMCHECK or DRIFT_ASAN.
-rest-probe:
+rest-probe: _require-env
     tools/drift_test_parallel_runner.sh run-one \
       --manifest drift-manifest.json --artifact web-rest \
       --test-file packages/web-rest/tests/perf/probe_test.drift \
@@ -182,7 +192,7 @@ rest-probe:
 
 # REST instrumented keep-alive: per-phase server + client timing.
 # Do not run under DRIFT_MEMCHECK or DRIFT_ASAN.
-rest-instrument:
+rest-instrument: _require-env
     tools/drift_test_parallel_runner.sh run-one \
       --manifest drift-manifest.json --artifact web-rest \
       --test-file packages/web-rest/tests/perf/instrument_test.drift \
@@ -190,21 +200,21 @@ rest-instrument:
 
 # REST decomposition benchmarks: parse, dispatch, serialize isolation.
 # Do not run under DRIFT_MEMCHECK or DRIFT_ASAN.
-rest-decompose:
+rest-decompose: _require-env
     tools/drift_test_parallel_runner.sh run-one \
       --manifest drift-manifest.json --artifact web-rest \
       --test-file packages/web-rest/tests/perf/decompose_test.drift \
       --target-word-bits 64
 
 # Compile-only check for REST (no execution).
-rest-compile-check FILE="packages/web-rest/src/lib.drift":
+rest-compile-check FILE="packages/web-rest/src/lib.drift": _require-env
     @tools/drift_test_parallel_runner.sh compile \
       --manifest drift-manifest.json --artifact web-rest \
       --file "{{FILE}}" \
       --target-word-bits 64
 
 # All client unit tests (parallel compile, serial run).
-client-check-par:
+client-check-par: _require-env
     @tools/drift_test_parallel_runner.sh run-all \
       --manifest drift-manifest.json --artifact web-client \
       --test-root packages/web-client/tests/unit \
@@ -212,7 +222,7 @@ client-check-par:
       --target-word-bits 64
 
 # Single client unit test.
-client-check-unit FILE:
+client-check-unit FILE: _require-env
     @tools/drift_test_parallel_runner.sh run-one \
       --manifest drift-manifest.json --artifact web-client \
       --test-file "{{FILE}}" \
@@ -220,7 +230,7 @@ client-check-unit FILE:
       --target-word-bits 64
 
 # Client e2e tests (HTTP + HTTPS against local servers).
-client-e2e-par:
+client-e2e-par: _require-env
     @tools/drift_test_parallel_runner.sh run-all \
       --manifest drift-manifest.json --artifact web-client \
       --src-root packages/web-jwt/src \
@@ -230,7 +240,7 @@ client-e2e-par:
       --target-word-bits 64
 
 # Single client e2e test.
-client-e2e-unit FILE:
+client-e2e-unit FILE: _require-env
     @tools/drift_test_parallel_runner.sh run-one \
       --manifest drift-manifest.json --artifact web-client \
       --src-root packages/web-jwt/src \
@@ -240,7 +250,7 @@ client-e2e-unit FILE:
       --target-word-bits 64
 
 # Client pool perf benchmark.
-client-perf:
+client-perf: _require-env
     @tools/drift_test_parallel_runner.sh run-one \
       --manifest drift-manifest.json --artifact web-client \
       --src-root packages/web-jwt/src \
@@ -250,7 +260,7 @@ client-perf:
       --target-word-bits 64
 
 # Client HTTPS e2e test (local Python HTTPS server + net-tls).
-client-https-e2e:
+client-https-e2e: _require-env
 	#!/usr/bin/env bash
 	set -euo pipefail
 	TMPDIR="$(mktemp -d)"
@@ -267,7 +277,7 @@ client-https-e2e:
 	packages/web-client/tools/run-https-e2e.sh "${TMPDIR}/https_e2e_test"
 
 # Compile-only check for client (no execution).
-client-compile-check FILE="packages/web-client/src/lib.drift":
+client-compile-check FILE="packages/web-client/src/lib.drift": _require-env
     @tools/drift_test_parallel_runner.sh compile \
       --manifest drift-manifest.json --artifact web-client \
       --package-root {{PKG_ROOT}} \
@@ -275,17 +285,17 @@ client-compile-check FILE="packages/web-client/src/lib.drift":
       --target-word-bits 64
 
 # Build package artifact locally (manifest-driven).
-build ARTIFACT="":
+build ARTIFACT="": _require-env
     {{DRIFT}} build {{ARTIFACT}} --driftc "${DRIFTC}"
 
 # Prepare lockfile (resolve dependencies against package root).
-prepare: _require-toolchain-root
+prepare: _require-env
     {{DRIFT}} prepare --dest "${DRIFT_PKG_ROOT:?set DRIFT_PKG_ROOT to the package root}"
 
 # Deploy to staging (build, sign, smoke, publish).
-deploy *ARGS:
+deploy *ARGS: _require-env
     {{DRIFT}} deploy --dest "${DRIFT_PKG_ROOT:?set DRIFT_PKG_ROOT to the package root}" --driftc "${DRIFTC}" {{ARGS}}
 
 # Show driftc version info.
-driftc-help:
+driftc-help: _require-env
     @${DRIFTC} --help 2>&1 | head -5 || true
