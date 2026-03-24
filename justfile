@@ -290,6 +290,7 @@ build ARTIFACT="": _require-env
 
 # Prepare lockfile (resolve dependencies against package root).
 prepare: _require-env
+    @tools/check-manifest-consistency.sh
     {{DRIFT}} prepare --dest "${DRIFT_PKG_ROOT:?set DRIFT_PKG_ROOT to the package root}"
 
 # Deploy to staging (build, sign, smoke, publish).
