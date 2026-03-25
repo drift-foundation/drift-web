@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# Consumer-path test runner: compiles tiny downstream programs against
-# published package artifacts via --package-root + --dep.
+# Consumer-path test runner: builds + signs our packages into a local staging
+# root, then compiles tiny downstream programs against them via --package-root
+# + --dep.
 #
-# These tests do NOT compile package source. They consume .zdmp artifacts
-# from $DRIFT_PKG_ROOT, exactly as a downstream consumer would.
+# These tests do NOT compile package source into the test binary. They consume
+# signed .zdmp artifacts built from the current repo, exactly as a downstream
+# consumer would. External deps (net-tls) come from $DRIFT_PKG_ROOT.
 set -euo pipefail
 
 : "${DRIFTC:?DRIFTC not set}"
+: "${DRIFT:?DRIFT not set}"
 : "${DRIFT_PKG_ROOT:?DRIFT_PKG_ROOT not set}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -22,12 +25,25 @@ rest_ver=$(jq -r '.artifacts[] | select(.name=="web-rest") | .version' "${MANIFE
 client_ver=$(jq -r '.artifacts[] | select(.name=="web-client") | .version' "${MANIFEST}")
 tls_dep=$(jq -r '.artifacts[] | select(.name=="web-client") | .package_deps[] | select(.name=="net-tls") | "\(.name)@\(.version)"' "${MANIFEST}")
 
+# --- Stage our packages locally ---
+LOCAL_PKG="${TMPDIR}/libs"
+echo "=== staging local packages ==="
+"${DRIFT}" deploy \
+    --dest "${LOCAL_PKG}" \
+    --package-root "${LOCAL_PKG}" \
+    --package-root "${DRIFT_PKG_ROOT}" \
+    --driftc "${DRIFTC}" \
+    --skip-smoke \
+    2>&1
+echo ""
+
+# --- Run consumer tests against staged packages ---
 FAILED=0
+FAILED_NAMES=()
 
 run_test() {
     local name="$1" entry="$2" src="$3"
     shift 3
-    # Remaining args are --dep flags.
     local deps=("$@")
 
     echo "=== consumer: ${name} ==="
@@ -35,6 +51,7 @@ run_test() {
 
     echo "  compile ${name}"
     if ! "${DRIFTC}" --target-word-bits 64 \
+        --package-root "${LOCAL_PKG}" \
         --package-root "${DRIFT_PKG_ROOT}" \
         "${deps[@]}" \
         --entry "${entry}" \
@@ -42,6 +59,7 @@ run_test() {
         -o "${bin}" 2>&1; then
         echo "  FAIL: compile failed"
         FAILED=$((FAILED + 1))
+        FAILED_NAMES+=("${name}")
         return
     fi
 
@@ -54,6 +72,7 @@ run_test() {
     if ! "${run_cmd[@]}" 2>&1; then
         echo "  FAIL: run failed"
         FAILED=$((FAILED + 1))
+        FAILED_NAMES+=("${name}")
         return
     fi
     echo "  PASS"
@@ -87,7 +106,7 @@ run_test "client_compile_test" \
     --dep "${tls_dep}"
 
 if [[ "${FAILED}" -gt 0 ]]; then
-    echo "=== consumer tests: ${FAILED} FAILED ==="
+    echo "=== consumer tests: ${FAILED} FAILED: ${FAILED_NAMES[*]} ==="
     exit 1
 fi
 echo "=== consumer tests: all passed ==="
