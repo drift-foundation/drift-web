@@ -4,8 +4,8 @@
     "web-client": {
       "resolved": {
         "net-tls": {
-          "version": "0.3.13",
-          "integrity": "sha256:4950610d59dabae2ee6231fa00fe3df53b1f0ee0f0aa121346ed55b6f2f1e711",
+          "version": "0.3.14",
+          "integrity": "sha256:dfa4e3977aab128ac700e059098a5d3febfd59b220d800e4bd23eee8119bd06f",
           "dep_type": "direct"
         }
       }
