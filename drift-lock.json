@@ -1,11 +1,12 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "artifacts": {
     "web-client": {
       "resolved": {
         "net-tls": {
-          "version": "0.3.14",
-          "integrity": "sha256:dfa4e3977aab128ac700e059098a5d3febfd59b220d800e4bd23eee8119bd06f",
+          "version": "0.3",
+          "package_id": "net-tls",
+          "author_key": "ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0=",
           "dep_type": "direct"
         }
       }
@@ -13,8 +14,9 @@
     "web-rest": {
       "resolved": {
         "web-jwt": {
-          "version": "0.2.12",
-          "integrity": "sha256:co-artifact",
+          "version": "0.2",
+          "package_id": "web-jwt",
+          "author_key": "",
           "dep_type": "co-artifact"
         }
       }
