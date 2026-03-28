@@ -42,17 +42,21 @@ FAILED=0
 FAILED_NAMES=()
 
 run_test() {
-    local name="$1" entry="$2" src="$3"
-    shift 3
+    local name="$1" entry="$2" src="$3" needs_ext_pkgs="$4"
+    shift 4
     local deps=("$@")
 
     echo "=== consumer: ${name} ==="
     local bin="${TMPDIR}/${name}"
 
+    local pkg_roots=(--package-root "${LOCAL_PKG}")
+    if [[ "${needs_ext_pkgs}" == "yes" ]]; then
+        pkg_roots+=(--package-root "${DRIFT_PKG_ROOT}")
+    fi
+
     echo "  compile ${name}"
     if ! "${DRIFTC}" --target-word-bits 64 \
-        --package-root "${LOCAL_PKG}" \
-        --package-root "${DRIFT_PKG_ROOT}" \
+        "${pkg_roots[@]}" \
         "${deps[@]}" \
         --entry "${entry}" \
         "${src}" \
@@ -82,12 +86,14 @@ run_test() {
 run_test "jwt_compile_test" \
     "consumer.jwt_compile_test::main" \
     "${TEST_DIR}/jwt_compile_test.drift" \
+    no \
     --dep "web-jwt@${jwt_ver}"
 
 # 2. web-rest startup consumer
 run_test "rest_startup_test" \
     "consumer.rest_startup_test::main" \
     "${TEST_DIR}/rest_startup_test.drift" \
+    no \
     --dep "web-rest@${rest_ver}" \
     --dep "web-jwt@${jwt_ver}"
 
@@ -95,13 +101,23 @@ run_test "rest_startup_test" \
 run_test "rest_serve_test" \
     "consumer.rest_serve_test::main" \
     "${TEST_DIR}/rest_serve_test.drift" \
+    no \
     --dep "web-rest@${rest_ver}" \
     --dep "web-jwt@${jwt_ver}"
 
-# 4. web-client consumer
+# 4. web-rest sequential request regression (0.27.125 defect class)
+run_test "rest_sequential_test" \
+    "consumer.rest_sequential_test::main" \
+    "${TEST_DIR}/rest_sequential_test.drift" \
+    no \
+    --dep "web-rest@${rest_ver}" \
+    --dep "web-jwt@${jwt_ver}"
+
+# 5. web-client consumer (needs net-tls from external package root)
 run_test "client_compile_test" \
     "consumer.client_compile_test::main" \
     "${TEST_DIR}/client_compile_test.drift" \
+    yes \
     --dep "web-client@${client_ver}" \
     --dep "${tls_dep}"
 

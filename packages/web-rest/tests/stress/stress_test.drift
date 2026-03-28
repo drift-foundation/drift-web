@@ -691,7 +691,7 @@ fn _check_malformed_response(resp_str: &String, expected_status: &String, allowe
 }
 
 fn scenario_malformed_matrix() nothrow -> Int {
-	// Server uses 1s timeout — fast timeout on truncated-body reads, and all
+	// Server idle_timeout = 1s — fast timeout on truncated-body reads, and all
 	// other sub-cases complete their reads almost instantly.
 	// Client uses 5s timeout — outlives the server's error path.
 	val srv_timeout = conc.Duration(millis = 1000);
@@ -725,6 +725,7 @@ fn scenario_malformed_matrix() nothrow -> Int {
 					val port = listener.local_port();
 					var handle = server.new_server_handle();
 					handle.max_requests = 7;
+					handle.idle_timeout_ms = 1000;
 					var caller_handle = server.clone_handle(&handle);
 					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy srv_timeout) => {
 						return _run_serve(move app, move listener, move handle, srv_timeout);

@@ -212,11 +212,11 @@ fn _handle_connection(a: &app.App, stream: &mut net.TcpStream, timeout: conc.Dur
 			*event_counter = *event_counter + 1;
 			val eid = "evt-" + fmt.format_int(*event_counter);
 
-			// First request uses full timeout; subsequent use idle timeout.
-			var read_timeout = timeout;
-			if served > 0 {
-				read_timeout = idle_timeout;
-			}
+			// All per-connection I/O uses idle_timeout from the server handle.
+			// The outer timeout (from rest.start / serve) controls accept/startup
+			// only and is not passed to stream reads. This cleanly separates
+			// server lifecycle timeout from per-connection I/O timeout.
+			var read_timeout = idle_timeout;
 
 			match http.read_one_request(stream, &mut conn_buf, read_timeout) {
 				core.Result::Err(read_err) => {

@@ -254,3 +254,16 @@
   - `web-jwt@0.2.12`
   - `web-rest@0.2.12`
   - `web-client@0.2.12`
+
+- Fixed `web.rest` zero-timeout startup behavior:
+  - separated the outer `rest.start()` / accept-loop timeout from per-connection I/O timeout in `packages/web-rest/src/server.drift`
+  - per-connection reads now use `handle.idle_timeout_ms` instead of inheriting the startup timeout
+  - explicit short read deadlines in stress coverage are now configured through `handle.idle_timeout_ms`
+- Strengthened regression coverage for the `millis=0` path:
+  - `packages/web-rest/tests/e2e/zero_timeout_test.drift` now covers 5 separate connections plus keep-alive and `Connection: close`
+  - `tests/consumer/rest_sequential_test.drift` now exercises the same `millis=0` trigger through consumed packages
+  - source-built and consumer-built coverage now both pin the exact sequential separate-connection failure class reported by the app team
+- Bumped published `drift-web` package versions to `0.2.13`:
+  - `web-jwt@0.2.13`
+  - `web-rest@0.2.13`
+  - `web-client@0.2.13`
