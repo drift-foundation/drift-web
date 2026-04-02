@@ -7,10 +7,10 @@
   },
   "artifacts": [
     {
-      "kind": "package",
+      "kind": "library",
       "name": "web-jwt",
       "module_namespace": "web.jwt",
-      "version": "0.2.13",
+      "version": "0.2.14",
       "description": "HS256 JWT sign/verify with temporal claims validation",
       "entry_module": "packages/web-jwt/src/lib.drift",
       "modules": [
@@ -28,10 +28,10 @@
       ]
     },
     {
-      "kind": "package",
+      "kind": "library",
       "name": "web-rest",
       "module_namespace": "web.rest",
-      "version": "0.2.13",
+      "version": "0.2.14",
       "description": "HTTP/1.1 REST server with routing, guards, and JSON body handling",
       "entry_module": "packages/web-rest/src/lib.drift",
       "modules": [
@@ -51,7 +51,7 @@
         "packages/web-rest/src/validators.drift"
       ],
       "package_deps": [
-        {"name": "web-jwt", "version": "0.2.13"}
+        {"name": "web-jwt", "version": "0.2.14"}
       ],
       "assets": [
         "docs/integration-guide.md",
@@ -61,10 +61,10 @@
       ]
     },
     {
-      "kind": "package",
+      "kind": "library",
       "name": "web-client",
       "module_namespace": "web.client",
-      "version": "0.2.13",
+      "version": "0.2.14",
       "description": "HTTP/1.1 and HTTPS client for outbound requests",
       "entry_module": "packages/web-client/src/lib.drift",
       "modules": [
