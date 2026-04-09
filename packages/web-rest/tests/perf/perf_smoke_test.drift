@@ -14,7 +14,6 @@ import web.rest as rest;
 
 // Comparative performance guard for the REST server.
 // Run via `just perf-smoke`. Not part of `just test`.
-// Must be compiled with DRIFT_OPTIMIZED=1.
 // Do not run under DRIFT_MEMCHECK or DRIFT_ASAN.
 //
 // Requires Go baselines passed via environment:

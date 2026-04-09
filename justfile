@@ -149,21 +149,21 @@ perf: _require-env
 perf-smoke: _require-env
     @tools/perf_smoke_runner.sh
 
-# Build optimized perf binary to a stable path for strace/perf profiling.
+# Build perf binary to a stable path for strace/perf profiling.
 perf-build: _require-env
     @mkdir -p work/rest/bench/bin
-    @DRIFT_OPTIMIZED=1 tools/drift_test_parallel_runner.sh compile \
+    @tools/drift_test_parallel_runner.sh compile \
       --manifest drift-manifest.json --artifact web-rest \
       --file packages/web-rest/tests/perf/perf_test.drift \
       --target-word-bits 64
-    @DRIFT_OPTIMIZED=1 "${DRIFTC}" --target-word-bits 64 --optimized \
+    @"${DRIFTC}" --target-word-bits 64 \
       --entry "web.rest.tests.perf.perf_test::main" \
       packages/web-jwt/src/*.drift packages/web-rest/src/*.drift \
       packages/web-rest/tests/perf/perf_test.drift \
       -o work/rest/bench/bin/perf_test
     @echo "Binary: work/rest/bench/bin/perf_test"
 
-# Performance benchmarks: Go + Drift side-by-side (optimized).
+# Performance benchmarks: Go + Drift side-by-side.
 # Runs Go raw-TCP, Go net/http, Drift raw-TCP, Drift REST.
 # Do not run under DRIFT_MEMCHECK or DRIFT_ASAN.
 perf-test: _require-env
@@ -171,14 +171,14 @@ perf-test: _require-env
     @go run benchmarks/go/raw_tcp_bench.go
     @go run benchmarks/go/net_http_bench.go
     @echo ""
-    @echo "=== Drift (optimized) ==="
-    @DRIFT_OPTIMIZED=1 tools/drift_test_parallel_runner.sh run-one \
+    @echo "=== Drift ==="
+    @tools/drift_test_parallel_runner.sh run-one \
       --manifest drift-manifest.json --artifact web-rest \
       --test-file packages/web-rest/tests/perf/perf_test.drift \
       --target-word-bits 64
 # Raw TCP with TCP_NODELAY — compare against baseline-vt in perf-test.
 perf-nodelay: _require-env
-    @DRIFT_OPTIMIZED=1 tools/drift_test_parallel_runner.sh run-one \
+    @tools/drift_test_parallel_runner.sh run-one \
       --manifest drift-manifest.json --artifact web-rest \
       --test-file packages/web-rest/tests/perf/nodelay_test.drift \
       --target-word-bits 64

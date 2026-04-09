@@ -29,7 +29,7 @@ fi
 export GO_RAW_REQ_PER_SEC="${go_raw_rps}"
 export GO_HTTP_REQ_PER_SEC="${go_http_rps}"
 
-DRIFT_OPTIMIZED=1 "${SCRIPT_DIR}/drift_test_parallel_runner.sh" run-one \
+"${SCRIPT_DIR}/drift_test_parallel_runner.sh" run-one \
 	--src-root packages/web-jwt/src \
 	--src-root packages/web-rest/src \
 	--test-file packages/web-rest/tests/perf/perf_smoke_test.drift \

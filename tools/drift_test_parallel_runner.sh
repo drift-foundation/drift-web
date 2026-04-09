@@ -216,11 +216,6 @@ test_module_of() {
 	sed -n "s/^module[[:space:]]\\+\\(.*\\);\\{0,1\\}$/\\1/p" "${file}" | sed 's/;$//' | head -n1
 }
 
-OPTIMIZED_FLAG=()
-if [[ "${DRIFT_OPTIMIZED:-0}" == "1" ]]; then
-	OPTIMIZED_FLAG=("--optimized")
-fi
-
 build_pkg_flags() {
 	PKG_FLAGS=()
 	local pr
@@ -238,7 +233,7 @@ compile_only_file() {
 	local file="$1"
 	[[ -f "${file}" ]] || { echo "error: missing file ${file}" >&2; exit 2; }
 	build_pkg_flags
-	env -u DRIFT_MEMCHECK -u DRIFT_MASSIF "${DRIFTC}" --target-word-bits "${TARGET_WORD_BITS}" "${OPTIMIZED_FLAG[@]}" "${PKG_FLAGS[@]}" "${SRC_FILES[@]}" "${file}"
+	env -u DRIFT_MEMCHECK -u DRIFT_MASSIF "${DRIFTC}" --target-word-bits "${TARGET_WORD_BITS}" "${PKG_FLAGS[@]}" "${SRC_FILES[@]}" "${file}"
 }
 
 compile_test_binary() {
@@ -249,7 +244,7 @@ compile_test_binary() {
 	[[ -n "${test_module}" ]] || { echo "error: missing module declaration in ${test_file}" >&2; exit 2; }
 	local entry_symbol="${test_module}::main"
 	build_pkg_flags
-	env -u DRIFT_MEMCHECK -u DRIFT_MASSIF "${DRIFTC}" --target-word-bits "${TARGET_WORD_BITS}" "${OPTIMIZED_FLAG[@]}" "${PKG_FLAGS[@]}" --entry "${entry_symbol}" "${SRC_FILES[@]}" "${test_file}" -o "${bin_path}"
+	env -u DRIFT_MEMCHECK -u DRIFT_MASSIF "${DRIFTC}" --target-word-bits "${TARGET_WORD_BITS}" "${PKG_FLAGS[@]}" --entry "${entry_symbol}" "${SRC_FILES[@]}" "${test_file}" -o "${bin_path}"
 }
 
 run_binary() {
