@@ -25,7 +25,10 @@ DEFAULT_JOBS="4"
 if command -v nproc >/dev/null 2>&1; then
 	DEFAULT_JOBS="$(nproc)"
 fi
-JOBS="${DRIFT_BUILD_JOBS:-${DEFAULT_JOBS}}"
+# Job count precedence: --jobs flag > DRIFT_TEST_JOBS (shared cert contract) >
+# DRIFT_BUILD_JOBS (legacy) > nproc. DRIFT_TEST_JOBS is orthogonal to lane
+# selection (DRIFT_DEBUG) and applies identically to normal and debug lanes.
+JOBS="${DRIFT_TEST_JOBS:-${DRIFT_BUILD_JOBS:-${DEFAULT_JOBS}}}"
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
@@ -311,6 +314,39 @@ run_compiled_serial() {
 	done
 }
 
+# Parallel test execution. Each test logs to its own file; failures print
+# the captured log. Honors JOBS.
+run_compiled_parallel() {
+	local out_dir="$1"
+	mkdir -p "${out_dir}/run-logs"
+	RUN_PIDS=()
+	RUN_NAMES=()
+	RUN_LOGS=()
+	local i
+	for i in "${!COMPILE_BINS[@]}"; do
+		local name="${COMPILE_NAMES[$i]}"
+		local bin="${COMPILE_BINS[$i]}"
+		local log="${out_dir}/run-logs/${name}.log"
+		wait_for_slot
+		echo "run ${name}"
+		( run_binary "${bin}" ) >"${log}" 2>&1 &
+		RUN_PIDS+=("$!")
+		RUN_NAMES+=("${name}")
+		RUN_LOGS+=("${log}")
+	done
+	local failed=0
+	for i in "${!RUN_PIDS[@]}"; do
+		if ! wait "${RUN_PIDS[$i]}"; then
+			failed=1
+			echo "error: test failed: ${RUN_NAMES[$i]}" >&2
+			sed -n '1,400p' "${RUN_LOGS[$i]}" >&2 || true
+		fi
+	done
+	if [[ "${failed}" -ne 0 ]]; then
+		exit 1
+	fi
+}
+
 run_all_tests() {
 	mapfile -t CANDIDATE_TEST_FILES < <(find "${TEST_ROOT}" -type f -name "*.drift" | sort)
 	TEST_FILES=()
@@ -330,8 +366,8 @@ run_all_tests() {
 	mkdir -p "${out_dir}/bins" "${out_dir}/logs"
 	echo "parallel compile: ${#TEST_FILES[@]} tests with jobs=${JOBS}"
 	compile_all_parallel "${out_dir}"
-	echo "serial run: ${#TEST_FILES[@]} tests"
-	run_compiled_serial
+	echo "parallel run: ${#TEST_FILES[@]} tests with jobs=${JOBS}"
+	run_compiled_parallel "${out_dir}"
 }
 
 run_one_test() {
