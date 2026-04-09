@@ -13,6 +13,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BASELINES_FILE="${PROJECT_ROOT}/perf-baselines.json"
 
+# Perf gate is only meaningful against the normal runtime lane.
+# The debug-style runtime (DRIFT_DEBUG=1) trades throughput for diagnostics,
+# so its measurements cannot be compared to baselines tuned for normal.
+if [[ "${DRIFT_DEBUG:-0}" == "1" ]]; then
+    echo "[perf-gate] SKIP: debug-style runtime lane (DRIFT_DEBUG=1) — perf thresholds apply to normal lane only"
+    exit 0
+fi
+
 # --- Machine key ---
 MACHINE_KEY="$(bash "${SCRIPT_DIR}/machine_key.sh")"
 echo "[perf-gate] machine=${MACHINE_KEY}"
