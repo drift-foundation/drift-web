@@ -58,56 +58,56 @@ _test-suite:
 # All JWT unit tests (parallel compile, serial run).
 jwt-check-par: _require-env
     @tools/drift_test_parallel_runner.sh run-all \
-      --manifest drift-manifest.json --artifact web-jwt \
+      --manifest drift/manifest.json --artifact web-jwt \
       --test-root packages/web-jwt/tests/unit \
       --target-word-bits 64
 
 # Single JWT unit test.
 jwt-check-unit FILE: _require-env
     @tools/drift_test_parallel_runner.sh run-one \
-      --manifest drift-manifest.json --artifact web-jwt \
+      --manifest drift/manifest.json --artifact web-jwt \
       --test-file "{{FILE}}" \
       --target-word-bits 64
 
 # JWT e2e-style tests (no external services).
 jwt-e2e-par: _require-env
     @tools/drift_test_parallel_runner.sh run-all \
-      --manifest drift-manifest.json --artifact web-jwt \
+      --manifest drift/manifest.json --artifact web-jwt \
       --test-root packages/web-jwt/tests/e2e \
       --target-word-bits 64
 
 # Compile-only check (no execution).
 jwt-compile-check FILE="packages/web-jwt/src/lib.drift": _require-env
     @tools/drift_test_parallel_runner.sh compile \
-      --manifest drift-manifest.json --artifact web-jwt \
+      --manifest drift/manifest.json --artifact web-jwt \
       --file "{{FILE}}" \
       --target-word-bits 64
 
 # Compile all unit tests without running.
 jwt-compile-check-par: _require-env
     @tools/drift_test_parallel_runner.sh compile \
-      --manifest drift-manifest.json --artifact web-jwt \
+      --manifest drift/manifest.json --artifact web-jwt \
       --test-root packages/web-jwt/tests/unit \
       --target-word-bits 64
 
 # All REST unit tests (parallel compile, serial run).
 rest-check-par: _require-env
     @tools/drift_test_parallel_runner.sh run-all \
-      --manifest drift-manifest.json --artifact web-rest \
+      --manifest drift/manifest.json --artifact web-rest \
       --test-root packages/web-rest/tests/unit \
       --target-word-bits 64
 
 # REST e2e tests (startup path, integration-level coverage).
 rest-e2e-par: _require-env
     @tools/drift_test_parallel_runner.sh run-all \
-      --manifest drift-manifest.json --artifact web-rest \
+      --manifest drift/manifest.json --artifact web-rest \
       --test-root packages/web-rest/tests/e2e \
       --target-word-bits 64
 
 # Single REST unit test.
 rest-check-unit FILE: _require-env
     @tools/drift_test_parallel_runner.sh run-one \
-      --manifest drift-manifest.json --artifact web-rest \
+      --manifest drift/manifest.json --artifact web-rest \
       --test-file "{{FILE}}" \
       --target-word-bits 64
 
@@ -130,7 +130,7 @@ stress: _require-env
 # Internal: REST server stress (scenario A).
 _stress-rest:
     @tools/drift_test_parallel_runner.sh run-one \
-      --manifest drift-manifest.json --artifact web-rest \
+      --manifest drift/manifest.json --artifact web-rest \
       --test-file packages/web-rest/tests/stress/stress_test.drift \
       --target-word-bits 64
 
@@ -153,7 +153,7 @@ perf-smoke: _require-env
 perf-build: _require-env
     @mkdir -p work/rest/bench/bin
     @tools/drift_test_parallel_runner.sh compile \
-      --manifest drift-manifest.json --artifact web-rest \
+      --manifest drift/manifest.json --artifact web-rest \
       --file packages/web-rest/tests/perf/perf_test.drift \
       --target-word-bits 64
     @"${DRIFTC}" --target-word-bits 64 \
@@ -173,13 +173,13 @@ perf-test: _require-env
     @echo ""
     @echo "=== Drift ==="
     @tools/drift_test_parallel_runner.sh run-one \
-      --manifest drift-manifest.json --artifact web-rest \
+      --manifest drift/manifest.json --artifact web-rest \
       --test-file packages/web-rest/tests/perf/perf_test.drift \
       --target-word-bits 64
 # Raw TCP with TCP_NODELAY — compare against baseline-vt in perf-test.
 perf-nodelay: _require-env
     @tools/drift_test_parallel_runner.sh run-one \
-      --manifest drift-manifest.json --artifact web-rest \
+      --manifest drift/manifest.json --artifact web-rest \
       --test-file packages/web-rest/tests/perf/nodelay_test.drift \
       --target-word-bits 64
 
@@ -187,7 +187,7 @@ perf-nodelay: _require-env
 # Do not run under DRIFT_MEMCHECK or DRIFT_ASAN.
 rest-probe: _require-env
     tools/drift_test_parallel_runner.sh run-one \
-      --manifest drift-manifest.json --artifact web-rest \
+      --manifest drift/manifest.json --artifact web-rest \
       --test-file packages/web-rest/tests/perf/probe_test.drift \
       --target-word-bits 64
 
@@ -195,7 +195,7 @@ rest-probe: _require-env
 # Do not run under DRIFT_MEMCHECK or DRIFT_ASAN.
 rest-instrument: _require-env
     tools/drift_test_parallel_runner.sh run-one \
-      --manifest drift-manifest.json --artifact web-rest \
+      --manifest drift/manifest.json --artifact web-rest \
       --test-file packages/web-rest/tests/perf/instrument_test.drift \
       --target-word-bits 64
 
@@ -203,21 +203,21 @@ rest-instrument: _require-env
 # Do not run under DRIFT_MEMCHECK or DRIFT_ASAN.
 rest-decompose: _require-env
     tools/drift_test_parallel_runner.sh run-one \
-      --manifest drift-manifest.json --artifact web-rest \
+      --manifest drift/manifest.json --artifact web-rest \
       --test-file packages/web-rest/tests/perf/decompose_test.drift \
       --target-word-bits 64
 
 # Compile-only check for REST (no execution).
 rest-compile-check FILE="packages/web-rest/src/lib.drift": _require-env
     @tools/drift_test_parallel_runner.sh compile \
-      --manifest drift-manifest.json --artifact web-rest \
+      --manifest drift/manifest.json --artifact web-rest \
       --file "{{FILE}}" \
       --target-word-bits 64
 
 # All client unit tests (parallel compile, serial run).
 client-check-par: _require-env
     @tools/drift_test_parallel_runner.sh run-all \
-      --manifest drift-manifest.json --artifact web-client \
+      --manifest drift/manifest.json --artifact web-client \
       --test-root packages/web-client/tests/unit \
       --package-root {{PKG_ROOT}} \
       --target-word-bits 64
@@ -225,7 +225,7 @@ client-check-par: _require-env
 # Single client unit test.
 client-check-unit FILE: _require-env
     @tools/drift_test_parallel_runner.sh run-one \
-      --manifest drift-manifest.json --artifact web-client \
+      --manifest drift/manifest.json --artifact web-client \
       --test-file "{{FILE}}" \
       --package-root {{PKG_ROOT}} \
       --target-word-bits 64
@@ -233,7 +233,7 @@ client-check-unit FILE: _require-env
 # Client e2e tests (HTTP + HTTPS against local servers).
 client-e2e-par: _require-env
     @tools/drift_test_parallel_runner.sh run-all \
-      --manifest drift-manifest.json --artifact web-client \
+      --manifest drift/manifest.json --artifact web-client \
       --src-root packages/web-jwt/src \
       --src-root packages/web-rest/src \
       --test-root packages/web-client/tests/e2e \
@@ -243,7 +243,7 @@ client-e2e-par: _require-env
 # Single client e2e test.
 client-e2e-unit FILE: _require-env
     @tools/drift_test_parallel_runner.sh run-one \
-      --manifest drift-manifest.json --artifact web-client \
+      --manifest drift/manifest.json --artifact web-client \
       --src-root packages/web-jwt/src \
       --src-root packages/web-rest/src \
       --test-file "{{FILE}}" \
@@ -253,7 +253,7 @@ client-e2e-unit FILE: _require-env
 # Client pool perf benchmark.
 client-perf: _require-env
     @tools/drift_test_parallel_runner.sh run-one \
-      --manifest drift-manifest.json --artifact web-client \
+      --manifest drift/manifest.json --artifact web-client \
       --src-root packages/web-jwt/src \
       --src-root packages/web-rest/src \
       --test-file packages/web-client/tests/perf/pool_perf_test.drift \
@@ -269,7 +269,7 @@ client-https-e2e: _require-env
 	# Compile test binary.
 	"${DRIFTC}" --target-word-bits 64 \
 	  --package-root {{PKG_ROOT}} \
-	  --dep "$(jq -r '.artifacts[] | select(.name=="web-client") | .package_deps[] | select(.name=="net-tls") | "\(.name)@\(.version)"' drift-manifest.json)" \
+	  --dep "$(jq -r '.artifacts[] | select(.name=="web-client") | .package_deps[] | select(.name=="net-tls") | "\(.name)@\(.version)"' drift/manifest.json)" \
 	  --entry "web.client.tests.https.https_e2e_test::main" \
 	  packages/web-jwt/src/*.drift packages/web-rest/src/*.drift packages/web-client/src/*.drift \
 	  packages/web-client/tests/https/https_e2e_test.drift \
@@ -284,7 +284,7 @@ consumer-check: _require-env
 # Compile-only check for client (no execution).
 client-compile-check FILE="packages/web-client/src/lib.drift": _require-env
     @tools/drift_test_parallel_runner.sh compile \
-      --manifest drift-manifest.json --artifact web-client \
+      --manifest drift/manifest.json --artifact web-client \
       --package-root {{PKG_ROOT}} \
       --file "{{FILE}}" \
       --target-word-bits 64

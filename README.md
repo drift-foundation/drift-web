@@ -52,6 +52,6 @@ packages/
 examples/         # Small consumer examples
 docs/             # Usage guides and design docs
 tools/            # Test runners
-drift-manifest.json
+drift/manifest.json
 drift/trust.json  # Project-local trust store
 ```

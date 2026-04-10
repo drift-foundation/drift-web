@@ -14,7 +14,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-MANIFEST="${ROOT_DIR}/drift-manifest.json"
+MANIFEST="${ROOT_DIR}/drift/manifest.json"
 TEST_DIR="${ROOT_DIR}/tests/consumer"
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "${TMPDIR}"' EXIT

@@ -6,7 +6,7 @@
 # in this manifest, then the dep version must equal B's artifact version.
 set -euo pipefail
 
-MANIFEST="${1:-drift-manifest.json}"
+MANIFEST="${1:-drift/manifest.json}"
 
 if [[ ! -f "${MANIFEST}" ]]; then
     echo "error: manifest not found: ${MANIFEST}" >&2
