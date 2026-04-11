@@ -113,7 +113,15 @@ run_test "rest_sequential_test" \
     --dep "web-rest@${rest_ver}" \
     --dep "web-jwt@${jwt_ver}"
 
-# 5. web-client consumer (needs net-tls from external package root)
+# 5. web-rest throws-route consumer (public API surface regression)
+run_test "rest_throws_test" \
+    "consumer.rest_throws_test::main" \
+    "${TEST_DIR}/rest_throws_test.drift" \
+    no \
+    --dep "web-rest@${rest_ver}" \
+    --dep "web-jwt@${jwt_ver}"
+
+# 6. web-client consumer (needs net-tls from external package root)
 run_test "client_compile_test" \
     "consumer.client_compile_test::main" \
     "${TEST_DIR}/client_compile_test.drift" \

@@ -93,6 +93,9 @@ export {
 	// Route registration (nothrow: handler returns Result<Response, RestError>)
 	add_route,
 	add_group_route,
+	// Route registration (throws: handler returns Response, framework catches exceptions)
+	add_throws_route,
+	add_group_throws_route,
 	// Dispatch (for testing / custom server implementations)
 	dispatch,
 	// Server lifecycle (high-level — always runs on VT fiber)
@@ -303,6 +306,14 @@ pub fn add_route(a: &mut App, method: String, path: String, handler: core.Callba
 
 pub fn add_group_route(a: &mut App, group: &Group, method: String, path: String, handler: core.Callback2<&Request, &mut Context, core.Result<Response, RestError>>) nothrow -> core.Result<Void, RestError> {
 	return app.add_group_route(a, group, method, path, move handler);
+}
+
+pub fn add_throws_route(a: &mut App, method: String, path: String, handler: core.CallbackThrow2<&Request, &mut Context, Response>) nothrow -> core.Result<Void, RestError> {
+	return app.add_throws_route(a, method, path, move handler);
+}
+
+pub fn add_group_throws_route(a: &mut App, group: &Group, method: String, path: String, handler: core.CallbackThrow2<&Request, &mut Context, Response>) nothrow -> core.Result<Void, RestError> {
+	return app.add_group_throws_route(a, group, method, path, move handler);
 }
 
 pub fn dispatch(a: &App, req: &mut Request, ctx: &mut Context) nothrow -> core.Result<Response, RestError> {

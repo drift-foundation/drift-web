@@ -1,0 +1,322 @@
+module web.rest.tests.unit.throws_route_test;
+
+import std.core as core;
+import web.rest as rest;
+import web.rest.events as events;
+
+// Public-API regression tests for throws-style route registration.
+// All registration goes through rest.add_throws_route / rest.add_group_throws_route
+// (the published facade), NOT through internal web.rest.app.
+
+// --- Handlers ---
+
+fn _ok_handler(req: &rest.Request, ctx: &mut rest.Context) -> rest.Response {
+	return rest.json_response(200, "{\"ok\":true}");
+}
+
+fn _bad_request_handler(req: &rest.Request, ctx: &mut rest.Context) -> rest.Response {
+	throw events:RestBadRequest(tag = "pub-bad", message = "bad request");
+}
+
+fn _unauthorized_handler(req: &rest.Request, ctx: &mut rest.Context) -> rest.Response {
+	throw events:RestUnauthorized(tag = "pub-unauth", message = "unauthorized");
+}
+
+fn _forbidden_handler(req: &rest.Request, ctx: &mut rest.Context) -> rest.Response {
+	throw events:RestForbidden(tag = "pub-forbidden", message = "forbidden");
+}
+
+fn _not_found_handler(req: &rest.Request, ctx: &mut rest.Context) -> rest.Response {
+	throw events:RestNotFound(tag = "pub-notfound", message = "not found");
+}
+
+fn _conflict_handler(req: &rest.Request, ctx: &mut rest.Context) -> rest.Response {
+	throw events:RestConflict(tag = "pub-conflict", message = "conflict");
+}
+
+fn _internal_handler(req: &rest.Request, ctx: &mut rest.Context) -> rest.Response {
+	throw events:RestInternal(tag = "pub-internal", message = "internal");
+}
+
+// --- Helpers ---
+
+fn _build_app() nothrow -> rest.App {
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 8080);
+	match rest.build_app(move b) {
+		core.Result::Ok(a) => { return move a; },
+		core.Result::Err(_) => {
+			var b2 = rest.new_app_builder();
+			rest.bind(&mut b2, "127.0.0.1", 8080);
+			match rest.build_app(move b2) {
+				core.Result::Ok(a2) => { return move a2; },
+				core.Result::Err(_) => { return _unreachable(); }
+			}
+		}
+	}
+}
+
+fn _unreachable() nothrow -> rest.App {
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 8080);
+	match rest.build_app(move b) {
+		core.Result::Ok(a) => { return move a; },
+		core.Result::Err(_) => { return _unreachable(); }
+	}
+}
+
+// --- Scenarios ---
+
+// 100: throws route, handler returns normally → 200
+fn scenario_pub_throws_ok() nothrow -> Int {
+	var app = _build_app();
+	match rest.add_throws_route(&mut app, "GET", "/ok", core.callback_throw2(_ok_handler)) {
+		core.Result::Err(_) => { return 101; },
+		core.Result::Ok(_) => {}
+	}
+	var req = rest.new_request("GET", "/ok");
+	var ctx = rest.new_context();
+	match rest.dispatch(&app, &mut req, &mut ctx) {
+		core.Result::Err(_) => { return 102; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 103; }
+			if resp.body != "{\"ok\":true}" { return 104; }
+			return 0;
+		}
+	}
+}
+
+// 200: throws route, handler throws RestBadRequest → 400
+fn scenario_pub_throws_bad_request() nothrow -> Int {
+	var app = _build_app();
+	match rest.add_throws_route(&mut app, "POST", "/bad", core.callback_throw2(_bad_request_handler)) {
+		core.Result::Err(_) => { return 201; },
+		core.Result::Ok(_) => {}
+	}
+	var req = rest.new_request("POST", "/bad");
+	var ctx = rest.new_context();
+	match rest.dispatch(&app, &mut req, &mut ctx) {
+		core.Result::Ok(_) => { return 202; },
+		core.Result::Err(e) => {
+			if e.status != 400 { return 203; }
+			if e.event != "request-invalid" { return 204; }
+			if e.tag != "pub-bad" { return 205; }
+			return 0;
+		}
+	}
+}
+
+// 300: throws route, handler throws RestUnauthorized → 401
+fn scenario_pub_throws_unauthorized() nothrow -> Int {
+	var app = _build_app();
+	match rest.add_throws_route(&mut app, "GET", "/unauth", core.callback_throw2(_unauthorized_handler)) {
+		core.Result::Err(_) => { return 301; },
+		core.Result::Ok(_) => {}
+	}
+	var req = rest.new_request("GET", "/unauth");
+	var ctx = rest.new_context();
+	match rest.dispatch(&app, &mut req, &mut ctx) {
+		core.Result::Ok(_) => { return 302; },
+		core.Result::Err(e) => {
+			if e.status != 401 { return 303; }
+			if e.event != "unauthorized" { return 304; }
+			if e.tag != "pub-unauth" { return 305; }
+			return 0;
+		}
+	}
+}
+
+// 400: throws route, handler throws RestForbidden → 403
+fn scenario_pub_throws_forbidden() nothrow -> Int {
+	var app = _build_app();
+	match rest.add_throws_route(&mut app, "GET", "/forbid", core.callback_throw2(_forbidden_handler)) {
+		core.Result::Err(_) => { return 401; },
+		core.Result::Ok(_) => {}
+	}
+	var req = rest.new_request("GET", "/forbid");
+	var ctx = rest.new_context();
+	match rest.dispatch(&app, &mut req, &mut ctx) {
+		core.Result::Ok(_) => { return 402; },
+		core.Result::Err(e) => {
+			if e.status != 403 { return 403; }
+			if e.event != "forbidden" { return 404; }
+			if e.tag != "pub-forbidden" { return 405; }
+			return 0;
+		}
+	}
+}
+
+// 500: throws route, handler throws RestNotFound → 404
+fn scenario_pub_throws_not_found() nothrow -> Int {
+	var app = _build_app();
+	match rest.add_throws_route(&mut app, "GET", "/missing", core.callback_throw2(_not_found_handler)) {
+		core.Result::Err(_) => { return 501; },
+		core.Result::Ok(_) => {}
+	}
+	var req = rest.new_request("GET", "/missing");
+	var ctx = rest.new_context();
+	match rest.dispatch(&app, &mut req, &mut ctx) {
+		core.Result::Ok(_) => { return 502; },
+		core.Result::Err(e) => {
+			if e.status != 404 { return 503; }
+			if e.event != "not-found" { return 504; }
+			if e.tag != "pub-notfound" { return 505; }
+			return 0;
+		}
+	}
+}
+
+// 600: throws route, handler throws RestConflict → 409
+fn scenario_pub_throws_conflict() nothrow -> Int {
+	var app = _build_app();
+	match rest.add_throws_route(&mut app, "PUT", "/conflict", core.callback_throw2(_conflict_handler)) {
+		core.Result::Err(_) => { return 601; },
+		core.Result::Ok(_) => {}
+	}
+	var req = rest.new_request("PUT", "/conflict");
+	var ctx = rest.new_context();
+	match rest.dispatch(&app, &mut req, &mut ctx) {
+		core.Result::Ok(_) => { return 602; },
+		core.Result::Err(e) => {
+			if e.status != 409 { return 603; }
+			if e.event != "conflict" { return 604; }
+			if e.tag != "pub-conflict" { return 605; }
+			return 0;
+		}
+	}
+}
+
+// 700: throws route, handler throws RestInternal → 500
+fn scenario_pub_throws_internal() nothrow -> Int {
+	var app = _build_app();
+	match rest.add_throws_route(&mut app, "GET", "/err", core.callback_throw2(_internal_handler)) {
+		core.Result::Err(_) => { return 701; },
+		core.Result::Ok(_) => {}
+	}
+	var req = rest.new_request("GET", "/err");
+	var ctx = rest.new_context();
+	match rest.dispatch(&app, &mut req, &mut ctx) {
+		core.Result::Ok(_) => { return 702; },
+		core.Result::Err(e) => {
+			if e.status != 500 { return 703; }
+			if e.event != "internal" { return 704; }
+			if e.tag != "pub-internal" { return 705; }
+			return 0;
+		}
+	}
+}
+
+// 800: group throws route via public API → 200
+fn scenario_pub_group_throws_ok() nothrow -> Int {
+	var app = _build_app();
+	match rest.add_group(&mut app, "/api") {
+		core.Result::Err(_) => { return 801; },
+		core.Result::Ok(group) => {
+			match rest.add_group_throws_route(&mut app, &group, "GET", "/ok", core.callback_throw2(_ok_handler)) {
+				core.Result::Err(_) => { return 802; },
+				core.Result::Ok(_) => {}
+			}
+		}
+	}
+	var req = rest.new_request("GET", "/api/ok");
+	var ctx = rest.new_context();
+	match rest.dispatch(&app, &mut req, &mut ctx) {
+		core.Result::Err(_) => { return 803; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 804; }
+			if resp.body != "{\"ok\":true}" { return 805; }
+			return 0;
+		}
+	}
+}
+
+// 900: group throws route, handler throws → framework catches
+fn scenario_pub_group_throws_exception() nothrow -> Int {
+	var app = _build_app();
+	match rest.add_group(&mut app, "/v1") {
+		core.Result::Err(_) => { return 901; },
+		core.Result::Ok(group) => {
+			match rest.add_group_throws_route(&mut app, &group, "POST", "/fail", core.callback_throw2(_bad_request_handler)) {
+				core.Result::Err(_) => { return 902; },
+				core.Result::Ok(_) => {}
+			}
+		}
+	}
+	var req = rest.new_request("POST", "/v1/fail");
+	var ctx = rest.new_context();
+	match rest.dispatch(&app, &mut req, &mut ctx) {
+		core.Result::Ok(_) => { return 903; },
+		core.Result::Err(e) => {
+			if e.status != 400 { return 904; }
+			if e.event != "request-invalid" { return 905; }
+			if e.tag != "pub-bad" { return 906; }
+			return 0;
+		}
+	}
+}
+
+// 1000: nothrow and throws routes coexist on same app
+fn scenario_pub_mixed_routes() nothrow -> Int {
+	var app = _build_app();
+
+	// nothrow route
+	match rest.add_route(&mut app, "GET", "/nothrow", core.callback2(_nothrow_handler)) {
+		core.Result::Err(_) => { return 1001; },
+		core.Result::Ok(_) => {}
+	}
+	// throws route
+	match rest.add_throws_route(&mut app, "GET", "/throws", core.callback_throw2(_ok_handler)) {
+		core.Result::Err(_) => { return 1002; },
+		core.Result::Ok(_) => {}
+	}
+
+	// dispatch nothrow route
+	var req1 = rest.new_request("GET", "/nothrow");
+	var ctx1 = rest.new_context();
+	match rest.dispatch(&app, &mut req1, &mut ctx1) {
+		core.Result::Err(_) => { return 1003; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 1004; }
+		}
+	}
+
+	// dispatch throws route
+	var req2 = rest.new_request("GET", "/throws");
+	var ctx2 = rest.new_context();
+	match rest.dispatch(&app, &mut req2, &mut ctx2) {
+		core.Result::Err(_) => { return 1005; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 1006; }
+			if resp.body != "{\"ok\":true}" { return 1007; }
+			return 0;
+		}
+	}
+}
+
+fn _nothrow_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	return core.Result::Ok(rest.json_response(200, "{\"nothrow\":true}"));
+}
+
+fn main() nothrow -> Int {
+	val a = scenario_pub_throws_ok();
+	if a != 0 { return a; }
+	val b = scenario_pub_throws_bad_request();
+	if b != 0 { return b; }
+	val c = scenario_pub_throws_unauthorized();
+	if c != 0 { return c; }
+	val d = scenario_pub_throws_forbidden();
+	if d != 0 { return d; }
+	val e = scenario_pub_throws_not_found();
+	if e != 0 { return e; }
+	val f = scenario_pub_throws_conflict();
+	if f != 0 { return f; }
+	val g = scenario_pub_throws_internal();
+	if g != 0 { return g; }
+	val h = scenario_pub_group_throws_ok();
+	if h != 0 { return h; }
+	val i = scenario_pub_group_throws_exception();
+	if i != 0 { return i; }
+	val j = scenario_pub_mixed_routes();
+	if j != 0 { return j; }
+	return 0;
+}

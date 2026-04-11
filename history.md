@@ -218,6 +218,7 @@
 - Advanced downstream client/toolchain alignment:
   - `web-client` now consumes `net-tls@0.3.11`
   - current downstream/runtime guidance tracks the `0.27.99` SIGPIPE runtime fix for network failure paths
+
 - Bumped published `drift-web` package versions to `0.2.9`:
   - `web-jwt@0.2.9`
   - `web-rest@0.2.9`
@@ -267,3 +268,27 @@
   - `web-jwt@0.2.13`
   - `web-rest@0.2.13`
   - `web-client@0.2.13`
+
+## 2026-04-10
+
+- Exposed throws-style route registration on the public `web.rest` facade:
+  - `packages/web-rest/src/lib.drift` now exports:
+    - `add_throws_route`
+    - `add_group_throws_route`
+  - this closes a public API gap where the framework already supported throws-style route handling internally but downstream apps could not access it through the published package surface
+- Added public-surface regression coverage for throws-style routes:
+  - source-built public-facade coverage in `packages/web-rest/tests/unit/throws_route_test.drift`
+  - consumer-path package coverage in `tests/consumer/rest_throws_test.drift`
+  - coverage now exercises:
+    - top-level throws routes
+    - group throws routes
+    - framework exception mapping across the typed REST event classes
+    - mixed nothrow + throws route coexistence
+    - guarded group behavior through the public route API
+- Expanded the default consumer-path suite:
+  - `tools/run-consumer-tests.sh` now includes the throws-route consumer regression so `just test` would catch future “works internally but not from the published package facade” gaps earlier
+  - `consumer-check` passes all 6 consumer tests under memcheck on the updated compiler, including `rest_throws_test` and the layered package-root `client_compile_test`
+- Bumped published `drift-web` package versions to `0.2.15`:
+  - `web-jwt@0.2.15`
+  - `web-rest@0.2.15`
+  - `web-client@0.2.15`
