@@ -271,7 +271,7 @@ pub fn add_group_throws_route(app: &mut App, group: &Group, method: String, path
 
 // --- Throws adapter (internal, called at dispatch time) ---
 
-fn _extract_exc_string(dv: DiagnosticValue) nothrow -> String {
+fn _exc_string(dv: DiagnosticValue) nothrow -> String {
 	match dv.as_string() {
 		Optional::Some(s) => { return s; },
 		Optional::None => { return ""; }
@@ -284,29 +284,35 @@ fn _dispatch_throws(app: &App, idx: Int, req: &request.Request, ctx: &mut contex
 		val resp = (*h).call(req, ctx);
 		return core.Result::Ok(resp);
 	} catch events:RestBadRequest(e) {
-		val t = _extract_exc_string(e.attrs["tag"]);
-		val m = _extract_exc_string(e.attrs["message"]);
-		return core.Result::Err(errors.rest_error(400, "request-invalid", t, m));
+		val t = _exc_string(e.attrs["tag"]);
+		val m = _exc_string(e.attrs["message"]);
+		val f = e.attrs["fields"].entries();
+		return core.Result::Err(errors.RestError(status = 400, event = "request-invalid", tag = t, message = m, fields = f));
 	} catch events:RestUnauthorized(e) {
-		val t = _extract_exc_string(e.attrs["tag"]);
-		val m = _extract_exc_string(e.attrs["message"]);
-		return core.Result::Err(errors.rest_error(401, "unauthorized", t, m));
+		val t = _exc_string(e.attrs["tag"]);
+		val m = _exc_string(e.attrs["message"]);
+		val f = e.attrs["fields"].entries();
+		return core.Result::Err(errors.RestError(status = 401, event = "unauthorized", tag = t, message = m, fields = f));
 	} catch events:RestForbidden(e) {
-		val t = _extract_exc_string(e.attrs["tag"]);
-		val m = _extract_exc_string(e.attrs["message"]);
-		return core.Result::Err(errors.rest_error(403, "forbidden", t, m));
+		val t = _exc_string(e.attrs["tag"]);
+		val m = _exc_string(e.attrs["message"]);
+		val f = e.attrs["fields"].entries();
+		return core.Result::Err(errors.RestError(status = 403, event = "forbidden", tag = t, message = m, fields = f));
 	} catch events:RestNotFound(e) {
-		val t = _extract_exc_string(e.attrs["tag"]);
-		val m = _extract_exc_string(e.attrs["message"]);
-		return core.Result::Err(errors.rest_error(404, "not-found", t, m));
+		val t = _exc_string(e.attrs["tag"]);
+		val m = _exc_string(e.attrs["message"]);
+		val f = e.attrs["fields"].entries();
+		return core.Result::Err(errors.RestError(status = 404, event = "not-found", tag = t, message = m, fields = f));
 	} catch events:RestConflict(e) {
-		val t = _extract_exc_string(e.attrs["tag"]);
-		val m = _extract_exc_string(e.attrs["message"]);
-		return core.Result::Err(errors.rest_error(409, "conflict", t, m));
+		val t = _exc_string(e.attrs["tag"]);
+		val m = _exc_string(e.attrs["message"]);
+		val f = e.attrs["fields"].entries();
+		return core.Result::Err(errors.RestError(status = 409, event = "conflict", tag = t, message = m, fields = f));
 	} catch events:RestInternal(e) {
-		val t = _extract_exc_string(e.attrs["tag"]);
-		val m = _extract_exc_string(e.attrs["message"]);
-		return core.Result::Err(errors.rest_error(500, "internal", t, m));
+		val t = _exc_string(e.attrs["tag"]);
+		val m = _exc_string(e.attrs["message"]);
+		val f = e.attrs["fields"].entries();
+		return core.Result::Err(errors.RestError(status = 500, event = "internal", tag = t, message = m, fields = f));
 	} catch {
 		return core.Result::Err(errors.rest_error(500, "internal", "internal-error", "unhandled exception"));
 	}

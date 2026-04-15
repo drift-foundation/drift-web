@@ -3,6 +3,13 @@ module web.rest.tests.unit.validation_collector_test;
 import std.core as core;
 import web.rest as rest;
 
+fn _dv_str(dv: &DiagnosticValue) nothrow -> String {
+	match dv.as_string() {
+		Optional::Some(s) => { return s; },
+		Optional::None => { return ""; }
+	}
+}
+
 // --- new + has_validation_errors (empty) ---
 
 fn test_new_is_empty() nothrow -> Int {
@@ -18,9 +25,9 @@ fn test_add_single_field() nothrow -> Int {
 	rest.add_validation_error(&mut ve, "email", "missing-field");
 	if rest.has_validation_errors(&ve) != true { return 1101; }
 	val err = rest.validation_error(move ve);
-	if err.field_keys.len != 1 { return 1102; }
-	if err.field_keys[0] != "email" { return 1103; }
-	if err.field_values[0] != "missing-field" { return 1104; }
+	if err.fields.len != 1 { return 1102; }
+	if err.fields[0].key != "email" { return 1103; }
+	if _dv_str(&err.fields[0].value) != "missing-field" { return 1104; }
 	return 0;
 }
 
@@ -36,9 +43,9 @@ fn test_merge_from_validator() nothrow -> Int {
 	}
 	if rest.has_validation_errors(&ve) != true { return 1202; }
 	val err = rest.validation_error(move ve);
-	if err.field_keys.len != 1 { return 1203; }
-	if err.field_keys[0] != "page" { return 1204; }
-	if err.field_values[0] != "invalid-integer" { return 1205; }
+	if err.fields.len != 1 { return 1203; }
+	if err.fields[0].key != "page" { return 1204; }
+	if _dv_str(&err.fields[0].value) != "invalid-integer" { return 1205; }
 	return 0;
 }
 
@@ -57,11 +64,11 @@ fn test_merge_multiple_errors() nothrow -> Int {
 		}
 	}
 	val err = rest.validation_error(move ve);
-	if err.field_keys.len != 2 { return 1303; }
-	if err.field_keys[0] != "page" { return 1304; }
-	if err.field_values[0] != "invalid-integer" { return 1305; }
-	if err.field_keys[1] != "name" { return 1306; }
-	if err.field_values[1] != "empty-value" { return 1307; }
+	if err.fields.len != 2 { return 1303; }
+	if err.fields[0].key != "page" { return 1304; }
+	if _dv_str(&err.fields[0].value) != "invalid-integer" { return 1305; }
+	if err.fields[1].key != "name" { return 1306; }
+	if _dv_str(&err.fields[1].value) != "empty-value" { return 1307; }
 	return 0;
 }
 
@@ -72,9 +79,9 @@ fn test_last_write_wins_add() nothrow -> Int {
 	rest.add_validation_error(&mut ve, "email", "missing-field");
 	rest.add_validation_error(&mut ve, "email", "invalid-format");
 	val err = rest.validation_error(move ve);
-	if err.field_keys.len != 1 { return 1401; }
-	if err.field_keys[0] != "email" { return 1402; }
-	if err.field_values[0] != "invalid-format" { return 1403; }
+	if err.fields.len != 1 { return 1401; }
+	if err.fields[0].key != "email" { return 1402; }
+	if _dv_str(&err.fields[0].value) != "invalid-format" { return 1403; }
 	return 0;
 }
 
@@ -88,8 +95,8 @@ fn test_last_write_wins_merge() nothrow -> Int {
 		}
 	}
 	val err = rest.validation_error(move ve);
-	if err.field_keys.len != 1 { return 1502; }
-	if err.field_values[0] != "invalid-integer" { return 1503; }
+	if err.fields.len != 1 { return 1502; }
+	if _dv_str(&err.fields[0].value) != "invalid-integer" { return 1503; }
 	return 0;
 }
 
@@ -103,7 +110,7 @@ fn test_validation_error_contract() nothrow -> Int {
 	if err.status != 400 { return 1601; }
 	if err.event != "request-invalid" { return 1602; }
 	if err.tag != "validation-failed" { return 1603; }
-	if err.field_keys.len != 2 { return 1604; }
+	if err.fields.len != 2 { return 1604; }
 	return 0;
 }
 

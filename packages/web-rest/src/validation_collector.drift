@@ -42,10 +42,19 @@ pub fn add_validation_error(ve: &mut ValidationErrors, field: String, tag: Strin
 	return core.void_value();
 }
 
+fn _dv_string(dv: &DiagnosticValue) nothrow -> String {
+	match dv.as_string() {
+		Optional::Some(s) => { return s; },
+		Optional::None => { return ""; }
+	}
+}
+
 pub fn merge_validation_error(ve: &mut ValidationErrors, err: errors.RestError) nothrow -> Void {
 	var i = 0;
-	while i < err.field_keys.len {
-		_set_field(ve, err.field_keys[i], err.field_values[i]);
+	while i < err.fields.len {
+		val entry = &err.fields[i];
+		val v = _dv_string(&entry.value);
+		_set_field(ve, entry.key, v);
 		i = i + 1;
 	}
 	return core.void_value();

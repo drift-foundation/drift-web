@@ -427,17 +427,20 @@ fn _throws_ok_handler(req: &rest.Request, ctx: &mut rest.Context) -> rest.Respon
 
 // Throws handler that throws RestBadRequest
 fn _throws_bad_request_handler(req: &rest.Request, ctx: &mut rest.Context) -> rest.Response {
-	throw events:RestBadRequest(tag = "test-bad", message = "bad request test");
+	var f: Array<core.DiagnosticEntry> = [];
+	throw events:RestBadRequest(tag = "test-bad", message = "bad request test", fields = DiagnosticValue::Object(move f));
 }
 
 // Throws handler that throws RestUnauthorized
 fn _throws_unauthorized_handler(req: &rest.Request, ctx: &mut rest.Context) -> rest.Response {
-	throw events:RestUnauthorized(tag = "test-unauth", message = "unauthorized test");
+	var f: Array<core.DiagnosticEntry> = [];
+	throw events:RestUnauthorized(tag = "test-unauth", message = "unauthorized test", fields = DiagnosticValue::Object(move f));
 }
 
 // Throws handler that throws RestInternal
 fn _throws_internal_handler(req: &rest.Request, ctx: &mut rest.Context) -> rest.Response {
-	throw events:RestInternal(tag = "test-internal", message = "internal test");
+	var f: Array<core.DiagnosticEntry> = [];
+	throw events:RestInternal(tag = "test-internal", message = "internal test", fields = DiagnosticValue::Object(move f));
 }
 
 // Scenario: throws handler returns normally → Ok(Response)

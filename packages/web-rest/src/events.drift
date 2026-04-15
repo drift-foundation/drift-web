@@ -9,9 +9,9 @@ export {
 	RestInternal
 };
 
-pub exception RestBadRequest(tag: String, message: String)
-pub exception RestUnauthorized(tag: String, message: String)
-pub exception RestForbidden(tag: String, message: String)
-pub exception RestNotFound(tag: String, message: String)
-pub exception RestConflict(tag: String, message: String)
-pub exception RestInternal(tag: String, message: String)
+pub exception RestBadRequest(tag: String, message: String, fields: DiagnosticValue)
+pub exception RestUnauthorized(tag: String, message: String, fields: DiagnosticValue)
+pub exception RestForbidden(tag: String, message: String, fields: DiagnosticValue)
+pub exception RestNotFound(tag: String, message: String, fields: DiagnosticValue)
+pub exception RestConflict(tag: String, message: String, fields: DiagnosticValue)
+pub exception RestInternal(tag: String, message: String, fields: DiagnosticValue)

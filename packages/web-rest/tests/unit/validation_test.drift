@@ -4,6 +4,13 @@ import std.core as core;
 import std.json as json;
 import web.rest as rest;
 
+fn _dv_str(dv: &DiagnosticValue) nothrow -> String {
+	match dv.as_string() {
+		Optional::Some(s) => { return s; },
+		Optional::None => { return ""; }
+	}
+}
+
 // Story 3: Invalid input path returning request-invalid with structured fields.
 // Tests require_query_param, require_body_json, and error envelope with fields.
 
@@ -18,9 +25,9 @@ fn scenario_missing_query_param() nothrow -> Int {
 			if e.status != 400 { return 102; }
 			if e.event != "request-invalid" { return 103; }
 			if e.tag != "missing-query-param" { return 104; }
-			if e.field_keys.len != 1 { return 105; }
-			if e.field_keys[0] != "q" { return 106; }
-			if e.field_values[0] != "required" { return 107; }
+			if e.fields.len != 1 { return 105; }
+			if e.fields[0].key != "q" { return 106; }
+			if _dv_str(&e.fields[0].value) != "required" { return 107; }
 			return 0;
 		}
 	}

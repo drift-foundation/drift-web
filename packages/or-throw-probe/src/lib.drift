@@ -1,0 +1,35 @@
+module probe;
+
+import std.core as core;
+
+export {
+	ProbeError,
+	ProbeException,
+	make_probe_ok,
+	make_probe_err,
+	make_string_err
+};
+
+pub struct ProbeError {
+	pub code: Int
+}
+
+pub exception ProbeException(code: Int)
+
+implement core.Throw for ProbeError {
+	pub fn throw_self(var self: ProbeError) throws {
+		throw ProbeException(code = self.code);
+	}
+}
+
+pub fn make_probe_ok() nothrow -> core.Result<Int, ProbeError> {
+	return core.Result::Ok(42);
+}
+
+pub fn make_probe_err() nothrow -> core.Result<Int, ProbeError> {
+	return core.Result::Err(ProbeError(code = 42));
+}
+
+pub fn make_string_err() nothrow -> core.Result<Int, String> {
+	return core.Result::Err("bad");
+}

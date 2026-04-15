@@ -4,6 +4,13 @@ import std.core as core;
 import std.json as json;
 import web.rest as rest;
 
+fn _dv_str(dv: &DiagnosticValue) nothrow -> String {
+	match dv.as_string() {
+		Optional::Some(s) => { return s; },
+		Optional::None => { return ""; }
+	}
+}
+
 // --- require_json_string ---
 
 fn test_require_json_string_ok() nothrow -> Int {
@@ -33,9 +40,9 @@ fn test_require_json_string_missing() nothrow -> Int {
 					if e.status != 400 { return 1103; }
 					if e.event != "request-invalid" { return 1104; }
 					if e.tag != "missing-field" { return 1105; }
-					if e.field_keys.len != 1 { return 1106; }
-					if e.field_keys[0] != "name" { return 1107; }
-					if e.field_values[0] != "missing-field" { return 1108; }
+					if e.fields.len != 1 { return 1106; }
+					if e.fields[0].key != "name" { return 1107; }
+					if _dv_str(&e.fields[0].value) != "missing-field" { return 1108; }
 					return 0;
 				}
 			}
@@ -52,9 +59,9 @@ fn test_require_json_string_wrong_type() nothrow -> Int {
 				core.Result::Ok(_) => { return 1202; },
 				core.Result::Err(e) => {
 					if e.tag != "invalid-type" { return 1203; }
-					if e.field_keys.len != 1 { return 1204; }
-					if e.field_keys[0] != "name" { return 1205; }
-					if e.field_values[0] != "invalid-type" { return 1206; }
+					if e.fields.len != 1 { return 1204; }
+					if e.fields[0].key != "name" { return 1205; }
+					if _dv_str(&e.fields[0].value) != "invalid-type" { return 1206; }
 					return 0;
 				}
 			}
@@ -89,8 +96,8 @@ fn test_require_json_int_missing() nothrow -> Int {
 				core.Result::Ok(_) => { return 2102; },
 				core.Result::Err(e) => {
 					if e.tag != "missing-field" { return 2103; }
-					if e.field_keys[0] != "age" { return 2104; }
-					if e.field_values[0] != "missing-field" { return 2105; }
+					if e.fields[0].key != "age" { return 2104; }
+					if _dv_str(&e.fields[0].value) != "missing-field" { return 2105; }
 					return 0;
 				}
 			}
@@ -107,8 +114,8 @@ fn test_require_json_int_wrong_type() nothrow -> Int {
 				core.Result::Ok(_) => { return 2202; },
 				core.Result::Err(e) => {
 					if e.tag != "invalid-type" { return 2203; }
-					if e.field_keys[0] != "age" { return 2204; }
-					if e.field_values[0] != "invalid-type" { return 2205; }
+					if e.fields[0].key != "age" { return 2204; }
+					if _dv_str(&e.fields[0].value) != "invalid-type" { return 2205; }
 					return 0;
 				}
 			}
@@ -159,8 +166,8 @@ fn test_require_json_bool_missing() nothrow -> Int {
 				core.Result::Ok(_) => { return 3202; },
 				core.Result::Err(e) => {
 					if e.tag != "missing-field" { return 3203; }
-					if e.field_keys[0] != "active" { return 3204; }
-					if e.field_values[0] != "missing-field" { return 3205; }
+					if e.fields[0].key != "active" { return 3204; }
+					if _dv_str(&e.fields[0].value) != "missing-field" { return 3205; }
 					return 0;
 				}
 			}
@@ -177,8 +184,8 @@ fn test_require_json_bool_wrong_type() nothrow -> Int {
 				core.Result::Ok(_) => { return 3302; },
 				core.Result::Err(e) => {
 					if e.tag != "invalid-type" { return 3303; }
-					if e.field_keys[0] != "active" { return 3304; }
-					if e.field_values[0] != "invalid-type" { return 3305; }
+					if e.fields[0].key != "active" { return 3304; }
+					if _dv_str(&e.fields[0].value) != "invalid-type" { return 3305; }
 					return 0;
 				}
 			}

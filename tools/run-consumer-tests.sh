@@ -23,6 +23,7 @@ trap 'rm -rf "${TMPDIR}"' EXIT
 jwt_ver=$(jq -r '.artifacts[] | select(.name=="web-jwt") | .version' "${MANIFEST}")
 rest_ver=$(jq -r '.artifacts[] | select(.name=="web-rest") | .version' "${MANIFEST}")
 client_ver=$(jq -r '.artifacts[] | select(.name=="web-client") | .version' "${MANIFEST}")
+probe_ver=$(jq -r '.artifacts[] | select(.name=="or-throw-probe") | .version' "${MANIFEST}")
 tls_dep=$(jq -r '.artifacts[] | select(.name=="web-client") | .package_deps[] | select(.name=="net-tls") | "\(.name)@\(.version)"' "${MANIFEST}")
 
 # --- Stage our packages locally ---
@@ -121,7 +122,22 @@ run_test "rest_throws_test" \
     --dep "web-rest@${rest_ver}" \
     --dep "web-jwt@${jwt_ver}"
 
-# 6. web-client consumer (needs net-tls from external package root)
+# 6. web-rest or_throw consumer (typed Throw path regression)
+run_test "rest_or_throw_test" \
+    "consumer.rest_or_throw_test::main" \
+    "${TEST_DIR}/rest_or_throw_test.drift" \
+    no \
+    --dep "web-rest@${rest_ver}" \
+    --dep "web-jwt@${jwt_ver}"
+
+# 7. K28 probe consumer (package-local ProbeError + stdlib String)
+run_test "or_throw_probe_test" \
+    "consumer.or_throw_probe_test::main" \
+    "${TEST_DIR}/or_throw_probe_test.drift" \
+    no \
+    --dep "or-throw-probe@${probe_ver}"
+
+# 8. web-client consumer (needs net-tls from external package root)
 run_test "client_compile_test" \
     "consumer.client_compile_test::main" \
     "${TEST_DIR}/client_compile_test.drift" \

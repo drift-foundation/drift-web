@@ -292,3 +292,26 @@
   - `web-jwt@0.2.15`
   - `web-rest@0.2.15`
   - `web-client@0.2.15`
+
+## 2026-04-15
+
+- Adopted the new structured-diagnostics API across the REST error / throws path:
+  - `RestError` now carries `fields: Array<core.DiagnosticEntry>` instead of parallel `field_keys` / `field_values: Array<String>` (`packages/web-rest/src/errors.drift`)
+  - each typed REST exception in `packages/web-rest/src/events.drift` (`RestBadRequest`, `RestUnauthorized`, `RestForbidden`, `RestNotFound`, `RestConflict`, `RestInternal`) gains a `fields: DiagnosticValue` payload
+  - added `implement core.Throw for RestError` so a `RestError` value re-throws as the matching typed exception per status, propagating its `fields` as `DiagnosticValue::Object`
+  - `_dispatch_throws` (`packages/web-rest/src/app.drift`) now extracts `fields` from exception attrs and constructs `RestError` directly with the structured payload
+  - `error_envelope` (`packages/web-rest/src/response.drift`) and `merge_validation_error` (`packages/web-rest/src/validation_collector.drift`) updated to iterate the new `Array<DiagnosticEntry>` shape
+- Updated all affected REST unit tests to the new field-array shape (`dispatch_test`, `json_extract_test`, `throws_route_test`, `ux_pass2_test`, `validation_test`, `validation_collector_test`, `validators_test`)
+- Added the K28 diagnostic probe package to exercise package-boundary `Throw`/`Result` interaction:
+  - new `or-throw-probe` library at `packages/or-throw-probe/src/lib.drift` exposing `ProbeError` + `ProbeException` (with `core.Throw` impl) and `make_probe_ok` / `make_probe_err` / `make_string_err`
+  - registered as a published artifact in `drift/manifest.json` (`or-throw-probe@0.0.1`) and trusted under `probe.*` in `drift/trust.json`
+  - source-built unit coverage in `packages/web-rest/tests/unit/or_throw_probe_test.drift`
+  - new consumer-path coverage:
+    - `tests/consumer/or_throw_probe_test.drift` — package-local `ProbeError` + stdlib `String` over the package boundary
+    - `tests/consumer/rest_or_throw_test.drift` — typed `Throw` regression through the REST package
+  - `tools/run-consumer-tests.sh` runs the two new consumer tests
+- Picked up promoted toolchain `driftc 0.27.198 / git f3aeff68` (Array<String> / Result::Ok ownership regression fixed plus expanded ownership-matrix + package-boundary coverage upstream)
+- Validation under the new toolchain:
+  - `just rest-check-par` — 16/16 REST unit tests pass
+  - `just test` — full suite green, memcheck clean (0 leaks, 0 errors) including all consumer tests
+  - `just stress-test` and `just perf-smoke` — pass

@@ -1,0 +1,115 @@
+module web.rest.tests.unit.or_throw_probe_test;
+
+import std.core as core;
+import web.rest as rest;
+
+// Tests that .or_throw() on Result<T, RestError> (e.g. from require_query_param)
+// flows through the typed Throw impl and is caught by the framework's
+// throws-route catch arms as the original RestError — not a generic 500.
+
+// Handler uses .or_throw() on a missing query param → RestError(400) is thrown
+// via Throw.throw_self → RestBadRequest → caught by dispatch as 400.
+fn _handler_or_throw(req: &rest.Request, ctx: &mut rest.Context) throws -> rest.Response {
+	val value = rest.require_query_param(req, &"missing_param").or_throw();
+	return rest.json_response(200, "{\"got\":\"" + value + "\"}");
+}
+
+// Handler uses .or_throw() on a missing path param → RestError(404) thrown
+// via Throw.throw_self → RestNotFound → caught by dispatch as 404.
+// (path_param returns 404/not-found for missing params per request.drift:188.)
+fn _handler_path_or_throw(req: &rest.Request, ctx: &mut rest.Context) throws -> rest.Response {
+	val id = rest.path_param(req, &"no_such_param").or_throw();
+	return rest.json_response(200, "{\"id\":\"" + id + "\"}");
+}
+
+// Handler where .or_throw() succeeds (param present) → normal 200.
+fn _handler_or_throw_ok(req: &rest.Request, ctx: &mut rest.Context) throws -> rest.Response {
+	val value = rest.require_query_param(req, &"name").or_throw();
+	return rest.json_response(200, "{\"name\":\"" + value + "\"}");
+}
+
+fn _build_app() nothrow -> rest.App {
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 8080);
+	match rest.build_app(move b) {
+		core.Result::Ok(a) => { return move a; },
+		core.Result::Err(_) => { return _build_app(); }
+	}
+}
+
+// 100: .or_throw() on missing query param → 400
+fn scenario_query_param_or_throw_400() nothrow -> Int {
+	var app = _build_app();
+	match rest.add_throws_route(&mut app, "GET", "/probe", core.callback_throw2(_handler_or_throw)) {
+		core.Result::Err(_) => { return 101; },
+		core.Result::Ok(_) => {}
+	}
+	var req = rest.new_request("GET", "/probe");
+	var ctx = rest.new_context();
+	match rest.dispatch(&app, &mut req, &mut ctx) {
+		core.Result::Ok(_) => { return 102; },
+		core.Result::Err(e) => {
+			if e.status != 400 { return 103; }
+			if e.event != "request-invalid" { return 104; }
+			// Field metadata round-trip: require_query_param attaches
+			// {missing_param: "required"} → throw_self → RestBadRequest(fields=DV::Object)
+			// → _dispatch_throws reconstructs RestError with fields array intact.
+			if e.fields.len != 1 { return 105; }
+			if e.fields[0].key != "missing_param" { return 106; }
+			match e.fields[0].value.as_string() {
+				Optional::Some(v) => { if v != "required" { return 107; } },
+				Optional::None => { return 108; }
+			}
+			return 0;
+		}
+	}
+}
+
+// 200: .or_throw() on missing path param → 404 (path_param contract)
+fn scenario_path_param_or_throw_404() nothrow -> Int {
+	var app = _build_app();
+	match rest.add_throws_route(&mut app, "GET", "/item", core.callback_throw2(_handler_path_or_throw)) {
+		core.Result::Err(_) => { return 201; },
+		core.Result::Ok(_) => {}
+	}
+	var req = rest.new_request("GET", "/item");
+	var ctx = rest.new_context();
+	match rest.dispatch(&app, &mut req, &mut ctx) {
+		core.Result::Ok(_) => { return 202; },
+		core.Result::Err(e) => {
+			if e.status != 404 { return 203; }
+			if e.event != "not-found" { return 204; }
+			return 0;
+		}
+	}
+}
+
+// 300: .or_throw() succeeds (param present) → 200
+fn scenario_or_throw_ok() nothrow -> Int {
+	var app = _build_app();
+	match rest.add_throws_route(&mut app, "GET", "/ok", core.callback_throw2(_handler_or_throw_ok)) {
+		core.Result::Err(_) => { return 301; },
+		core.Result::Ok(_) => {}
+	}
+	var req = rest.new_request("GET", "/ok");
+	rest.add_query_param(&mut req, "name", "alice");
+	var ctx = rest.new_context();
+	match rest.dispatch(&app, &mut req, &mut ctx) {
+		core.Result::Err(_) => { return 302; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 303; }
+			if resp.body != "{\"name\":\"alice\"}" { return 304; }
+			return 0;
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	val a = scenario_query_param_or_throw_400();
+	if a != 0 { return a; }
+	val b = scenario_path_param_or_throw_404();
+	if b != 0 { return b; }
+	val c = scenario_or_throw_ok();
+	if c != 0 { return c; }
+	return 0;
+}

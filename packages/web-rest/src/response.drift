@@ -40,6 +40,13 @@ fn _dup_string(s: &String) nothrow -> String {
 	return core.string_from_utf8_bytes(io.buffer_ptr(&b), n);
 }
 
+fn _exc_dv_string(dv: &DiagnosticValue) nothrow -> String {
+	match dv.as_string() {
+		Optional::Some(s) => { return s; },
+		Optional::None => { return ""; }
+	}
+}
+
 fn _escape_json_to_sb(sb: &mut text.StringBuilder, s: &String) nothrow -> Void {
 	val q = "\"";
 	text.sb_append_string(sb, &q);
@@ -86,15 +93,17 @@ pub fn error_envelope(err: &errors.RestError, event_id: &String) nothrow -> Resp
 	val p4 = ",\"fields\":{";
 	text.sb_append_string(&mut sb, &p4);
 	var fi = 0;
-	while fi < err.field_keys.len {
+	while fi < err.fields.len {
 		if fi > 0 {
 			val comma = ",";
 			text.sb_append_string(&mut sb, &comma);
 		}
-		_escape_json_to_sb(&mut sb, &err.field_keys[fi]);
+		val entry = &err.fields[fi];
+		_escape_json_to_sb(&mut sb, &entry.key);
 		val colon = ":";
 		text.sb_append_string(&mut sb, &colon);
-		_escape_json_to_sb(&mut sb, &err.field_values[fi]);
+		val v = _exc_dv_string(&entry.value);
+		_escape_json_to_sb(&mut sb, &v);
 		fi = fi + 1;
 	}
 	val p5 = "}}";

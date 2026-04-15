@@ -1,0 +1,250 @@
+module consumer.rest_or_throw_test;
+
+import std.core as core;
+import std.io as io;
+import std.net as net;
+import std.concurrent as conc;
+import std.console as console;
+import web.rest as rest;
+
+// Consumer-path regression: typed .or_throw() on Result<T, RestError>.
+//
+// Proves through the package-consumer path (--dep) that the ideal UX works:
+//   - rest.path_param(req, &"id").or_throw() in a throws-route handler
+//   - present path param → handler returns 200 with value
+//   - missing query param → RestError(400) → Throw.throw_self → RestBadRequest → 400
+//   - present query param → handler returns 200 with value
+//   - missing path param → RestError(404) → Throw.throw_self → RestNotFound → 404
+//     (path_param returns 404/not-found per its contract)
+
+// Handler: .or_throw() on path param
+fn _path_param_handler(req: &rest.Request, ctx: &mut rest.Context) throws -> rest.Response {
+	val id = rest.path_param(req, &"workOrderId").or_throw();
+	return rest.json_response(200, "{\"workOrderId\":\"" + id + "\"}");
+}
+
+// Handler: .or_throw() on query param
+fn _query_param_handler(req: &rest.Request, ctx: &mut rest.Context) throws -> rest.Response {
+	val q = rest.require_query_param(req, &"q").or_throw();
+	return rest.json_response(200, "{\"q\":\"" + q + "\"}");
+}
+
+// Handler: .or_throw() on a path param name that doesn't exist in the route pattern → 404
+fn _missing_path_param_handler(req: &rest.Request, ctx: &mut rest.Context) throws -> rest.Response {
+	val id = rest.path_param(req, &"noSuchParam").or_throw();
+	return rest.json_response(200, "{\"id\":\"" + id + "\"}");
+}
+
+// K28 probe: local-binding variant. Bind the package-returned Result to a val
+// first, then call (move r).or_throw() — this is the code shape the compiler
+// team expects to trigger K28 (Result base TypeId mismatch on local binding),
+// vs. the rvalue-chained calls above.
+fn _query_param_local_or_throw_handler(req: &rest.Request, ctx: &mut rest.Context) throws -> rest.Response {
+	val r = rest.require_query_param(req, &"q");
+	val q = (move r).or_throw();
+	return rest.json_response(200, "{\"q\":\"" + q + "\"}");
+}
+
+fn main() nothrow -> Int {
+	val timeout = conc.Duration(millis = 5000);
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(a) => {
+			var app = move a;
+
+			// Route with path param
+			match rest.add_throws_route(&mut app, "GET", "/work-orders/{workOrderId}", core.callback_throw2(_path_param_handler)) {
+				core.Result::Err(_) => { return 2; },
+				core.Result::Ok(_) => {}
+			}
+
+			// Route with query param
+			match rest.add_throws_route(&mut app, "GET", "/search", core.callback_throw2(_query_param_handler)) {
+				core.Result::Err(_) => { return 3; },
+				core.Result::Ok(_) => {}
+			}
+
+			// Route where handler asks for a param not in the pattern
+			match rest.add_throws_route(&mut app, "GET", "/missing-param", core.callback_throw2(_missing_path_param_handler)) {
+				core.Result::Err(_) => { return 5; },
+				core.Result::Ok(_) => {}
+			}
+
+			// K28 probe route: local-binding .or_throw()
+			match rest.add_throws_route(&mut app, "GET", "/search-local", core.callback_throw2(_query_param_local_or_throw_handler)) {
+				core.Result::Err(_) => { return 6; },
+				core.Result::Ok(_) => {}
+			}
+
+			match rest.start(move app, timeout) {
+				core.Result::Err(_) => { return 4; },
+				core.Result::Ok(rs) => {
+					var running = move rs;
+					val port = rest.server_port(&running);
+
+					// Scenario 1: path param present → 200
+					val rc1 = _send_and_check(&running, port, "GET", "/work-orders/WO-42", 200, timeout);
+					if rc1 != 0 { val _ = rest.shutdown(&mut running); return 100 + rc1; }
+
+					// Scenario 2: query param present → 200
+					val rc2 = _send_and_check(&running, port, "GET", "/search?q=hello", 200, timeout);
+					if rc2 != 0 { val _ = rest.shutdown(&mut running); return 200 + rc2; }
+
+					// Scenario 3: query param missing → 400 + response envelope preserves field data
+					val rc3 = _send_and_check_body(&running, port, "GET", "/search", 400, "\"q\":\"required\"", timeout);
+					if rc3 != 0 { val _ = rest.shutdown(&mut running); return 300 + rc3; }
+
+					// Scenario 4: path param missing (handler asks for nonexistent param) → 404
+					val rc4 = _send_and_check(&running, port, "GET", "/missing-param", 404, timeout);
+					if rc4 != 0 { val _ = rest.shutdown(&mut running); return 400 + rc4; }
+
+					// Scenario 5 (K28 probe): local-binding .or_throw() with missing query param → 400
+					val rc5 = _send_and_check(&running, port, "GET", "/search-local", 400, timeout);
+					if rc5 != 0 { val _ = rest.shutdown(&mut running); return 500 + rc5; }
+
+					match rest.shutdown(&mut running) {
+						core.Result::Err(_) => { return 99; },
+						core.Result::Ok(_) => {
+							console.println("consumer rest-or-throw: all 5 scenarios passed");
+							return 0;
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// --- HTTP helper ---
+
+fn _send_and_check(running: &rest.RunningServer, port: Int, method: String, path: String, expected_status: Int, timeout: conc.Duration) nothrow -> Int {
+	var raw_req = method + " " + path + " HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+
+	var addr = net.socket_addr("127.0.0.1", port);
+	match net.connect(&addr, timeout) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(conn) => {
+			var stream = move conn;
+			val bytes = raw_req.byte_length();
+			var wbuf = io.buffer(bytes);
+			var i = 0;
+			while i < bytes {
+				io.buffer_write(&mut wbuf, i, core.string_byte_at(&raw_req, i));
+				i = i + 1;
+			}
+			match stream.write(&wbuf, timeout) {
+				core.Result::Err(_) => {
+					val _ = stream.close(timeout);
+					return 2;
+				},
+				core.Result::Ok(_) => {}
+			}
+			var resp: Array<Byte> = [];
+			var done = false;
+			while !done {
+				var rbuf = io.buffer(4096);
+				match stream.read(&mut rbuf, timeout) {
+					core.Result::Err(_) => { done = true; },
+					core.Result::Ok(n) => {
+						if n == 0 { done = true; }
+						else {
+							var j = 0;
+							while j < n {
+								resp.push(io.buffer_read(&mut rbuf, j));
+								j = j + 1;
+							}
+						}
+					}
+				}
+			}
+			val _ = stream.close(timeout);
+
+			if resp.len < 12 { return 3; }
+			val d0 = cast<Int>(resp[9]) - 48;
+			val d1 = cast<Int>(resp[10]) - 48;
+			val d2 = cast<Int>(resp[11]) - 48;
+			val status = d0 * 100 + d1 * 10 + d2;
+			if status != expected_status { return 4; }
+			return 0;
+		}
+	}
+}
+
+// Variant that also asserts a byte-substring is present somewhere in the
+// response (body or headers). Used to check that the RestError fields array
+// survives the RestError -> exception -> RestError round-trip and lands in
+// the JSON error envelope.
+fn _send_and_check_body(running: &rest.RunningServer, port: Int, method: String, path: String, expected_status: Int, body_needle: String, timeout: conc.Duration) nothrow -> Int {
+	var raw_req = method + " " + path + " HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+
+	var addr = net.socket_addr("127.0.0.1", port);
+	match net.connect(&addr, timeout) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(conn) => {
+			var stream = move conn;
+			val bytes = raw_req.byte_length();
+			var wbuf = io.buffer(bytes);
+			var i = 0;
+			while i < bytes {
+				io.buffer_write(&mut wbuf, i, core.string_byte_at(&raw_req, i));
+				i = i + 1;
+			}
+			match stream.write(&wbuf, timeout) {
+				core.Result::Err(_) => {
+					val _ = stream.close(timeout);
+					return 2;
+				},
+				core.Result::Ok(_) => {}
+			}
+			var resp: Array<Byte> = [];
+			var done = false;
+			while !done {
+				var rbuf = io.buffer(4096);
+				match stream.read(&mut rbuf, timeout) {
+					core.Result::Err(_) => { done = true; },
+					core.Result::Ok(n) => {
+						if n == 0 { done = true; }
+						else {
+							var j = 0;
+							while j < n {
+								resp.push(io.buffer_read(&mut rbuf, j));
+								j = j + 1;
+							}
+						}
+					}
+				}
+			}
+			val _ = stream.close(timeout);
+
+			if resp.len < 12 { return 3; }
+			val d0 = cast<Int>(resp[9]) - 48;
+			val d1 = cast<Int>(resp[10]) - 48;
+			val d2 = cast<Int>(resp[11]) - 48;
+			val status = d0 * 100 + d1 * 10 + d2;
+			if status != expected_status { return 4; }
+
+			val nlen = body_needle.byte_length();
+			if nlen == 0 { return 0; }
+			if resp.len < nlen { return 5; }
+			var p = 0;
+			val last = resp.len - nlen;
+			while p <= last {
+				var k = 0;
+				var matched = true;
+				while k < nlen {
+					if cast<Int>(resp[p + k]) != cast<Int>(core.string_byte_at(&body_needle, k)) {
+						matched = false;
+						k = nlen;
+					} else {
+						k = k + 1;
+					}
+				}
+				if matched { return 0; }
+				p = p + 1;
+			}
+			return 6;
+		}
+	}
+}

@@ -1,6 +1,8 @@
 module web.rest.errors;
 
 import std.core as core;
+import std.mem as mem;
+import web.rest.events as events;
 
 export {
 	RestError,
@@ -20,13 +22,35 @@ pub struct RestError {
 	pub event: String,
 	pub tag: String,
 	pub message: String,
-	pub field_keys: Array<String>,
-	pub field_values: Array<String>
+	pub fields: Array<core.DiagnosticEntry>
 }
 
 implement core.Diagnostic for RestError {
 	pub fn to_diag(self: &RestError) nothrow -> DiagnosticValue {
 		return DiagnosticValue::String(self.event + ":" + self.tag);
+	}
+}
+
+implement core.Throw for RestError {
+	pub fn throw_self(var self: RestError) throws {
+		var empty: Array<core.DiagnosticEntry> = [];
+		val fields = mem.replace(&mut self.fields, move empty);
+		if self.status == 400 {
+			throw events:RestBadRequest(tag = self.tag, message = self.message, fields = DiagnosticValue::Object(move fields));
+		}
+		if self.status == 401 {
+			throw events:RestUnauthorized(tag = self.tag, message = self.message, fields = DiagnosticValue::Object(move fields));
+		}
+		if self.status == 403 {
+			throw events:RestForbidden(tag = self.tag, message = self.message, fields = DiagnosticValue::Object(move fields));
+		}
+		if self.status == 404 {
+			throw events:RestNotFound(tag = self.tag, message = self.message, fields = DiagnosticValue::Object(move fields));
+		}
+		if self.status == 409 {
+			throw events:RestConflict(tag = self.tag, message = self.message, fields = DiagnosticValue::Object(move fields));
+		}
+		throw events:RestInternal(tag = self.tag, message = self.message, fields = DiagnosticValue::Object(move fields));
 	}
 }
 
@@ -39,13 +63,11 @@ pub const EVENT_INTERNAL: String = "internal";
 pub const TAG_INTERNAL_ERROR: String = "internal-error";
 
 pub fn rest_error(status: Int, event: String, tag: String, message: String) nothrow -> RestError {
-	var fk: Array<String> = [];
-	var fv: Array<String> = [];
-	return RestError(status = status, event = event, tag = tag, message = message, field_keys = move fk, field_values = move fv);
+	var f: Array<core.DiagnosticEntry> = [];
+	return RestError(status = status, event = event, tag = tag, message = message, fields = move f);
 }
 
 pub fn add_field(err: &mut RestError, key: String, value: String) nothrow -> Void {
-	err.field_keys.push(move key);
-	err.field_values.push(move value);
+	err.fields.push(core.diagnostic_entry(key, DiagnosticValue::String(value)));
 	return core.void_value();
 }
