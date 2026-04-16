@@ -39,8 +39,12 @@ fn _missing_path_param_handler(req: &rest.Request, ctx: &mut rest.Context) throw
 // first, then call (move r).or_throw() — this is the code shape the compiler
 // team expects to trigger K28 (Result base TypeId mismatch on local binding),
 // vs. the rvalue-chained calls above.
+//
+// Under the new auto-try rule, unannotated bindings inside `throws` contexts
+// eagerly unwrap Result<T, E> to T. To preserve the Result and exercise the
+// explicit .or_throw() spelling, we annotate the local with its full type.
 fn _query_param_local_or_throw_handler(req: &rest.Request, ctx: &mut rest.Context) throws -> rest.Response {
-	val r = rest.require_query_param(req, &"q");
+	val r: core.Result<String, rest.RestError> = rest.require_query_param(req, &"q");
 	val q = (move r).or_throw();
 	return rest.json_response(200, "{\"q\":\"" + q + "\"}");
 }
