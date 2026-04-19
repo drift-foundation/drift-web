@@ -91,7 +91,7 @@
         "packages/web-client/src/pool.drift"
       ],
       "package_deps": [
-        {"name": "net-tls", "version": "0.3.14"}
+        {"name": "net-tls", "version": "0.3.15"}
       ],
       "assets": [
         "docs/integration-guide.md",
