@@ -41,11 +41,37 @@ test: _require-env lock-check
     : "${DRIFT_TEST_JOBS:=$(( $(nproc) / 3 ))}"
     export DRIFT_TEST_JOBS
     LOG_DIR="$(mktemp -d -t drift-web-test-XXXXXX)"
-    trap 'rm -rf "${LOG_DIR}"' EXIT
+    HB_PID=""
+    cleanup() {
+        [[ -n "${HB_PID}" ]] && kill "${HB_PID}" 2>/dev/null
+        rm -rf "${LOG_DIR}"
+    }
+    trap cleanup EXIT
     echo "=== test: plain + asan + memcheck concurrent (DRIFT_TEST_JOBS=${DRIFT_TEST_JOBS} per pass, logs in ${LOG_DIR}) ==="
     ( just _test-suite                    > "${LOG_DIR}/plain.log"    2>&1 ) & pid_plain=$!
     ( DRIFT_ASAN=1     just _test-suite   > "${LOG_DIR}/asan.log"     2>&1 ) & pid_asan=$!
     ( DRIFT_MEMCHECK=1 just _test-suite   > "${LOG_DIR}/memcheck.log" 2>&1 ) & pid_memcheck=$!
+    # Heartbeat: keeps orch's stdout-inactivity watchdog fed (contract: ≤60s
+    # silence) AND gives a live view of each pass — runner emits `compile NAME`
+    # and `run NAME` per test, so ran-count + last-line is real progress.
+    (
+        t=0
+        while true; do
+            sleep 10
+            t=$((t+10))
+            line="[hb ${t}s]"
+            for pass in plain asan memcheck; do
+                log="${LOG_DIR}/${pass}.log"
+                # grep -c exits 1 on zero matches, 2 on missing file; fall
+                # back to 0 via parameter expansion instead of `|| echo 0`,
+                # which would double-print on the zero-match case.
+                ran=$(grep -c '^run ' "${log}" 2>/dev/null); ran=${ran:-0}
+                last=$(tail -n 1 "${log}" 2>/dev/null)
+                line+=" ${pass}(ran=${ran}; ${last:-starting})"
+            done
+            echo "${line}"
+        done
+    ) & HB_PID=$!
     status=0
     report() {
         local name="$1" pid="$2"
@@ -60,6 +86,8 @@ test: _require-env lock-check
     report plain    "${pid_plain}"
     report asan     "${pid_asan}"
     report memcheck "${pid_memcheck}"
+    kill "${HB_PID}" 2>/dev/null || true
+    wait "${HB_PID}" 2>/dev/null || true
     exit "${status}"
 
 # Internal: full test suite (single pass).
