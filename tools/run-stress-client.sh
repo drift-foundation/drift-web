@@ -30,8 +30,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Resolve net-tls dependency from manifest.
-TLS_DEP="$(jq -r '.artifacts[] | select(.name=="web-client") | .package_deps[] | select(.name=="net-tls") | "\(.name)@\(.version)"' "${ROOT_DIR}/drift/manifest.json")"
+# Resolve net-tls dependency from lock (manifest has a range, driftc needs exact).
+TLS_DEP="net-tls@$(jq -r '.artifacts["web-client"].resolved["net-tls"].version' "${ROOT_DIR}/drift/lock.json")"
 
 # Compile both stress test binaries.
 echo "=== compiling tls-contamination test ==="

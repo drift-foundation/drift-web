@@ -25,24 +25,42 @@ _require-env:
         exit 1
     fi
 
+# Lock guard: fail fast if drift/lock.json is stale vs manifest + package roots.
+# Runs before every cert gate so a forgotten `drift prepare` can't drift silently.
+lock-check: _require-env
+    @{{DRIFT}} prepare --check --package-root "${DRIFT_PKG_ROOT}"
+
 # Certification gate: correctness + safety instrumentation.
-# Runs the full suite under plain, ASAN, and memcheck sequentially.
-test: _require-env
+# Plain, ASAN, and memcheck passes run concurrently (32GB RAM headroom).
+# Per-pass compile parallelism defaults to nproc/3 to avoid triple-stacking
+# the compile storm; override via DRIFT_TEST_JOBS.
+# perf and stress gates stay serial — see their recipes.
+test: _require-env lock-check
     #!/usr/bin/env bash
-    set -euo pipefail
-    echo "=== test pass: plain ==="
-    just _test-suite
-    echo "=== test pass: plain — PASS ==="
-
-    echo "=== test pass: asan ==="
-    DRIFT_ASAN=1 just _test-suite
-    echo "=== test pass: asan — PASS ==="
-
-    echo "=== test pass: memcheck ==="
-    DRIFT_MEMCHECK=1 just _test-suite
-    echo "=== test pass: memcheck — PASS ==="
-
-    echo "=== all test passes complete ==="
+    set -uo pipefail
+    : "${DRIFT_TEST_JOBS:=$(( $(nproc) / 3 ))}"
+    export DRIFT_TEST_JOBS
+    LOG_DIR="$(mktemp -d -t drift-web-test-XXXXXX)"
+    trap 'rm -rf "${LOG_DIR}"' EXIT
+    echo "=== test: plain + asan + memcheck concurrent (DRIFT_TEST_JOBS=${DRIFT_TEST_JOBS} per pass, logs in ${LOG_DIR}) ==="
+    ( just _test-suite                    > "${LOG_DIR}/plain.log"    2>&1 ) & pid_plain=$!
+    ( DRIFT_ASAN=1     just _test-suite   > "${LOG_DIR}/asan.log"     2>&1 ) & pid_asan=$!
+    ( DRIFT_MEMCHECK=1 just _test-suite   > "${LOG_DIR}/memcheck.log" 2>&1 ) & pid_memcheck=$!
+    status=0
+    report() {
+        local name="$1" pid="$2"
+        if wait "${pid}"; then
+            echo "=== ${name} — PASS ==="
+        else
+            echo "=== ${name} — FAIL ==="
+            sed 's/^/['"${name}"'] /' "${LOG_DIR}/${name}.log"
+            status=1
+        fi
+    }
+    report plain    "${pid_plain}"
+    report asan     "${pid_asan}"
+    report memcheck "${pid_memcheck}"
+    exit "${status}"
 
 # Internal: full test suite (single pass).
 _test-suite:
@@ -116,7 +134,7 @@ rest-check-unit FILE: _require-env
 #             guards, JSON caching, keep-alive, malformed recovery, lifecycle).
 # Scenario B: Client TLS negative-path → valid-path contamination.
 # Scenario C: Pool reuse / stale-connection / forced-reconnect stress.
-stress: _require-env
+stress: _require-env lock-check
     #!/usr/bin/env bash
     set -euo pipefail
     echo "=== scenario A: REST concurrency/state stress ==="
@@ -146,7 +164,7 @@ perf: _require-env
     @tools/perf_gate_runner.sh
 
 # Performance smoke (informational, hardcoded thresholds).
-perf-smoke: _require-env
+perf-smoke: _require-env lock-check
     @tools/perf_smoke_runner.sh
 
 # Build perf binary to a stable path for strace/perf profiling.
@@ -269,7 +287,7 @@ client-https-e2e: _require-env
 	# Compile test binary.
 	"${DRIFTC}" --target-word-bits 64 \
 	  --package-root {{PKG_ROOT}} \
-	  --dep "$(jq -r '.artifacts[] | select(.name=="web-client") | .package_deps[] | select(.name=="net-tls") | "\(.name)@\(.version)"' drift/manifest.json)" \
+	  --dep "net-tls@$(jq -r '.artifacts["web-client"].resolved["net-tls"].version' drift/lock.json)" \
 	  --entry "web.client.tests.https.https_e2e_test::main" \
 	  packages/web-jwt/src/*.drift packages/web-rest/src/*.drift packages/web-client/src/*.drift \
 	  packages/web-client/tests/https/https_e2e_test.drift \
@@ -299,7 +317,7 @@ prepare: _require-env
     {{DRIFT}} prepare --dest "${DRIFT_PKG_ROOT:?set DRIFT_PKG_ROOT to the package root}"
 
 # Deploy to staging (build, sign, smoke, publish).
-deploy *ARGS: _require-env
+deploy *ARGS: _require-env lock-check
     {{DRIFT}} deploy --dest "${DRIFT_PKG_ROOT:?set DRIFT_PKG_ROOT to the package root}" --driftc "${DRIFTC}" {{ARGS}}
 
 # Show driftc version info.

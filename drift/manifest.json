@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "project": {
     "name": "drift-web",
     "license": "MIT",
@@ -10,7 +10,7 @@
       "kind": "library",
       "name": "web-jwt",
       "module_namespace": "web.jwt",
-      "version": "0.2.15",
+      "version": "0.3.0",
       "description": "HS256 JWT sign/verify with temporal claims validation",
       "entry_module": "packages/web-jwt/src/lib.drift",
       "modules": [
@@ -31,7 +31,7 @@
       "kind": "library",
       "name": "web-rest",
       "module_namespace": "web.rest",
-      "version": "0.2.15",
+      "version": "0.3.0",
       "description": "HTTP/1.1 REST server with routing, guards, and JSON body handling",
       "entry_module": "packages/web-rest/src/lib.drift",
       "modules": [
@@ -51,7 +51,10 @@
         "packages/web-rest/src/validators.drift"
       ],
       "package_deps": [
-        {"name": "web-jwt", "version": "0.2.15"}
+        {
+          "name": "web-jwt",
+          "version": "0.3"
+        }
       ],
       "assets": [
         "docs/integration-guide.md",
@@ -75,7 +78,7 @@
       "kind": "library",
       "name": "web-client",
       "module_namespace": "web.client",
-      "version": "0.2.15",
+      "version": "0.3.0",
       "description": "HTTP/1.1 and HTTPS client for outbound requests",
       "entry_module": "packages/web-client/src/lib.drift",
       "modules": [
@@ -91,7 +94,10 @@
         "packages/web-client/src/pool.drift"
       ],
       "package_deps": [
-        {"name": "net-tls", "version": "0.3.15"}
+        {
+          "name": "net-tls",
+          "version": "0.4"
+        }
       ],
       "assets": [
         "docs/integration-guide.md",

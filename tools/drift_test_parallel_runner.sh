@@ -113,6 +113,13 @@ if not target:
     print(f"error: artifact {artifact_name!r} not found in manifest", file=sys.stderr)
     sys.exit(2)
 
+lock_path = os.path.join(manifest_dir, "lock.json")
+resolved = {}
+if os.path.exists(lock_path):
+    with open(lock_path) as f:
+        lock = json.load(f)
+    resolved = (lock.get("artifacts", {}).get(artifact_name, {}) or {}).get("resolved", {}) or {}
+
 # Collect src dirs from this artifact and any co-artifact deps.
 src_dirs = set()
 for mod in target.get("modules", []):
@@ -127,7 +134,10 @@ for dep in target.get("package_deps", []):
         for mod in co.get("modules", []):
             src_dirs.add(os.path.dirname(mod))
     else:
-        deps.append(f"{name}@{ver}")
+        # Under schema v2, manifest carries a range ("0.4") but driftc
+        # wants the exact resolved version from the lock ("0.4.0").
+        resolved_ver = resolved.get(name, {}).get("version") or ver
+        deps.append(f"{name}@{resolved_ver}")
 
 for d in sorted(src_dirs):
     print(f"SRC:{d}")

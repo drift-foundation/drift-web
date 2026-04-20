@@ -15,6 +15,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 MANIFEST="${ROOT_DIR}/drift/manifest.json"
+LOCK="${ROOT_DIR}/drift/lock.json"
 TEST_DIR="${ROOT_DIR}/tests/consumer"
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "${TMPDIR}"' EXIT
@@ -24,7 +25,8 @@ jwt_ver=$(jq -r '.artifacts[] | select(.name=="web-jwt") | .version' "${MANIFEST
 rest_ver=$(jq -r '.artifacts[] | select(.name=="web-rest") | .version' "${MANIFEST}")
 client_ver=$(jq -r '.artifacts[] | select(.name=="web-client") | .version' "${MANIFEST}")
 probe_ver=$(jq -r '.artifacts[] | select(.name=="or-throw-probe") | .version' "${MANIFEST}")
-tls_dep=$(jq -r '.artifacts[] | select(.name=="web-client") | .package_deps[] | select(.name=="net-tls") | "\(.name)@\(.version)"' "${MANIFEST}")
+tls_ver=$(jq -r '.artifacts["web-client"].resolved["net-tls"].version' "${LOCK}")
+tls_dep="net-tls@${tls_ver}"
 
 # --- Stage our packages locally ---
 LOCAL_PKG="${TMPDIR}/libs"
