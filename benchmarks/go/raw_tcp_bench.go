@@ -6,7 +6,7 @@
 //
 // - One listener on localhost, ephemeral port
 // - One keep-alive TCP connection, sequential ping-pong
-// - Warmup 50, measure 5000
+// - Warmup 10000 (covers CPU freq-scaling ramp), measure 5000
 //
 // Run: go run benchmarks/go/raw_tcp_bench.go
 
@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	warmupN  = 50
+	warmupN  = 10000
 	measureN = 5000
 )
 

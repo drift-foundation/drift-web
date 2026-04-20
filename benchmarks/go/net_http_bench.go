@@ -3,7 +3,7 @@
 // - One listener on localhost, ephemeral port
 // - One keep-alive TCP connection, sequential ping-pong
 // - GET /health -> {"ok":true} (11 bytes, application/json)
-// - Warmup 20, measure 5000
+// - Warmup 10000 (covers CPU freq-scaling ramp), measure 5000
 //
 // Run: go run benchmarks/go/net_http_bench.go
 
@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	warmupN  = 20
+	warmupN  = 10000
 	measureN = 5000
 )
 

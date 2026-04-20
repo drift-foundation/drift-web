@@ -1,12 +1,14 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "artifacts": {
     "web-client": {
       "resolved": {
         "net-tls": {
-          "version": "0.4.0",
-          "sha256": "99efec649230ad249fc48ea6cc78e6848b886bfbcbbf1b729832d92d1fdd4ae1",
+          "version": "0.4.1",
+          "sha256": "7b6d5736f7682b314ca73100be2b1c5548067922bb961d1015c9c57a7ceefe24",
           "author_key": "ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0=",
+          "source_content_id": "sha256:c1b4033e08ad26c062586fe1eebd80f3e86db2b7243e09a7b40527ae8538b2a1",
+          "source_attestation_key": "ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0=",
           "dep_type": "direct"
         }
       }
@@ -14,9 +16,11 @@
     "web-rest": {
       "resolved": {
         "web-jwt": {
-          "version": "0.3.0",
+          "version": "0.3.1",
           "sha256": "",
           "author_key": "",
+          "source_content_id": "",
+          "source_attestation_key": "",
           "dep_type": "co-artifact"
         }
       }

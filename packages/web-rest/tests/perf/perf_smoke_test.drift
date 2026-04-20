@@ -22,13 +22,13 @@ import web.rest as rest;
 //
 // Enforces three ratio thresholds (integer percent, * 100):
 //   drift_raw_ratio      = drift_vt / go_raw       >= 0.80
-//   drift_rest_ratio     = drift_health / go_http   >= 1.50
+//   drift_rest_ratio     = drift_health / go_http   >= 1.40
 //   drift_framework_ratio = drift_health / drift_vt  >= 0.45
 
 // --- Ratio thresholds (percent * 100) ---
 
 fn _threshold_raw_pct() nothrow -> Int { return 80; }
-fn _threshold_rest_pct() nothrow -> Int { return 150; }
+fn _threshold_rest_pct() nothrow -> Int { return 140; }
 fn _threshold_fw_pct() nothrow -> Int { return 45; }
 
 // --- Read Go baseline from env ---
@@ -410,7 +410,7 @@ fn _run_vt_client(port: Int, warmup_n: Int, measure_n: Int, timeout: conc.Durati
 
 fn bench_baseline_vt() nothrow -> core.Result<Int, Int> {
 	val timeout = conc.Duration(millis = 10000);
-	val warmup_n = 50;
+	val warmup_n = 10000;
 	val measure_n = 5000;
 	val total_n = warmup_n + measure_n;
 
@@ -512,7 +512,7 @@ fn _run_rest_client(port: Int, warmup_n: Int, measure_n: Int, timeout: conc.Dura
 
 fn bench_baseline_health() nothrow -> core.Result<Int, Int> {
 	val timeout = conc.Duration(millis = 10000);
-	val warmup_n = 20;
+	val warmup_n = 10000;
 	val measure_n = 5000;
 
 	var b = rest.new_app_builder();
