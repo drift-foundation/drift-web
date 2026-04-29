@@ -1,0 +1,396 @@
+module web.rest.tests.unit.middleware_test;
+
+import std.core as core;
+import std.concurrent as conc;
+import web.rest as rest;
+import web.rest.events as events;
+
+// Test-only exception type. Not one of the cataloged web.rest.events types,
+// so _dispatch_throws's catch-all path takes over and converts to
+// Err(500, "internal", "internal-error", ...).
+pub exception TestUnknownException(tag: String)
+
+// Validation tests for global add_middleware + onion-fold dispatch (web-rest 0.4).
+// Covers spec validation cases 1-5 (single mw, composition, handler-throws-typed,
+// handler-throws-unknown, short-circuit) and case 10 (Ok->Err / Err->Ok transformations).
+// Runs under plain + ASAN + memcheck via `just test`.
+
+// --- Tracing payload ---
+//
+// Each middleware/handler appends an event tag to a Trace stashed in Context
+// via ctx_set / ctx_take. Final assertion compares trace to expected sequence.
+struct Trace { pub events: Array<String> }
+
+fn _trace_push(ctx: &mut rest.Context, tag: String) nothrow -> Void {
+	var evs: Array<String> = [];
+	match rest.ctx_take<type Trace>(ctx) {
+		Optional::Some(t) => {
+			var taken = move t;
+			val n = taken.events.len;
+			var i = 0;
+			while i < n {
+				evs.push(taken.events[i].clone());
+				i = i + 1;
+			}
+		},
+		Optional::None => {}
+	}
+	evs.push(move tag);
+	rest.ctx_set<type Trace>(ctx, Trace(events = move evs));
+	return core.void_value();
+}
+
+fn _trace_eq(actual: &Array<String>, expected: &Array<String>) nothrow -> Bool {
+	if actual.len != expected.len { return false; }
+	var i = 0;
+	while i < actual.len {
+		if actual[i] != expected[i] { return false; }
+		i = i + 1;
+	}
+	return true;
+}
+
+// --- Helpers ---
+
+fn _build_test_app() nothrow -> rest.App {
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 8080);
+	match rest.build_app(move b) {
+		core.Result::Ok(a) => { return move a; },
+		core.Result::Err(_) => { return _unreachable_app(); }
+	}
+}
+
+fn _unreachable_app() nothrow -> rest.App {
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "0.0.0.0", 1);
+	match rest.build_app(move b) {
+		core.Result::Ok(a) => { return move a; },
+		core.Result::Err(_) => { return _unreachable_app(); }
+	}
+}
+
+fn _no_fields() nothrow -> DiagnosticValue {
+	var f: Array<core.DiagnosticEntry> = [];
+	return DiagnosticValue::Object(move f);
+}
+
+// --- Handlers ---
+
+fn _ok_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	_trace_push(ctx, "H:enter");
+	val resp = rest.json_response(200, "{\"ok\":true}");
+	_trace_push(ctx, "H:exit");
+	return core.Result::Ok(move resp);
+}
+
+fn _bad_request_throws_handler(req: &rest.Request, ctx: &mut rest.Context) -> rest.Response {
+	_trace_push(ctx, "H:enter");
+	throw events:RestBadRequest(tag = "h-bad", message = "handler bad request", fields = _no_fields());
+}
+
+fn _unknown_throws_handler(req: &rest.Request, ctx: &mut rest.Context) -> rest.Response {
+	_trace_push(ctx, "H:enter");
+	throw TestUnknownException(tag = "h-unknown");
+}
+
+// --- Scenario 100: single middleware passthrough ---
+// One mw, records pre+post, observes handler's Ok result.
+fn scenario_single_middleware_passthrough() nothrow -> Int {
+	var app = _build_test_app();
+	rest.add_middleware(&mut app, |r: &rest.Request, c: &mut rest.Context, next| => {
+		_trace_push(c, "A:enter");
+		val result = next.call(r, c);
+		_trace_push(c, "A:exit");
+		return move result;
+	});
+	match rest.add_route(&mut app, "GET", "/", core.callback2(_ok_handler)) {
+		core.Result::Err(_) => { return 101; },
+		core.Result::Ok(_) => {}
+	}
+	val app_arc = conc.arc(move app);
+	var req = rest.new_request("GET", "/");
+	var ctx = rest.new_context();
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+		core.Result::Err(_) => { return 102; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 103; }
+		}
+	}
+	val expected: Array<String> = ["A:enter", "H:enter", "H:exit", "A:exit"];
+	match rest.ctx_get<type Trace>(&ctx) {
+		Optional::None => { return 104; },
+		Optional::Some(t) => {
+			if !_trace_eq(&t.events, &expected) { return 105; }
+		}
+	}
+	return 0;
+}
+
+// --- Scenario 200: composition — outside-in entry, inside-out exit ---
+// Two mws (M1 outer, M2 inner). Trace must be:
+//   M1:enter, M2:enter, H, M2:exit, M1:exit
+// M1 is registered first (registration order = outside-in).
+fn scenario_composition_order() nothrow -> Int {
+	var app = _build_test_app();
+	rest.add_middleware(&mut app, |r: &rest.Request, c: &mut rest.Context, next| => {
+		_trace_push(c, "M1:enter");
+		val result = next.call(r, c);
+		_trace_push(c, "M1:exit");
+		return move result;
+	});
+	rest.add_middleware(&mut app, |r: &rest.Request, c: &mut rest.Context, next| => {
+		_trace_push(c, "M2:enter");
+		val result = next.call(r, c);
+		_trace_push(c, "M2:exit");
+		return move result;
+	});
+	match rest.add_route(&mut app, "GET", "/", core.callback2(_ok_handler)) {
+		core.Result::Err(_) => { return 201; },
+		core.Result::Ok(_) => {}
+	}
+	val app_arc = conc.arc(move app);
+	var req = rest.new_request("GET", "/");
+	var ctx = rest.new_context();
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+		core.Result::Err(_) => { return 202; },
+		core.Result::Ok(_) => {}
+	}
+	val expected: Array<String> = ["M1:enter", "M2:enter", "H:enter", "H:exit", "M2:exit", "M1:exit"];
+	match rest.ctx_get<type Trace>(&ctx) {
+		Optional::None => { return 203; },
+		Optional::Some(t) => {
+			if !_trace_eq(&t.events, &expected) { return 204; }
+		}
+	}
+	return 0;
+}
+
+// --- Scenario 300: handler throws typed RestException → mw sees Err ---
+// Handler throws RestBadRequest. Framework's _dispatch_throws adapter
+// converts to Err(400, "request-invalid", "h-bad", ...).
+// Middleware's next.call(...) returns this Err; post-work still runs.
+fn scenario_handler_throws_typed() nothrow -> Int {
+	var app = _build_test_app();
+	rest.add_middleware(&mut app, |r: &rest.Request, c: &mut rest.Context, next| => {
+		_trace_push(c, "A:enter");
+		val result = next.call(r, c);
+		_trace_push(c, "A:exit");
+		return move result;
+	});
+	match rest.add_throws_route(&mut app, "POST", "/bad", core.callback_throw2(_bad_request_throws_handler)) {
+		core.Result::Err(_) => { return 301; },
+		core.Result::Ok(_) => {}
+	}
+	val app_arc = conc.arc(move app);
+	var req = rest.new_request("POST", "/bad");
+	var ctx = rest.new_context();
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+		core.Result::Ok(_) => { return 302; },
+		core.Result::Err(e) => {
+			if e.status != 400 { return 303; }
+			if e.tag != "h-bad" { return 304; }
+		}
+	}
+	// Post-work ran even though handler threw — A:exit must be in the trace.
+	val expected: Array<String> = ["A:enter", "H:enter", "A:exit"];
+	match rest.ctx_get<type Trace>(&ctx) {
+		Optional::None => { return 305; },
+		Optional::Some(t) => {
+			if !_trace_eq(&t.events, &expected) { return 306; }
+		}
+	}
+	return 0;
+}
+
+// --- Scenario 400: handler throws unknown exception → mw sees Err(500) ---
+// Framework's _dispatch_throws catch-all converts to Err(internal-error 500).
+fn scenario_handler_throws_unknown() nothrow -> Int {
+	var app = _build_test_app();
+	rest.add_middleware(&mut app, |r: &rest.Request, c: &mut rest.Context, next| => {
+		_trace_push(c, "A:enter");
+		val result = next.call(r, c);
+		_trace_push(c, "A:exit");
+		return move result;
+	});
+	match rest.add_throws_route(&mut app, "GET", "/boom", core.callback_throw2(_unknown_throws_handler)) {
+		core.Result::Err(_) => { return 401; },
+		core.Result::Ok(_) => {}
+	}
+	val app_arc = conc.arc(move app);
+	var req = rest.new_request("GET", "/boom");
+	var ctx = rest.new_context();
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+		core.Result::Ok(_) => { return 402; },
+		core.Result::Err(e) => {
+			if e.status != 500 { return 403; }
+			if e.tag != "internal-error" { return 404; }
+		}
+	}
+	val expected: Array<String> = ["A:enter", "H:enter", "A:exit"];
+	match rest.ctx_get<type Trace>(&ctx) {
+		Optional::None => { return 405; },
+		Optional::Some(t) => {
+			if !_trace_eq(&t.events, &expected) { return 406; }
+		}
+	}
+	return 0;
+}
+
+// --- Scenario 500: short-circuit — mw returns Err without calling next ---
+// Inner mw returns Err(401) without calling next.  Handler must not run.
+// Outer mw observes the short-circuit Result and post-work runs.
+fn scenario_short_circuit_no_next() nothrow -> Int {
+	var app = _build_test_app();
+	rest.add_middleware(&mut app, |r: &rest.Request, c: &mut rest.Context, next| => {
+		_trace_push(c, "OUTER:enter");
+		val result = next.call(r, c);
+		_trace_push(c, "OUTER:exit");
+		return move result;
+	});
+	rest.add_middleware(&mut app, |r: &rest.Request, c: &mut rest.Context, next| => {
+		_trace_push(c, "INNER:short-circuit");
+		val _unused = move next;   // explicitly drop next without calling
+		return core.Result::Err(rest.rest_error(401, "unauthorized", "mw-blocked", "blocked by inner mw"));
+	});
+	match rest.add_route(&mut app, "GET", "/", core.callback2(_ok_handler)) {
+		core.Result::Err(_) => { return 501; },
+		core.Result::Ok(_) => {}
+	}
+	val app_arc = conc.arc(move app);
+	var req = rest.new_request("GET", "/");
+	var ctx = rest.new_context();
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+		core.Result::Ok(_) => { return 502; },
+		core.Result::Err(e) => {
+			if e.status != 401 { return 503; }
+			if e.tag != "mw-blocked" { return 504; }
+		}
+	}
+	// Handler must not have run — no "H:enter" / "H:exit" in trace.
+	val expected: Array<String> = ["OUTER:enter", "INNER:short-circuit", "OUTER:exit"];
+	match rest.ctx_get<type Trace>(&ctx) {
+		Optional::None => { return 505; },
+		Optional::Some(t) => {
+			if !_trace_eq(&t.events, &expected) { return 506; }
+		}
+	}
+	return 0;
+}
+
+// --- Scenario 600: Ok -> Err transformation ---
+// Inner handler returns Ok(200). Outer mw inspects the Result and converts
+// to Err(422). Caller sees the transformed Err.
+fn scenario_transform_ok_to_err() nothrow -> Int {
+	var app = _build_test_app();
+	rest.add_middleware(&mut app, |r: &rest.Request, c: &mut rest.Context, next| => {
+		val result = next.call(r, c);
+		match move result {
+			core.Result::Ok(_) => {
+				return core.Result::Err(rest.rest_error(422, "request-invalid", "mw-flagged", "flagged by mw"));
+			},
+			core.Result::Err(e) => { return core.Result::Err(move e); }
+		}
+	});
+	match rest.add_route(&mut app, "GET", "/", core.callback2(_ok_handler)) {
+		core.Result::Err(_) => { return 601; },
+		core.Result::Ok(_) => {}
+	}
+	val app_arc = conc.arc(move app);
+	var req = rest.new_request("GET", "/");
+	var ctx = rest.new_context();
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+		core.Result::Ok(_) => { return 602; },
+		core.Result::Err(e) => {
+			if e.status != 422 { return 603; }
+			if e.tag != "mw-flagged" { return 604; }
+		}
+	}
+	return 0;
+}
+
+// --- Scenario 700: Err -> Ok transformation ---
+// Inner handler throws RestUnauthorized → framework converts to Err(401).
+// Outer mw catches the known error class and substitutes a 200 response.
+fn scenario_transform_err_to_ok() nothrow -> Int {
+	var app = _build_test_app();
+	rest.add_middleware(&mut app, |r: &rest.Request, c: &mut rest.Context, next| => {
+		val result = next.call(r, c);
+		match move result {
+			core.Result::Err(_) => {
+				return core.Result::Ok(rest.json_response(200, "{\"recovered\":true}"));
+			},
+			core.Result::Ok(resp) => { return core.Result::Ok(move resp); }
+		}
+	});
+	match rest.add_throws_route(&mut app, "POST", "/bad", core.callback_throw2(_bad_request_throws_handler)) {
+		core.Result::Err(_) => { return 701; },
+		core.Result::Ok(_) => {}
+	}
+	val app_arc = conc.arc(move app);
+	var req = rest.new_request("POST", "/bad");
+	var ctx = rest.new_context();
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+		core.Result::Err(_) => { return 702; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 703; }
+			if resp.body != "{\"recovered\":true}" { return 704; }
+		}
+	}
+	return 0;
+}
+
+// --- Scenario 800: zero-middleware fast path ---
+// No middleware registered. Dispatch must still run and call the handler.
+fn scenario_zero_middleware_fast_path() nothrow -> Int {
+	var app = _build_test_app();
+	match rest.add_route(&mut app, "GET", "/", core.callback2(_ok_handler)) {
+		core.Result::Err(_) => { return 801; },
+		core.Result::Ok(_) => {}
+	}
+	val app_arc = conc.arc(move app);
+	var req = rest.new_request("GET", "/");
+	var ctx = rest.new_context();
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+		core.Result::Err(_) => { return 802; },
+		core.Result::Ok(resp) => {
+			if resp.status != 200 { return 803; }
+		}
+	}
+	val expected: Array<String> = ["H:enter", "H:exit"];
+	match rest.ctx_get<type Trace>(&ctx) {
+		Optional::None => { return 804; },
+		Optional::Some(t) => {
+			if !_trace_eq(&t.events, &expected) { return 805; }
+		}
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	val r1 = scenario_single_middleware_passthrough();
+	if r1 != 0 { return r1; }
+
+	val r2 = scenario_composition_order();
+	if r2 != 0 { return r2; }
+
+	val r3 = scenario_handler_throws_typed();
+	if r3 != 0 { return r3; }
+
+	val r4 = scenario_handler_throws_unknown();
+	if r4 != 0 { return r4; }
+
+	val r5 = scenario_short_circuit_no_next();
+	if r5 != 0 { return r5; }
+
+	val r6 = scenario_transform_ok_to_err();
+	if r6 != 0 { return r6; }
+
+	val r7 = scenario_transform_err_to_ok();
+	if r7 != 0 { return r7; }
+
+	val r8 = scenario_zero_middleware_fast_path();
+	if r8 != 0 { return r8; }
+
+	return 0;
+}

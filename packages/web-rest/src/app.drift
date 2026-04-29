@@ -18,6 +18,7 @@ export {
 	bind,
 	build_app,
 	add_filter,
+	add_middleware,
 	add_route_group,
 	add_route_group_guard,
 	add_route,
@@ -47,8 +48,16 @@ pub struct App {
 	pub route_is_throws: Array<Bool>,
 	pub route_group_ids: Array<Int>,
 
-	// Global filters (flat array)
+	// Global filters (flat array). DEPRECATED in 0.4 — use add_middleware
+	// for new cross-cutting request logic. Removal target 0.5.
 	pub filters: Array<core.Callback2<&request.Request, &mut context.Context, core.Result<Void, errors.RestError>>>,
+
+	// Wrapping middleware (flat array, parallel route_group_id discriminator).
+	// route_group_id == -1 → global; else → middleware applies to routes in
+	// that RouteGroup only. Onion-fold dispatch order = registration order
+	// across the filtered list (globals + matched route-group middleware).
+	pub middleware_callbacks: Array<core.Callback3<&request.Request, &mut context.Context, core.Callback2<&request.Request, &mut context.Context, core.Result<response.Response, errors.RestError>>, core.Result<response.Response, errors.RestError>>>,
+	pub middleware_route_group_ids: Array<Int>,
 
 	// RouteGroup guards (flat array, parallel route_group_id)
 	pub guard_callbacks: Array<core.Callback2<&request.Request, &mut context.Context, core.Result<Void, errors.RestError>>>,
@@ -98,6 +107,8 @@ fn _build_app_inner(b: AppBuilder) nothrow -> core.Result<App, errors.RestError>
 	var rit: Array<Bool> = [];
 	var rg: Array<Int> = [];
 	var filters: Array<core.Callback2<&request.Request, &mut context.Context, core.Result<Void, errors.RestError>>> = [];
+	var mwc: Array<core.Callback3<&request.Request, &mut context.Context, core.Callback2<&request.Request, &mut context.Context, core.Result<response.Response, errors.RestError>>, core.Result<response.Response, errors.RestError>>> = [];
+	var mwgi: Array<Int> = [];
 	var gc: Array<core.Callback2<&request.Request, &mut context.Context, core.Result<Void, errors.RestError>>> = [];
 	var ggi: Array<Int> = [];
 	var gpr: Array<String> = [];
@@ -118,6 +129,8 @@ fn _build_app_inner(b: AppBuilder) nothrow -> core.Result<App, errors.RestError>
 		route_is_throws = move rit,
 		route_group_ids = move rg,
 		filters = move filters,
+		middleware_callbacks = move mwc,
+		middleware_route_group_ids = move mwgi,
 		guard_callbacks = move gc,
 		guard_group_ids = move ggi,
 		group_prefix_raw = move gpr,
@@ -132,6 +145,20 @@ fn _build_app_inner(b: AppBuilder) nothrow -> core.Result<App, errors.RestError>
 
 pub fn add_filter(app: &mut App, filter: core.Callback2<&request.Request, &mut context.Context, core.Result<Void, errors.RestError>>) nothrow -> Void {
 	app.filters.push(move filter);
+	return core.void_value();
+}
+
+// Wrapping middleware. Runs in onion shape around the matched route's handler:
+// outside-in entry on the way down, inside-out exit as each layer's post-next
+// code runs while the chain returns. Middleware is nothrow and returns
+// Result<Response, RestError>; a typed-throw from the handler is converted to
+// Err by the framework's _dispatch_throws adapter before next.call() returns.
+//
+// Registration scope: global (applies to every request that reaches dispatch
+// after filters + guards). For per-RouteGroup scope use add_route_group_middleware.
+pub fn add_middleware(app: &mut App, mw: core.Callback3<&request.Request, &mut context.Context, core.Callback2<&request.Request, &mut context.Context, core.Result<response.Response, errors.RestError>>, core.Result<response.Response, errors.RestError>>) nothrow -> Void {
+	app.middleware_callbacks.push(move mw);
+	app.middleware_route_group_ids.push(-1);
 	return core.void_value();
 }
 
@@ -397,10 +424,70 @@ pub fn dispatch(app_arc: conc.Arc<App>, req: &mut request.Request, ctx: &mut con
 		}
 	}
 
-	// 7. Call route handler (nothrow or throws)
+	// 7. Build middleware onion + invoke. Outermost layer = first applicable
+	// middleware in registration order; innermost = the route handler.
+	val matched_group = app.route_group_ids[best_idx];
+
+	// Collect indices into app.middleware_callbacks that apply to this request:
+	// globals (route_group_id == -1) plus middleware bound to the matched group.
+	var applicable: Array<Int> = [];
+	var mi = 0;
+	while mi < app.middleware_callbacks.len {
+		val mw_gid = app.middleware_route_group_ids[mi];
+		if mw_gid == -1 {
+			applicable.push(mi);
+		} else if mw_gid == matched_group {
+			applicable.push(mi);
+		}
+		mi = mi + 1;
+	}
+
+	// Fast path: no middleware applicable → call handler directly. Preserves
+	// the zero-cost path for routes that have no middleware in scope.
+	if applicable.len == 0 {
+		if app.route_is_throws[best_idx] {
+			return _dispatch_throws(app, best_idx, req, ctx);
+		}
+		val h = &app.route_handlers[best_idx];
+		return (*h).call(req, ctx);
+	}
+
+	// Build the onion bottom-up. Terminal next-fn invokes the route handler;
+	// each iteration wraps the current `next` in a new closure that calls the
+	// outer middleware with `next` as its NextFn argument.
+	//
+	// Share-capture over `conc.Arc<App>` is the natural shape — Arc satisfies
+	// `std.core.shareable.Share` and is cheap to share (atomic refcount). This
+	// requires Drift 0.31.28+ for the package-consumer Share-impl encoding fix.
+	var next: core.Callback2<&request.Request, &mut context.Context, core.Result<response.Response, errors.RestError>> =
+		core.callback2(|r: &request.Request, c: &mut context.Context| captures(share app_arc, copy best_idx) => {
+			return _terminal_handler(app_arc.get(), best_idx, r, c);
+		});
+
+	var ai = applicable.len - 1;
+	while ai >= 0 {
+		val mw_idx = applicable[ai];
+		next = core.callback2(|r: &request.Request, c: &mut context.Context| captures(move next, copy mw_idx, share app_arc) => {
+			return _onion_layer(app_arc.get(), mw_idx, r, c, move next);
+		});
+		ai = ai - 1;
+	}
+
+	return next.call(req, ctx);
+}
+
+// Terminal next-fn body: invokes the matched route handler. Called from the
+// innermost onion layer.
+fn _terminal_handler(app: &App, best_idx: Int, req: &request.Request, ctx: &mut context.Context) nothrow -> core.Result<response.Response, errors.RestError> {
 	if app.route_is_throws[best_idx] {
 		return _dispatch_throws(app, best_idx, req, ctx);
 	}
 	val h = &app.route_handlers[best_idx];
 	return (*h).call(req, ctx);
+}
+
+// Onion layer body: invokes middleware[mw_idx] with `next` (the inner chain).
+fn _onion_layer(app: &App, mw_idx: Int, req: &request.Request, ctx: &mut context.Context, next: core.Callback2<&request.Request, &mut context.Context, core.Result<response.Response, errors.RestError>>) nothrow -> core.Result<response.Response, errors.RestError> {
+	val mw = &app.middleware_callbacks[mw_idx];
+	return (*mw).call(req, ctx, move next);
 }

@@ -89,6 +89,7 @@ export {
 	bind,
 	build_app,
 	add_filter,
+	add_middleware,
 	add_route_group,
 	add_route_group_guard,
 	// Route registration (nothrow: handler returns Result<Response, RestError>)
@@ -297,6 +298,10 @@ pub fn build_app(b: AppBuilder) nothrow -> core.Result<App, RestError> {
 
 pub fn add_filter(a: &mut App, filter: core.Callback2<&Request, &mut Context, core.Result<Void, RestError>>) nothrow -> Void {
 	return app.add_filter(a, move filter);
+}
+
+pub fn add_middleware(a: &mut App, mw: core.Callback3<&Request, &mut Context, core.Callback2<&Request, &mut Context, core.Result<Response, RestError>>, core.Result<Response, RestError>>) nothrow -> Void {
+	return app.add_middleware(a, move mw);
 }
 
 pub fn add_route_group(a: &mut App, prefix: String) nothrow -> core.Result<RouteGroup, RestError> {
