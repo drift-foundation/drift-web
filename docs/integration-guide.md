@@ -264,7 +264,8 @@ drift-web does not provide:
 - [Effective web-jwt usage](effective-web-jwt.md) — JWT API, sign/verify
   patterns, temporal claims, error tags
 - [Effective web-rest usage](effective-web-rest.md) — REST server API,
-  routing, guards, filters, error envelopes, request accessors
+  routing, route-group guards, wrapping middleware, Context slot map,
+  error envelopes, request accessors
 
 ## Troubleshooting
 
