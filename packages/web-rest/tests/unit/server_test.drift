@@ -256,11 +256,11 @@ fn scenario_jwt_authorized() nothrow -> Int {
 		core.Result::Err(_) => { return 201; },
 		core.Result::Ok(a) => {
 			var app = move a;
-			match rest.add_group(&mut app, "/v1") {
+			match rest.add_route_group(&mut app, "/v1") {
 				core.Result::Err(_) => { return 202; },
-				core.Result::Ok(group) => {
-					rest.add_group_guard(&mut app, &group, core.callback2(_jwt_guard_owned));
-					match rest_app.add_group_route(&mut app, &group, "GET", "/me", core.callback2(_me_handler)) {
+				core.Result::Ok(rg) => {
+					rest.add_route_group_guard(&mut app, &rg, core.callback2(_jwt_guard_owned));
+					match rest_app.add_route_group_route(&mut app, &rg, "GET", "/me", core.callback2(_me_handler)) {
 						core.Result::Err(_) => { return 203; },
 						core.Result::Ok(_) => {}
 					}
@@ -303,11 +303,11 @@ fn scenario_jwt_unauthorized() nothrow -> Int {
 		core.Result::Err(_) => { return 301; },
 		core.Result::Ok(a) => {
 			var app = move a;
-			match rest.add_group(&mut app, "/v1") {
+			match rest.add_route_group(&mut app, "/v1") {
 				core.Result::Err(_) => { return 302; },
-				core.Result::Ok(group) => {
-					rest.add_group_guard(&mut app, &group, core.callback2(_jwt_guard_owned));
-					match rest_app.add_group_route(&mut app, &group, "GET", "/me", core.callback2(_me_handler)) {
+				core.Result::Ok(rg) => {
+					rest.add_route_group_guard(&mut app, &rg, core.callback2(_jwt_guard_owned));
+					match rest_app.add_route_group_route(&mut app, &rg, "GET", "/me", core.callback2(_me_handler)) {
 						core.Result::Err(_) => { return 303; },
 						core.Result::Ok(_) => {}
 					}

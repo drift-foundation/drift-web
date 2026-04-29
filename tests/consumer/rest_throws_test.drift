@@ -12,11 +12,11 @@ import web.rest.events as events;
 //
 // Proves through the package-consumer path (--dep):
 //   - rest.add_throws_route compiles and serves requests
-//   - rest.add_group_throws_route compiles and serves requests
+//   - rest.add_route_group_throws_route compiles and serves requests
 //   - framework exception mapping: RestBadRequest→400, RestUnauthorized→401,
 //     RestForbidden→403, RestNotFound→404, RestConflict→409, RestInternal→500
 //   - throws and nothrow routes coexist on the same app
-//   - group guard runs before group throws handler
+//   - route-group guard runs before route-group throws handler
 
 // --- Handlers ---
 
@@ -114,27 +114,27 @@ fn main() nothrow -> Int {
 				core.Result::Ok(_) => {}
 			}
 
-			// --- Register group throws routes ---
-			match rest.add_group(&mut app, "/api") {
+			// --- Register route-group throws routes ---
+			match rest.add_route_group(&mut app, "/api") {
 				core.Result::Err(_) => { return 10; },
-				core.Result::Ok(group) => {
-					match rest.add_group_throws_route(&mut app, &group, "GET", "/ok", core.callback_throw2(_group_ok_handler)) {
+				core.Result::Ok(rg) => {
+					match rest.add_route_group_throws_route(&mut app, &rg, "GET", "/ok", core.callback_throw2(_group_ok_handler)) {
 						core.Result::Err(_) => { return 11; },
 						core.Result::Ok(_) => {}
 					}
-					match rest.add_group_throws_route(&mut app, &group, "POST", "/fail", core.callback_throw2(_group_fail_handler)) {
+					match rest.add_route_group_throws_route(&mut app, &rg, "POST", "/fail", core.callback_throw2(_group_fail_handler)) {
 						core.Result::Err(_) => { return 12; },
 						core.Result::Ok(_) => {}
 					}
 				}
 			}
 
-			// --- Register guarded group with throws route ---
-			match rest.add_group(&mut app, "/guarded") {
+			// --- Register guarded route-group with throws route ---
+			match rest.add_route_group(&mut app, "/guarded") {
 				core.Result::Err(_) => { return 13; },
-				core.Result::Ok(ggroup) => {
-					rest.add_group_guard(&mut app, &ggroup, core.callback2(_guard_reject));
-					match rest.add_group_throws_route(&mut app, &ggroup, "GET", "/test", core.callback_throw2(_ok_handler)) {
+				core.Result::Ok(grg) => {
+					rest.add_route_group_guard(&mut app, &grg, core.callback2(_guard_reject));
+					match rest.add_route_group_throws_route(&mut app, &grg, "GET", "/test", core.callback_throw2(_ok_handler)) {
 						core.Result::Err(_) => { return 14; },
 						core.Result::Ok(_) => {}
 					}

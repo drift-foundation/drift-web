@@ -26,7 +26,7 @@ export {
 	JwtGuardConfig,
 	AppBuilder,
 	App,
-	Group,
+	RouteGroup,
 	JsonHandle,
 	// Error constructors
 	RestBadRequest,
@@ -88,14 +88,14 @@ export {
 	bind,
 	build_app,
 	add_filter,
-	add_group,
-	add_group_guard,
+	add_route_group,
+	add_route_group_guard,
 	// Route registration (nothrow: handler returns Result<Response, RestError>)
 	add_route,
-	add_group_route,
+	add_route_group_route,
 	// Route registration (throws: handler returns Response, framework catches exceptions)
 	add_throws_route,
-	add_group_throws_route,
+	add_route_group_throws_route,
 	// Dispatch (for testing / custom server implementations)
 	dispatch,
 	// Server lifecycle (high-level — always runs on VT fiber)
@@ -113,7 +113,7 @@ pub type Principal = context.Principal;
 pub type JwtGuardConfig = jwt_guard.JwtGuardConfig;
 pub type AppBuilder = app.AppBuilder;
 pub type App = app.App;
-pub type Group = app.Group;
+pub type RouteGroup = app.RouteGroup;
 pub type JsonHandle = json.JsonHandle;
 
 pub type ValidationErrors = validation_collector.ValidationErrors;
@@ -292,28 +292,28 @@ pub fn add_filter(a: &mut App, filter: core.Callback2<&Request, &mut Context, co
 	return app.add_filter(a, move filter);
 }
 
-pub fn add_group(a: &mut App, prefix: String) nothrow -> core.Result<Group, RestError> {
-	return app.add_group(a, prefix);
+pub fn add_route_group(a: &mut App, prefix: String) nothrow -> core.Result<RouteGroup, RestError> {
+	return app.add_route_group(a, prefix);
 }
 
-pub fn add_group_guard(a: &mut App, group: &Group, guard: core.Callback2<&Request, &mut Context, core.Result<Void, RestError>>) nothrow -> Void {
-	return app.add_group_guard(a, group, move guard);
+pub fn add_route_group_guard(a: &mut App, rg: &RouteGroup, guard: core.Callback2<&Request, &mut Context, core.Result<Void, RestError>>) nothrow -> Void {
+	return app.add_route_group_guard(a, rg, move guard);
 }
 
 pub fn add_route(a: &mut App, method: String, path: String, handler: core.Callback2<&Request, &mut Context, core.Result<Response, RestError>>) nothrow -> core.Result<Void, RestError> {
 	return app.add_route(a, method, path, move handler);
 }
 
-pub fn add_group_route(a: &mut App, group: &Group, method: String, path: String, handler: core.Callback2<&Request, &mut Context, core.Result<Response, RestError>>) nothrow -> core.Result<Void, RestError> {
-	return app.add_group_route(a, group, method, path, move handler);
+pub fn add_route_group_route(a: &mut App, rg: &RouteGroup, method: String, path: String, handler: core.Callback2<&Request, &mut Context, core.Result<Response, RestError>>) nothrow -> core.Result<Void, RestError> {
+	return app.add_route_group_route(a, rg, method, path, move handler);
 }
 
 pub fn add_throws_route(a: &mut App, method: String, path: String, handler: core.CallbackThrow2<&Request, &mut Context, Response>) nothrow -> core.Result<Void, RestError> {
 	return app.add_throws_route(a, method, path, move handler);
 }
 
-pub fn add_group_throws_route(a: &mut App, group: &Group, method: String, path: String, handler: core.CallbackThrow2<&Request, &mut Context, Response>) nothrow -> core.Result<Void, RestError> {
-	return app.add_group_throws_route(a, group, method, path, move handler);
+pub fn add_route_group_throws_route(a: &mut App, rg: &RouteGroup, method: String, path: String, handler: core.CallbackThrow2<&Request, &mut Context, Response>) nothrow -> core.Result<Void, RestError> {
+	return app.add_route_group_throws_route(a, rg, method, path, move handler);
 }
 
 pub fn dispatch(a: &App, req: &mut Request, ctx: &mut Context) nothrow -> core.Result<Response, RestError> {

@@ -12,17 +12,17 @@ import web.rest.router as router;
 export {
 	AppBuilder,
 	App,
-	Group,
+	RouteGroup,
 	new_app_builder,
 	bind,
 	build_app,
 	add_filter,
-	add_group,
-	add_group_guard,
+	add_route_group,
+	add_route_group_guard,
 	add_route,
-	add_group_route,
+	add_route_group_route,
 	add_throws_route,
-	add_group_throws_route,
+	add_route_group_throws_route,
 	dispatch
 };
 
@@ -49,11 +49,11 @@ pub struct App {
 	// Global filters (flat array)
 	pub filters: Array<core.Callback2<&request.Request, &mut context.Context, core.Result<Void, errors.RestError>>>,
 
-	// Group guards (flat array, parallel group_id)
+	// RouteGroup guards (flat array, parallel route_group_id)
 	pub guard_callbacks: Array<core.Callback2<&request.Request, &mut context.Context, core.Result<Void, errors.RestError>>>,
 	pub guard_group_ids: Array<Int>,
 
-	// Group prefixes (parallel arrays indexed by group id)
+	// RouteGroup prefixes (parallel arrays indexed by route group id)
 	pub group_prefix_raw: Array<String>,
 	pub group_prefix_seg_counts: Array<Int>,
 	pub group_count: Int,
@@ -63,7 +63,7 @@ pub struct App {
 	pub bind_ports: Array<Int>
 }
 
-pub struct Group {
+pub struct RouteGroup {
 	pub id: Int
 }
 
@@ -134,7 +134,7 @@ pub fn add_filter(app: &mut App, filter: core.Callback2<&request.Request, &mut c
 	return core.void_value();
 }
 
-pub fn add_group(app: &mut App, prefix: String) nothrow -> core.Result<Group, errors.RestError> {
+pub fn add_route_group(app: &mut App, prefix: String) nothrow -> core.Result<RouteGroup, errors.RestError> {
 	val segs = router.split_path(&prefix);
 	var i = 0;
 	while i < segs.len {
@@ -144,10 +144,10 @@ pub fn add_group(app: &mut App, prefix: String) nothrow -> core.Result<Group, er
 		while j < seg_len {
 			val ch = core.string_byte_at(seg, j);
 			if ch == cast<Byte>(123) {
-				return core.Result::Err(errors.rest_error(500, "internal", "invalid-group-prefix", "group prefix must not contain path parameters"));
+				return core.Result::Err(errors.rest_error(500, "internal", "invalid-group-prefix", "route group prefix must not contain path parameters"));
 			}
 			if ch == cast<Byte>(125) {
-				return core.Result::Err(errors.rest_error(500, "internal", "invalid-group-prefix", "group prefix must not contain path parameters"));
+				return core.Result::Err(errors.rest_error(500, "internal", "invalid-group-prefix", "route group prefix must not contain path parameters"));
 			}
 			j = j + 1;
 		}
@@ -158,12 +158,12 @@ pub fn add_group(app: &mut App, prefix: String) nothrow -> core.Result<Group, er
 	app.group_prefix_raw.push(move prefix);
 	app.group_prefix_seg_counts.push(move seg_count);
 	app.group_count = app.group_count + 1;
-	return core.Result::Ok(Group(id = id));
+	return core.Result::Ok(RouteGroup(id = id));
 }
 
-pub fn add_group_guard(app: &mut App, group: &Group, guard: core.Callback2<&request.Request, &mut context.Context, core.Result<Void, errors.RestError>>) nothrow -> Void {
+pub fn add_route_group_guard(app: &mut App, rg: &RouteGroup, guard: core.Callback2<&request.Request, &mut context.Context, core.Result<Void, errors.RestError>>) nothrow -> Void {
 	app.guard_callbacks.push(move guard);
-	app.guard_group_ids.push(group.id);
+	app.guard_group_ids.push(rg.id);
 	return core.void_value();
 }
 
@@ -195,8 +195,8 @@ pub fn add_route(app: &mut App, method: String, path: String, handler: core.Call
 	}
 }
 
-pub fn add_group_route(app: &mut App, group: &Group, method: String, path: String, handler: core.Callback2<&request.Request, &mut context.Context, core.Result<response.Response, errors.RestError>>) nothrow -> core.Result<Void, errors.RestError> {
-	var full_path = app.group_prefix_raw[group.id];
+pub fn add_route_group_route(app: &mut App, rg: &RouteGroup, method: String, path: String, handler: core.Callback2<&request.Request, &mut context.Context, core.Result<response.Response, errors.RestError>>) nothrow -> core.Result<Void, errors.RestError> {
+	var full_path = app.group_prefix_raw[rg.id];
 	val route_segs = router.split_path(&path);
 	var j = 0;
 	while j < route_segs.len {
@@ -217,7 +217,7 @@ pub fn add_group_route(app: &mut App, group: &Group, method: String, path: Strin
 			app.route_throws_handlers.push(core.callback_throw2(_throws_placeholder));
 			var is_t = false;
 			app.route_is_throws.push(move is_t);
-			app.route_group_ids.push(group.id);
+			app.route_group_ids.push(rg.id);
 			return core.Result::Ok(core.void_value());
 		}
 	}
@@ -241,8 +241,8 @@ pub fn add_throws_route(app: &mut App, method: String, path: String, handler: co
 	}
 }
 
-pub fn add_group_throws_route(app: &mut App, group: &Group, method: String, path: String, handler: core.CallbackThrow2<&request.Request, &mut context.Context, response.Response>) nothrow -> core.Result<Void, errors.RestError> {
-	var full_path = app.group_prefix_raw[group.id];
+pub fn add_route_group_throws_route(app: &mut App, rg: &RouteGroup, method: String, path: String, handler: core.CallbackThrow2<&request.Request, &mut context.Context, response.Response>) nothrow -> core.Result<Void, errors.RestError> {
+	var full_path = app.group_prefix_raw[rg.id];
 	val route_segs = router.split_path(&path);
 	var j = 0;
 	while j < route_segs.len {
@@ -263,7 +263,7 @@ pub fn add_group_throws_route(app: &mut App, group: &Group, method: String, path
 			app.route_throws_handlers.push(move handler);
 			var is_t = true;
 			app.route_is_throws.push(move is_t);
-			app.route_group_ids.push(group.id);
+			app.route_group_ids.push(rg.id);
 			return core.Result::Ok(core.void_value());
 		}
 	}

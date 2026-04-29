@@ -9,7 +9,7 @@ import web.rest as rest;
 import web.rest.events as events;
 
 // Consumer-path regression: bare-lambda implicit wrap into rest.add_throws_route /
-// rest.add_group_throws_route, the shape that surfaced as a 0.31.18 LANGUAGE_BUG
+// rest.add_route_group_throws_route, the shape that surfaced as a 0.31.18 LANGUAGE_BUG
 // against pushcoin/bookkeeper and was fixed in 0.31.19.
 //
 // The existing rest_throws_test.drift exercises add_throws_route only with named
@@ -101,12 +101,12 @@ fn main() nothrow -> Int {
 				core.Result::Ok(_) => {}
 			}
 
-			// Site D — group throws route via add_group_throws_route + bare
-			// lambda.  Same dispatch authority on the group-route surface.
-			match rest.add_group(&mut app, "/api") {
+			// Site D — route-group throws route via add_route_group_throws_route +
+			// bare lambda. Same dispatch authority on the route-group surface.
+			match rest.add_route_group(&mut app, "/api") {
 				core.Result::Err(_) => { return 5; },
-				core.Result::Ok(group) => {
-					match rest.add_group_throws_route(&mut app, &group, "GET", "/iw/unauth", |req, ctx| => {
+				core.Result::Ok(rg) => {
+					match rest.add_route_group_throws_route(&mut app, &rg, "GET", "/iw/unauth", |req, ctx| => {
 						return _throw_unauth();
 					}) {
 						core.Result::Err(_) => { return 6; },

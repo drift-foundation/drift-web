@@ -304,12 +304,12 @@ fn scenario_many_sequential_mixed() nothrow -> Int {
 				core.Result::Ok(_) => {}
 			}
 
-			// Guarded group for /v1/me
-			match rest.add_group(&mut app, "/v1") {
+			// Guarded route-group for /v1/me
+			match rest.add_route_group(&mut app, "/v1") {
 				core.Result::Err(_) => { return 105; },
-				core.Result::Ok(group) => {
-					rest.add_group_guard(&mut app, &group, core.callback2(_jwt_guard_owned));
-					match rest_app.add_group_route(&mut app, &group, "GET", "/me", core.callback2(_me_handler)) {
+				core.Result::Ok(rg) => {
+					rest.add_route_group_guard(&mut app, &rg, core.callback2(_jwt_guard_owned));
+					match rest_app.add_route_group_route(&mut app, &rg, "GET", "/me", core.callback2(_me_handler)) {
 						core.Result::Err(_) => { return 106; },
 						core.Result::Ok(_) => {}
 					}

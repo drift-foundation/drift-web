@@ -125,7 +125,7 @@ run_test "rest_throws_test" \
     --dep "web-jwt@${jwt_ver}"
 
 # 5b. web-rest bare-lambda implicit-wrap into add_throws_route /
-#     add_group_throws_route (0.31.19 LANGUAGE_BUG regression: dispatch
+#     add_route_group_throws_route (0.31.19 LANGUAGE_BUG regression: dispatch
 #     selected callback2 instead of callback_throw2 for CallbackThrow*
 #     params).  Mirrors pushcoin/bookkeeper's call shape — bare lambdas
 #     with untyped params, throwing bodies, and `captures(share arc)`.

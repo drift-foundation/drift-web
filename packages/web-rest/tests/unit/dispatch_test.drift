@@ -307,12 +307,12 @@ fn scenario_filter_rejects() nothrow -> Int {
 fn scenario_guard_runs_for_group() nothrow -> Int {
 	var app = _build_test_app();
 	// Create group with guard
-	match rest.add_group(&mut app, "/admin") {
+	match rest.add_route_group(&mut app, "/admin") {
 		core.Result::Err(_) => { return 1001; },
-		core.Result::Ok(group) => {
-			rest.add_group_guard(&mut app, &group, core.callback2(_require_principal_guard));
+		core.Result::Ok(rg) => {
+			rest.add_route_group_guard(&mut app, &rg, core.callback2(_require_principal_guard));
 			// Add guarded group route
-			match rest_app.add_group_route(&mut app, &group, "GET", "/dash", core.callback2(_admin_handler)) {
+			match rest_app.add_route_group_route(&mut app, &rg, "GET", "/dash", core.callback2(_admin_handler)) {
 				core.Result::Err(_) => { return 1002; },
 				core.Result::Ok(_) => {}
 			}
@@ -332,7 +332,7 @@ fn scenario_guard_runs_for_group() nothrow -> Int {
 			if resp.status != 200 { return 1005; }
 		}
 	}
-	// Group route without principal → guard rejects
+	// Route-group route without principal → guard rejects
 	var req2 = rest.new_request("GET", "/admin/dash");
 	var ctx2 = rest.new_context();
 	match rest.dispatch(&app, &mut req2, &mut ctx2) {
@@ -342,7 +342,7 @@ fn scenario_guard_runs_for_group() nothrow -> Int {
 			if e.tag != "guard-no-principal" { return 1008; }
 		}
 	}
-	// Group route with principal → succeeds
+	// Route-group route with principal → succeeds
 	var req3 = rest.new_request("GET", "/admin/dash");
 	var ctx3 = rest.new_context();
 	rest.set_principal(&mut ctx3, "admin-user");
@@ -359,11 +359,11 @@ fn scenario_guard_runs_for_group() nothrow -> Int {
 // Scenario: guard returns Err → handler never called
 fn scenario_guard_rejects() nothrow -> Int {
 	var app = _build_test_app();
-	match rest.add_group(&mut app, "/api") {
+	match rest.add_route_group(&mut app, "/api") {
 		core.Result::Err(_) => { return 1101; },
-		core.Result::Ok(group) => {
-			rest.add_group_guard(&mut app, &group, core.callback2(_require_principal_guard));
-			match rest_app.add_group_route(&mut app, &group, "GET", "/data", core.callback2(_health_handler)) {
+		core.Result::Ok(rg) => {
+			rest.add_route_group_guard(&mut app, &rg, core.callback2(_require_principal_guard));
+			match rest_app.add_route_group_route(&mut app, &rg, "GET", "/data", core.callback2(_health_handler)) {
 				core.Result::Err(_) => { return 1102; },
 				core.Result::Ok(_) => {}
 			}
@@ -540,7 +540,7 @@ fn scenario_duplicate_param_name_rejected() nothrow -> Int {
 // Scenario: group prefix with {param} rejected
 fn scenario_group_prefix_no_params() nothrow -> Int {
 	var app = _build_test_app();
-	match rest.add_group(&mut app, "/users/{id}") {
+	match rest.add_route_group(&mut app, "/users/{id}") {
 		core.Result::Ok(_) => { return 1801; },
 		core.Result::Err(e) => {
 			if e.status != 500 { return 1802; }
@@ -550,15 +550,15 @@ fn scenario_group_prefix_no_params() nothrow -> Int {
 	}
 }
 
-// --- Group throws route ---
+// --- RouteGroup throws route ---
 
-// Scenario: throws handler on a group route works correctly
+// Scenario: throws handler on a route-group route works correctly
 fn scenario_group_throws_route() nothrow -> Int {
 	var app = _build_test_app();
-	match rest.add_group(&mut app, "/api") {
+	match rest.add_route_group(&mut app, "/api") {
 		core.Result::Err(_) => { return 1901; },
-		core.Result::Ok(group) => {
-			match rest_app.add_group_throws_route(&mut app, &group, "GET", "/ok", core.callback_throw2(_throws_ok_handler)) {
+		core.Result::Ok(rg) => {
+			match rest_app.add_route_group_throws_route(&mut app, &rg, "GET", "/ok", core.callback_throw2(_throws_ok_handler)) {
 				core.Result::Err(_) => { return 1902; },
 				core.Result::Ok(_) => {}
 			}
@@ -660,7 +660,7 @@ fn main() nothrow -> Int {
 	val r = scenario_group_prefix_no_params();
 	if r != 0 { return r; }
 
-	// Group throws route
+	// Route-group throws route
 	val s = scenario_group_throws_route();
 	if s != 0 { return s; }
 

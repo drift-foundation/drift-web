@@ -5,7 +5,7 @@ import web.rest as rest;
 import web.rest.events as events;
 
 // Public-API regression tests for throws-style route registration.
-// All registration goes through rest.add_throws_route / rest.add_group_throws_route
+// All registration goes through rest.add_throws_route / rest.add_route_group_throws_route
 // (the published facade), NOT through internal web.rest.app.
 
 // --- Handlers ---
@@ -214,10 +214,10 @@ fn scenario_pub_throws_internal() nothrow -> Int {
 // 800: group throws route via public API → 200
 fn scenario_pub_group_throws_ok() nothrow -> Int {
 	var app = _build_app();
-	match rest.add_group(&mut app, "/api") {
+	match rest.add_route_group(&mut app, "/api") {
 		core.Result::Err(_) => { return 801; },
-		core.Result::Ok(group) => {
-			match rest.add_group_throws_route(&mut app, &group, "GET", "/ok", core.callback_throw2(_ok_handler)) {
+		core.Result::Ok(rg) => {
+			match rest.add_route_group_throws_route(&mut app, &rg, "GET", "/ok", core.callback_throw2(_ok_handler)) {
 				core.Result::Err(_) => { return 802; },
 				core.Result::Ok(_) => {}
 			}
@@ -238,10 +238,10 @@ fn scenario_pub_group_throws_ok() nothrow -> Int {
 // 900: group throws route, handler throws → framework catches
 fn scenario_pub_group_throws_exception() nothrow -> Int {
 	var app = _build_app();
-	match rest.add_group(&mut app, "/v1") {
+	match rest.add_route_group(&mut app, "/v1") {
 		core.Result::Err(_) => { return 901; },
-		core.Result::Ok(group) => {
-			match rest.add_group_throws_route(&mut app, &group, "POST", "/fail", core.callback_throw2(_bad_request_handler)) {
+		core.Result::Ok(rg) => {
+			match rest.add_route_group_throws_route(&mut app, &rg, "POST", "/fail", core.callback_throw2(_bad_request_handler)) {
 				core.Result::Err(_) => { return 902; },
 				core.Result::Ok(_) => {}
 			}
