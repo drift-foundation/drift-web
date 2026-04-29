@@ -4,6 +4,7 @@ import std.core as core;
 import web.rest as rest;
 import web.rest.app as rest_app;
 import web.rest.events as events;
+import std.concurrent as conc;
 
 // Tests for dispatch machinery: routing, path params, filters, guards, throws adapter.
 
@@ -105,7 +106,8 @@ fn scenario_static_route_match() nothrow -> Int {
 	}
 	var req = rest.new_request("GET", "/health");
 	var ctx = rest.new_context();
-	match rest.dispatch(&app, &mut req, &mut ctx) {
+	val app_arc = conc.arc(move app);
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
 		core.Result::Err(_) => { return 102; },
 		core.Result::Ok(resp) => {
 			if resp.status != 200 { return 103; }
@@ -124,7 +126,8 @@ fn scenario_method_mismatch() nothrow -> Int {
 	}
 	var req = rest.new_request("POST", "/health");
 	var ctx = rest.new_context();
-	match rest.dispatch(&app, &mut req, &mut ctx) {
+	val app_arc = conc.arc(move app);
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
 		core.Result::Ok(_) => { return 202; },
 		core.Result::Err(e) => {
 			if e.status != 404 { return 203; }
@@ -144,7 +147,8 @@ fn scenario_path_mismatch() nothrow -> Int {
 	}
 	var req = rest.new_request("GET", "/unknown");
 	var ctx = rest.new_context();
-	match rest.dispatch(&app, &mut req, &mut ctx) {
+	val app_arc = conc.arc(move app);
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
 		core.Result::Ok(_) => { return 302; },
 		core.Result::Err(e) => {
 			if e.status != 404 { return 303; }
@@ -167,7 +171,8 @@ fn scenario_multiple_routes() nothrow -> Int {
 	}
 	var req = rest.new_request("POST", "/users");
 	var ctx = rest.new_context();
-	match rest.dispatch(&app, &mut req, &mut ctx) {
+	val app_arc = conc.arc(move app);
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
 		core.Result::Err(_) => { return 403; },
 		core.Result::Ok(resp) => {
 			if resp.status != 201 { return 404; }
@@ -188,7 +193,8 @@ fn scenario_path_param_extracted() nothrow -> Int {
 	}
 	var req = rest.new_request("GET", "/users/42");
 	var ctx = rest.new_context();
-	match rest.dispatch(&app, &mut req, &mut ctx) {
+	val app_arc = conc.arc(move app);
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
 		core.Result::Err(_) => { return 502; },
 		core.Result::Ok(resp) => {
 			if resp.status != 200 { return 503; }
@@ -213,7 +219,8 @@ fn scenario_static_beats_param() nothrow -> Int {
 	}
 	var req = rest.new_request("GET", "/users/me");
 	var ctx = rest.new_context();
-	match rest.dispatch(&app, &mut req, &mut ctx) {
+	val app_arc = conc.arc(move app);
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
 		core.Result::Err(_) => { return 603; },
 		core.Result::Ok(resp) => {
 			if resp.status != 200 { return 604; }
@@ -232,7 +239,8 @@ fn scenario_multiple_path_params() nothrow -> Int {
 	}
 	var req = rest.new_request("GET", "/a/hello/b/world");
 	var ctx = rest.new_context();
-	match rest.dispatch(&app, &mut req, &mut ctx) {
+	val app_arc = conc.arc(move app);
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
 		core.Result::Err(_) => { return 702; },
 		core.Result::Ok(resp) => {
 			if resp.status != 200 { return 703; }
@@ -273,7 +281,8 @@ fn scenario_filter_runs_before_handler() nothrow -> Int {
 	}
 	var req = rest.new_request("GET", "/me");
 	var ctx = rest.new_context();
-	match rest.dispatch(&app, &mut req, &mut ctx) {
+	val app_arc = conc.arc(move app);
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
 		core.Result::Err(_) => { return 802; },
 		core.Result::Ok(resp) => {
 			if resp.status != 200 { return 803; }
@@ -293,7 +302,8 @@ fn scenario_filter_rejects() nothrow -> Int {
 	}
 	var req = rest.new_request("GET", "/health");
 	var ctx = rest.new_context();
-	match rest.dispatch(&app, &mut req, &mut ctx) {
+	val app_arc = conc.arc(move app);
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
 		core.Result::Ok(_) => { return 902; },
 		core.Result::Err(e) => {
 			if e.status != 403 { return 903; }
@@ -326,7 +336,8 @@ fn scenario_guard_runs_for_group() nothrow -> Int {
 	// Root route should work without principal
 	var req1 = rest.new_request("GET", "/health");
 	var ctx1 = rest.new_context();
-	match rest.dispatch(&app, &mut req1, &mut ctx1) {
+	val app_arc = conc.arc(move app);
+	match rest.dispatch(app_arc.clone(), &mut req1, &mut ctx1) {
 		core.Result::Err(_) => { return 1004; },
 		core.Result::Ok(resp) => {
 			if resp.status != 200 { return 1005; }
@@ -335,7 +346,7 @@ fn scenario_guard_runs_for_group() nothrow -> Int {
 	// Route-group route without principal → guard rejects
 	var req2 = rest.new_request("GET", "/admin/dash");
 	var ctx2 = rest.new_context();
-	match rest.dispatch(&app, &mut req2, &mut ctx2) {
+	match rest.dispatch(app_arc.clone(), &mut req2, &mut ctx2) {
 		core.Result::Ok(_) => { return 1006; },
 		core.Result::Err(e) => {
 			if e.status != 401 { return 1007; }
@@ -346,7 +357,7 @@ fn scenario_guard_runs_for_group() nothrow -> Int {
 	var req3 = rest.new_request("GET", "/admin/dash");
 	var ctx3 = rest.new_context();
 	rest.ctx_set<type rest.Principal>(&mut ctx3, rest.Principal(sub = "admin-user"));
-	match rest.dispatch(&app, &mut req3, &mut ctx3) {
+	match rest.dispatch(app_arc.clone(), &mut req3, &mut ctx3) {
 		core.Result::Err(_) => { return 1009; },
 		core.Result::Ok(resp) => {
 			if resp.status != 200 { return 1010; }
@@ -371,7 +382,8 @@ fn scenario_guard_rejects() nothrow -> Int {
 	}
 	var req = rest.new_request("GET", "/api/data");
 	var ctx = rest.new_context();
-	match rest.dispatch(&app, &mut req, &mut ctx) {
+	val app_arc = conc.arc(move app);
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
 		core.Result::Ok(_) => { return 1103; },
 		core.Result::Err(e) => {
 			if e.status != 401 { return 1104; }
@@ -425,7 +437,8 @@ fn scenario_filter_order_preserved() nothrow -> Int {
 	}
 	var req = rest.new_request("GET", "/echo");
 	var ctx = rest.new_context();
-	match rest.dispatch(&app, &mut req, &mut ctx) {
+	val app_arc = conc.arc(move app);
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
 		core.Result::Err(_) => { return 1202; },
 		core.Result::Ok(resp) => {
 			if resp.body != "AB" { return 1203; }
@@ -468,7 +481,8 @@ fn scenario_throws_handler_success() nothrow -> Int {
 	}
 	var req = rest.new_request("GET", "/thr");
 	var ctx = rest.new_context();
-	match rest.dispatch(&app, &mut req, &mut ctx) {
+	val app_arc = conc.arc(move app);
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
 		core.Result::Err(_) => { return 1302; },
 		core.Result::Ok(resp) => {
 			if resp.status != 200 { return 1303; }
@@ -487,7 +501,8 @@ fn scenario_throws_handler_bad_request() nothrow -> Int {
 	}
 	var req = rest.new_request("POST", "/thr");
 	var ctx = rest.new_context();
-	match rest.dispatch(&app, &mut req, &mut ctx) {
+	val app_arc = conc.arc(move app);
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
 		core.Result::Ok(_) => { return 1402; },
 		core.Result::Err(e) => {
 			if e.status != 400 { return 1403; }
@@ -507,7 +522,8 @@ fn scenario_throws_handler_unauthorized() nothrow -> Int {
 	}
 	var req = rest.new_request("GET", "/auth");
 	var ctx = rest.new_context();
-	match rest.dispatch(&app, &mut req, &mut ctx) {
+	val app_arc = conc.arc(move app);
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
 		core.Result::Ok(_) => { return 1502; },
 		core.Result::Err(e) => {
 			if e.status != 401 { return 1503; }
@@ -527,7 +543,8 @@ fn scenario_throws_handler_internal() nothrow -> Int {
 	}
 	var req = rest.new_request("GET", "/fail");
 	var ctx = rest.new_context();
-	match rest.dispatch(&app, &mut req, &mut ctx) {
+	val app_arc = conc.arc(move app);
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
 		core.Result::Ok(_) => { return 1602; },
 		core.Result::Err(e) => {
 			if e.status != 500 { return 1603; }
@@ -582,7 +599,8 @@ fn scenario_group_throws_route() nothrow -> Int {
 	}
 	var req = rest.new_request("GET", "/api/ok");
 	var ctx = rest.new_context();
-	match rest.dispatch(&app, &mut req, &mut ctx) {
+	val app_arc = conc.arc(move app);
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
 		core.Result::Err(_) => { return 1903; },
 		core.Result::Ok(resp) => {
 			if resp.status != 200 { return 1904; }
@@ -606,7 +624,8 @@ fn scenario_path_params_cleared_on_redispatch() nothrow -> Int {
 	// First dispatch: extracts id=42
 	var req = rest.new_request("GET", "/users/42");
 	var ctx = rest.new_context();
-	match rest.dispatch(&app, &mut req, &mut ctx) {
+	val app_arc = conc.arc(move app);
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
 		core.Result::Err(_) => { return 2003; },
 		core.Result::Ok(resp) => {
 			if resp.body != "{\"id\":\"42\"}" { return 2004; }
@@ -618,7 +637,7 @@ fn scenario_path_params_cleared_on_redispatch() nothrow -> Int {
 	req.path = "/health";
 	req.method = "GET";
 	var ctx2 = rest.new_context();
-	match rest.dispatch(&app, &mut req, &mut ctx2) {
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx2) {
 		core.Result::Err(_) => { return 2006; },
 		core.Result::Ok(resp) => {
 			if resp.status != 200 { return 2007; }

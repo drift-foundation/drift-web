@@ -3,6 +3,7 @@ module web.rest.tests.unit.throws_route_test;
 import std.core as core;
 import web.rest as rest;
 import web.rest.events as events;
+import std.concurrent as conc;
 
 // Public-API regression tests for throws-style route registration.
 // All registration goes through rest.add_throws_route / rest.add_route_group_throws_route
@@ -81,7 +82,8 @@ fn scenario_pub_throws_ok() nothrow -> Int {
 	}
 	var req = rest.new_request("GET", "/ok");
 	var ctx = rest.new_context();
-	match rest.dispatch(&app, &mut req, &mut ctx) {
+	val app_arc = conc.arc(move app);
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
 		core.Result::Err(_) => { return 102; },
 		core.Result::Ok(resp) => {
 			if resp.status != 200 { return 103; }
@@ -100,7 +102,8 @@ fn scenario_pub_throws_bad_request() nothrow -> Int {
 	}
 	var req = rest.new_request("POST", "/bad");
 	var ctx = rest.new_context();
-	match rest.dispatch(&app, &mut req, &mut ctx) {
+	val app_arc = conc.arc(move app);
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
 		core.Result::Ok(_) => { return 202; },
 		core.Result::Err(e) => {
 			if e.status != 400 { return 203; }
@@ -120,7 +123,8 @@ fn scenario_pub_throws_unauthorized() nothrow -> Int {
 	}
 	var req = rest.new_request("GET", "/unauth");
 	var ctx = rest.new_context();
-	match rest.dispatch(&app, &mut req, &mut ctx) {
+	val app_arc = conc.arc(move app);
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
 		core.Result::Ok(_) => { return 302; },
 		core.Result::Err(e) => {
 			if e.status != 401 { return 303; }
@@ -140,7 +144,8 @@ fn scenario_pub_throws_forbidden() nothrow -> Int {
 	}
 	var req = rest.new_request("GET", "/forbid");
 	var ctx = rest.new_context();
-	match rest.dispatch(&app, &mut req, &mut ctx) {
+	val app_arc = conc.arc(move app);
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
 		core.Result::Ok(_) => { return 402; },
 		core.Result::Err(e) => {
 			if e.status != 403 { return 403; }
@@ -160,7 +165,8 @@ fn scenario_pub_throws_not_found() nothrow -> Int {
 	}
 	var req = rest.new_request("GET", "/missing");
 	var ctx = rest.new_context();
-	match rest.dispatch(&app, &mut req, &mut ctx) {
+	val app_arc = conc.arc(move app);
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
 		core.Result::Ok(_) => { return 502; },
 		core.Result::Err(e) => {
 			if e.status != 404 { return 503; }
@@ -180,7 +186,8 @@ fn scenario_pub_throws_conflict() nothrow -> Int {
 	}
 	var req = rest.new_request("PUT", "/conflict");
 	var ctx = rest.new_context();
-	match rest.dispatch(&app, &mut req, &mut ctx) {
+	val app_arc = conc.arc(move app);
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
 		core.Result::Ok(_) => { return 602; },
 		core.Result::Err(e) => {
 			if e.status != 409 { return 603; }
@@ -200,7 +207,8 @@ fn scenario_pub_throws_internal() nothrow -> Int {
 	}
 	var req = rest.new_request("GET", "/err");
 	var ctx = rest.new_context();
-	match rest.dispatch(&app, &mut req, &mut ctx) {
+	val app_arc = conc.arc(move app);
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
 		core.Result::Ok(_) => { return 702; },
 		core.Result::Err(e) => {
 			if e.status != 500 { return 703; }
@@ -225,7 +233,8 @@ fn scenario_pub_group_throws_ok() nothrow -> Int {
 	}
 	var req = rest.new_request("GET", "/api/ok");
 	var ctx = rest.new_context();
-	match rest.dispatch(&app, &mut req, &mut ctx) {
+	val app_arc = conc.arc(move app);
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
 		core.Result::Err(_) => { return 803; },
 		core.Result::Ok(resp) => {
 			if resp.status != 200 { return 804; }
@@ -249,7 +258,8 @@ fn scenario_pub_group_throws_exception() nothrow -> Int {
 	}
 	var req = rest.new_request("POST", "/v1/fail");
 	var ctx = rest.new_context();
-	match rest.dispatch(&app, &mut req, &mut ctx) {
+	val app_arc = conc.arc(move app);
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
 		core.Result::Ok(_) => { return 903; },
 		core.Result::Err(e) => {
 			if e.status != 400 { return 904; }
@@ -278,7 +288,8 @@ fn scenario_pub_mixed_routes() nothrow -> Int {
 	// dispatch nothrow route
 	var req1 = rest.new_request("GET", "/nothrow");
 	var ctx1 = rest.new_context();
-	match rest.dispatch(&app, &mut req1, &mut ctx1) {
+	val app_arc = conc.arc(move app);
+	match rest.dispatch(app_arc.clone(), &mut req1, &mut ctx1) {
 		core.Result::Err(_) => { return 1003; },
 		core.Result::Ok(resp) => {
 			if resp.status != 200 { return 1004; }
@@ -288,7 +299,7 @@ fn scenario_pub_mixed_routes() nothrow -> Int {
 	// dispatch throws route
 	var req2 = rest.new_request("GET", "/throws");
 	var ctx2 = rest.new_context();
-	match rest.dispatch(&app, &mut req2, &mut ctx2) {
+	match rest.dispatch(app_arc.clone(), &mut req2, &mut ctx2) {
 		core.Result::Err(_) => { return 1005; },
 		core.Result::Ok(resp) => {
 			if resp.status != 200 { return 1006; }

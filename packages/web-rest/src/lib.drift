@@ -323,8 +323,8 @@ pub fn add_route_group_throws_route(a: &mut App, rg: &RouteGroup, method: String
 	return app.add_route_group_throws_route(a, rg, method, path, move handler);
 }
 
-pub fn dispatch(a: &App, req: &mut Request, ctx: &mut Context) nothrow -> core.Result<Response, RestError> {
-	return app.dispatch(a, req, ctx);
+pub fn dispatch(app_arc: conc.Arc<App>, req: &mut Request, ctx: &mut Context) nothrow -> core.Result<Response, RestError> {
+	return app.dispatch(move app_arc, req, ctx);
 }
 
 pub type RunningServer = server.RunningServer;

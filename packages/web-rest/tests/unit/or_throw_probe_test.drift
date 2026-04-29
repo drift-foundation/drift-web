@@ -2,6 +2,7 @@ module web.rest.tests.unit.or_throw_probe_test;
 
 import std.core as core;
 import web.rest as rest;
+import std.concurrent as conc;
 
 // Tests that .or_throw() on Result<T, RestError> (e.g. from require_query_param)
 // flows through the typed Throw impl and is caught by the framework's
@@ -46,7 +47,8 @@ fn scenario_query_param_or_throw_400() nothrow -> Int {
 	}
 	var req = rest.new_request("GET", "/probe");
 	var ctx = rest.new_context();
-	match rest.dispatch(&app, &mut req, &mut ctx) {
+	val app_arc = conc.arc(move app);
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
 		core.Result::Ok(_) => { return 102; },
 		core.Result::Err(e) => {
 			if e.status != 400 { return 103; }
@@ -74,7 +76,8 @@ fn scenario_path_param_or_throw_404() nothrow -> Int {
 	}
 	var req = rest.new_request("GET", "/item");
 	var ctx = rest.new_context();
-	match rest.dispatch(&app, &mut req, &mut ctx) {
+	val app_arc = conc.arc(move app);
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
 		core.Result::Ok(_) => { return 202; },
 		core.Result::Err(e) => {
 			if e.status != 404 { return 203; }
@@ -94,7 +97,8 @@ fn scenario_or_throw_ok() nothrow -> Int {
 	var req = rest.new_request("GET", "/ok");
 	rest.add_query_param(&mut req, "name", "alice");
 	var ctx = rest.new_context();
-	match rest.dispatch(&app, &mut req, &mut ctx) {
+	val app_arc = conc.arc(move app);
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
 		core.Result::Err(_) => { return 302; },
 		core.Result::Ok(resp) => {
 			if resp.status != 200 { return 303; }

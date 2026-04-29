@@ -104,13 +104,14 @@ fn bench_dispatch_only() nothrow -> core.Result<Int, Int> {
 			}
 
 			val n = 50000;
+			val app_arc = conc.arc(move app);
 
 			// Warmup
 			var wi = 0;
 			while wi < 500 {
 				var req = rest.new_request("GET", "/health");
 				var ctx = rest.new_context();
-				match rest.dispatch(&app, &mut req, &mut ctx) {
+				match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
 					core.Result::Ok(_) => {},
 					core.Result::Err(_) => { return core.Result::Err(3); }
 				}
@@ -122,7 +123,7 @@ fn bench_dispatch_only() nothrow -> core.Result<Int, Int> {
 			while i < n {
 				var req = rest.new_request("GET", "/health");
 				var ctx = rest.new_context();
-				match rest.dispatch(&app, &mut req, &mut ctx) {
+				match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
 					core.Result::Ok(_) => {},
 					core.Result::Err(_) => { return core.Result::Err(4); }
 				}
@@ -180,6 +181,7 @@ fn bench_full_cpu_only() nothrow -> core.Result<Int, Int> {
 
 			val n = 50000;
 			var event_counter = 0;
+			val app_arc = conc.arc(move app);
 
 			// Warmup
 			var wi = 0;
@@ -189,7 +191,7 @@ fn bench_full_cpu_only() nothrow -> core.Result<Int, Int> {
 					core.Result::Ok(req) => {
 						var mut_req = move req;
 						var ctx = rest.new_context();
-						match rest.dispatch(&app, &mut mut_req, &mut ctx) {
+						match rest.dispatch(app_arc.clone(), &mut mut_req, &mut ctx) {
 							core.Result::Err(e) => {
 								event_counter = event_counter + 1;
 								val eid = "evt-" + fmt.format_int(event_counter);
@@ -212,7 +214,7 @@ fn bench_full_cpu_only() nothrow -> core.Result<Int, Int> {
 					core.Result::Ok(req) => {
 						var mut_req = move req;
 						var ctx = rest.new_context();
-						match rest.dispatch(&app, &mut mut_req, &mut ctx) {
+						match rest.dispatch(app_arc.clone(), &mut mut_req, &mut ctx) {
 							core.Result::Err(e) => {
 								event_counter = event_counter + 1;
 								val eid = "evt-" + fmt.format_int(event_counter);

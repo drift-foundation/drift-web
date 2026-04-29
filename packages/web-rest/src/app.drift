@@ -2,6 +2,7 @@ module web.rest.app;
 
 import std.core as core;
 import std.io as io;
+import std.concurrent as conc;
 import web.rest.errors as errors;
 import web.rest.events as events;
 import web.rest.request as request;
@@ -320,8 +321,17 @@ fn _dispatch_throws(app: &App, idx: Int, req: &request.Request, ctx: &mut contex
 }
 
 // --- Dispatch ---
+//
+// Takes an Arc<App> so dispatch (and the eventual middleware onion fold) can
+// share-capture App state into escaping closures. All request-path code
+// inside dispatch operates on the &App view; the Arc is for closure capture.
+//
+// App registration is complete before serve()/start() per the design doc —
+// the App moved into Arc is read-only from this point on. New routes,
+// middleware, guards, or filters are not added during a request.
+pub fn dispatch(app_arc: conc.Arc<App>, req: &mut request.Request, ctx: &mut context.Context) nothrow -> core.Result<response.Response, errors.RestError> {
+	val app = app_arc.get();
 
-pub fn dispatch(app: &App, req: &mut request.Request, ctx: &mut context.Context) nothrow -> core.Result<response.Response, errors.RestError> {
 	// 1. Split request path into segments
 	val segments = router.split_path(&req.path);
 

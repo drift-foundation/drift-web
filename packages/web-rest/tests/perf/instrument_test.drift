@@ -188,6 +188,7 @@ fn _health_handler(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Res
 fn _instrumented_serve(a: rest.App, listener: net.TcpListener, warmup_n: Int, measure_n: Int, timeout: conc.Duration) nothrow -> Int {
 	val accept_timeout = conc.Duration(millis = 5000);
 	val total_n = warmup_n + measure_n;
+	val app_arc = conc.arc(move a);
 
 	match listener.accept(accept_timeout) {
 		core.Result::Err(_) => { return 1; },
@@ -228,7 +229,7 @@ fn _instrumented_serve(a: rest.App, listener: net.TcpListener, warmup_n: Int, me
 							var mut_req = mem.replace(&mut p.req, rest.new_request("", ""));
 							var ctx = rest.new_context();
 							var resp = rest.json_response(500, "");
-							match rest.dispatch(&a, &mut mut_req, &mut ctx) {
+							match rest.dispatch(app_arc.clone(), &mut mut_req, &mut ctx) {
 								core.Result::Ok(r) => { resp = move r; },
 								core.Result::Err(e) => { resp = rest.error_envelope(&e, &eid); }
 							}

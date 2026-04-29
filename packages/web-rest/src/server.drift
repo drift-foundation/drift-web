@@ -130,6 +130,10 @@ pub fn shutdown(rs: &mut RunningServer) nothrow -> core.Result<Void, errors.Rest
 }
 
 pub fn serve(a: app.App, listener: net.TcpListener, handle: ServerHandle, timeout: conc.Duration) nothrow -> core.Result<Void, errors.RestError> {
+	// App registration is complete once serve() begins. The Arc is the share
+	// handle for dispatch — onion-fold closures (web-rest 0.4 middleware) need
+	// it for share-capture; right now the per-request dispatch just clones it.
+	val app_arc = conc.arc(move a);
 	val accept_timeout = conc.Duration(millis = 200);
 	var requests_served = 0;
 	var event_counter = 0;
@@ -143,7 +147,7 @@ pub fn serve(a: app.App, listener: net.TcpListener, handle: ServerHandle, timeou
 			match listener.accept(accept_timeout) {
 				core.Result::Ok(stream) => {
 					var s = move stream;
-					val served = _handle_connection(&a, &mut s, timeout, &handle, &mut event_counter);
+					val served = _handle_connection(&app_arc, &mut s, timeout, &handle, &mut event_counter);
 					requests_served = requests_served + served;
 					val _ = s.close(timeout);
 				},
@@ -158,7 +162,7 @@ pub fn serve(a: app.App, listener: net.TcpListener, handle: ServerHandle, timeou
 //   0 = success, keep connection open
 //   1 = success, close connection (client sent Connection: close)
 //   2 = write error, close connection
-fn _dispatch_and_write(a: &app.App, stream: &mut net.TcpStream, parsed: http.ParsedRequest, timeout: conc.Duration, event_id: &String) nothrow -> Int {
+fn _dispatch_and_write(app_arc: &conc.Arc<app.App>, stream: &mut net.TcpStream, parsed: http.ParsedRequest, timeout: conc.Duration, event_id: &String) nothrow -> Int {
 	var p = move parsed;
 	val conn_close = p.conn_close == true;
 	var mut_req = mem.replace(&mut p.req, request.new_request("", ""));
@@ -167,7 +171,7 @@ fn _dispatch_and_write(a: &app.App, stream: &mut net.TcpStream, parsed: http.Par
 	var have_resp = false;
 
 	var ctx = context.new_context();
-	match app.dispatch(a, &mut mut_req, &mut ctx) {
+	match app.dispatch(app_arc.clone(), &mut mut_req, &mut ctx) {
 		core.Result::Ok(resp) => {
 			resp_to_write = move resp;
 			have_resp = true;
@@ -197,7 +201,7 @@ fn _dispatch_and_write(a: &app.App, stream: &mut net.TcpStream, parsed: http.Par
 // On any read/parse error, discards buffer and closes (error recovery policy).
 // After the first request, uses idle_timeout for reads. If the idle timeout
 // fires on an empty buffer (no partial data), close silently — not an error.
-fn _handle_connection(a: &app.App, stream: &mut net.TcpStream, timeout: conc.Duration, handle: &ServerHandle, event_counter: &mut Int) nothrow -> Int {
+fn _handle_connection(app_arc: &conc.Arc<app.App>, stream: &mut net.TcpStream, timeout: conc.Duration, handle: &ServerHandle, event_counter: &mut Int) nothrow -> Int {
 	var conn_buf: Array<Byte> = [];
 	var served = 0;
 	var keep_going = true;
@@ -238,7 +242,7 @@ fn _handle_connection(a: &app.App, stream: &mut net.TcpStream, timeout: conc.Dur
 					}
 				},
 				core.Result::Ok(parsed) => {
-					val result = _dispatch_and_write(a, stream, move parsed, timeout, &eid);
+					val result = _dispatch_and_write(app_arc, stream, move parsed, timeout, &eid);
 					if result == 0 {
 						served = served + 1;
 					} else {
