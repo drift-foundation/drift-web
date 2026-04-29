@@ -244,7 +244,7 @@ drift-web provides:
 - HTTP/1.1 REST server (inbound request handling)
 - HTTP/1.1 and HTTPS outbound client (session-based)
 - Route matching with path parameters
-- Guard and filter middleware
+- Wrapping middleware (global and per-RouteGroup) and route-group guards
 - JSON body parsing and caching
 - HS256 JWT authentication
 - Structured error envelopes

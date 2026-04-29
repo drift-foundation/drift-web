@@ -471,6 +471,282 @@ fn scenario_zero_middleware_fast_path() nothrow -> Int {
 	return 0;
 }
 
+// --- Scenario 1100: guard rejection short-circuits before any middleware runs ---
+// Route is in a group whose guard returns Err. A global mw and a group mw are
+// registered, but neither must execute — the guard runs before the onion.
+fn scenario_guard_rejection_skips_middleware() nothrow -> Int {
+	var app = _build_test_app();
+	rest.add_middleware(&mut app, |r: &rest.Request, c: &mut rest.Context, next| => {
+		_trace_push(c, "GLOBAL:enter");
+		val result = next.call(r, c);
+		_trace_push(c, "GLOBAL:exit");
+		return move result;
+	});
+	match rest.add_route_group(&mut app, "/api") {
+		core.Result::Err(_) => { return 1101; },
+		core.Result::Ok(rg) => {
+			rest.add_route_group_guard(&mut app, &rg, |r: &rest.Request, c: &mut rest.Context| => {
+				_trace_push(c, "GUARD:reject");
+				return core.Result::Err(rest.rest_error(403, "forbidden", "guard-block", "blocked by guard"));
+			});
+			rest.add_route_group_middleware(&mut app, &rg, |r: &rest.Request, c: &mut rest.Context, next| => {
+				_trace_push(c, "GROUP:enter");
+				val result = next.call(r, c);
+				_trace_push(c, "GROUP:exit");
+				return move result;
+			});
+			match rest.add_route_group_route(&mut app, &rg, "GET", "/x", core.callback2(_ok_handler)) {
+				core.Result::Err(_) => { return 1102; },
+				core.Result::Ok(_) => {}
+			}
+		}
+	}
+	val app_arc = conc.arc(move app);
+	var req = rest.new_request("GET", "/api/x");
+	var ctx = rest.new_context();
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+		core.Result::Ok(_) => { return 1103; },
+		core.Result::Err(e) => {
+			if e.status != 403 { return 1104; }
+			if e.tag != "guard-block" { return 1105; }
+		}
+	}
+	val expected: Array<String> = ["GUARD:reject"];
+	match rest.ctx_get<type Trace>(&ctx) {
+		Optional::None => { return 1106; },
+		Optional::Some(t) => { if !_trace_eq(&t.events, &expected) { return 1107; } }
+	}
+	return 0;
+}
+
+// --- Scenario 1200: registration-order interleaving (group before global) ---
+// Per the design invariant ("registration order across the whole app determines
+// layering"), a group middleware registered BEFORE a global middleware places
+// the group middleware OUTSIDE the global one for routes in that group.
+fn scenario_group_before_global_layering() nothrow -> Int {
+	var app = _build_test_app();
+	match rest.add_route_group(&mut app, "/api") {
+		core.Result::Err(_) => { return 1201; },
+		core.Result::Ok(rg) => {
+			// Group mw FIRST.
+			rest.add_route_group_middleware(&mut app, &rg, |r: &rest.Request, c: &mut rest.Context, next| => {
+				_trace_push(c, "GROUP:enter");
+				val result = next.call(r, c);
+				_trace_push(c, "GROUP:exit");
+				return move result;
+			});
+			match rest.add_route_group_route(&mut app, &rg, "GET", "/x", core.callback2(_ok_handler)) {
+				core.Result::Err(_) => { return 1202; },
+				core.Result::Ok(_) => {}
+			}
+		}
+	}
+	// Global mw SECOND — should be inner.
+	rest.add_middleware(&mut app, |r: &rest.Request, c: &mut rest.Context, next| => {
+		_trace_push(c, "GLOBAL:enter");
+		val result = next.call(r, c);
+		_trace_push(c, "GLOBAL:exit");
+		return move result;
+	});
+	val app_arc = conc.arc(move app);
+	var req = rest.new_request("GET", "/api/x");
+	var ctx = rest.new_context();
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+		core.Result::Err(_) => { return 1203; },
+		core.Result::Ok(_) => {}
+	}
+	// GROUP outer, GLOBAL inner.
+	val expected: Array<String> = ["GROUP:enter", "GLOBAL:enter", "H:enter", "H:exit", "GLOBAL:exit", "GROUP:exit"];
+	match rest.ctx_get<type Trace>(&ctx) {
+		Optional::None => { return 1204; },
+		Optional::Some(t) => { if !_trace_eq(&t.events, &expected) { return 1205; } }
+	}
+	return 0;
+}
+
+// --- Scenario 1300: multiple route groups — only matched group fires ---
+// Two RouteGroups (/a, /b), each with its own mw. One global mw on top.
+// Dispatch /a/x: GLOBAL + A-mw fire; B-mw doesn't.
+// Dispatch /b/x: GLOBAL + B-mw fire; A-mw doesn't.
+fn scenario_multiple_route_groups_isolation() nothrow -> Int {
+	var app = _build_test_app();
+	rest.add_middleware(&mut app, |r: &rest.Request, c: &mut rest.Context, next| => {
+		_trace_push(c, "G:enter");
+		val result = next.call(r, c);
+		_trace_push(c, "G:exit");
+		return move result;
+	});
+	match rest.add_route_group(&mut app, "/a") {
+		core.Result::Err(_) => { return 1301; },
+		core.Result::Ok(rg_a) => {
+			rest.add_route_group_middleware(&mut app, &rg_a, |r: &rest.Request, c: &mut rest.Context, next| => {
+				_trace_push(c, "A:enter");
+				val result = next.call(r, c);
+				_trace_push(c, "A:exit");
+				return move result;
+			});
+			match rest.add_route_group_route(&mut app, &rg_a, "GET", "/x", core.callback2(_ok_handler)) {
+				core.Result::Err(_) => { return 1302; },
+				core.Result::Ok(_) => {}
+			}
+		}
+	}
+	match rest.add_route_group(&mut app, "/b") {
+		core.Result::Err(_) => { return 1303; },
+		core.Result::Ok(rg_b) => {
+			rest.add_route_group_middleware(&mut app, &rg_b, |r: &rest.Request, c: &mut rest.Context, next| => {
+				_trace_push(c, "B:enter");
+				val result = next.call(r, c);
+				_trace_push(c, "B:exit");
+				return move result;
+			});
+			match rest.add_route_group_route(&mut app, &rg_b, "GET", "/x", core.callback2(_ok_handler)) {
+				core.Result::Err(_) => { return 1304; },
+				core.Result::Ok(_) => {}
+			}
+		}
+	}
+	val app_arc = conc.arc(move app);
+
+	// /a/x: GLOBAL outer, A inner — B does not appear.
+	var req_a = rest.new_request("GET", "/a/x");
+	var ctx_a = rest.new_context();
+	match rest.dispatch(app_arc.clone(), &mut req_a, &mut ctx_a) {
+		core.Result::Err(_) => { return 1305; },
+		core.Result::Ok(_) => {}
+	}
+	val expected_a: Array<String> = ["G:enter", "A:enter", "H:enter", "H:exit", "A:exit", "G:exit"];
+	match rest.ctx_get<type Trace>(&ctx_a) {
+		Optional::None => { return 1306; },
+		Optional::Some(t) => { if !_trace_eq(&t.events, &expected_a) { return 1307; } }
+	}
+
+	// /b/x: GLOBAL outer, B inner — A does not appear.
+	var req_b = rest.new_request("GET", "/b/x");
+	var ctx_b = rest.new_context();
+	match rest.dispatch(app_arc.clone(), &mut req_b, &mut ctx_b) {
+		core.Result::Err(_) => { return 1308; },
+		core.Result::Ok(_) => {}
+	}
+	val expected_b: Array<String> = ["G:enter", "B:enter", "H:enter", "H:exit", "B:exit", "G:exit"];
+	match rest.ctx_get<type Trace>(&ctx_b) {
+		Optional::None => { return 1309; },
+		Optional::Some(t) => { if !_trace_eq(&t.events, &expected_b) { return 1310; } }
+	}
+	return 0;
+}
+
+// --- Scenario 1400: group-of-one (per-route middleware replacement) ---
+// The recommended pattern when one specific route needs its own middleware:
+// put it in a single-route RouteGroup and attach the middleware there.
+fn scenario_group_of_one_pattern() nothrow -> Int {
+	var app = _build_test_app();
+	// Group containing exactly one route at /admin/dashboard.
+	match rest.add_route_group(&mut app, "/admin/dashboard") {
+		core.Result::Err(_) => { return 1401; },
+		core.Result::Ok(rg) => {
+			rest.add_route_group_middleware(&mut app, &rg, |r: &rest.Request, c: &mut rest.Context, next| => {
+				_trace_push(c, "ADMIN:enter");
+				val result = next.call(r, c);
+				_trace_push(c, "ADMIN:exit");
+				return move result;
+			});
+			match rest.add_route_group_route(&mut app, &rg, "GET", "/", core.callback2(_ok_handler)) {
+				core.Result::Err(_) => { return 1402; },
+				core.Result::Ok(_) => {}
+			}
+		}
+	}
+	// Sibling unrelated route — proves the group-mw is scoped to the single route.
+	match rest.add_route(&mut app, "GET", "/health", core.callback2(_ok_handler)) {
+		core.Result::Err(_) => { return 1403; },
+		core.Result::Ok(_) => {}
+	}
+	val app_arc = conc.arc(move app);
+
+	var req_in = rest.new_request("GET", "/admin/dashboard");
+	var ctx_in = rest.new_context();
+	match rest.dispatch(app_arc.clone(), &mut req_in, &mut ctx_in) {
+		core.Result::Err(_) => { return 1404; },
+		core.Result::Ok(_) => {}
+	}
+	val expected_in: Array<String> = ["ADMIN:enter", "H:enter", "H:exit", "ADMIN:exit"];
+	match rest.ctx_get<type Trace>(&ctx_in) {
+		Optional::None => { return 1405; },
+		Optional::Some(t) => { if !_trace_eq(&t.events, &expected_in) { return 1406; } }
+	}
+
+	var req_out = rest.new_request("GET", "/health");
+	var ctx_out = rest.new_context();
+	match rest.dispatch(app_arc.clone(), &mut req_out, &mut ctx_out) {
+		core.Result::Err(_) => { return 1407; },
+		core.Result::Ok(_) => {}
+	}
+	val expected_out: Array<String> = ["H:enter", "H:exit"];
+	match rest.ctx_get<type Trace>(&ctx_out) {
+		Optional::None => { return 1408; },
+		Optional::Some(t) => { if !_trace_eq(&t.events, &expected_out) { return 1409; } }
+	}
+	return 0;
+}
+
+// --- Scenario 1500: mixed throws + nothrow handlers under the same middleware ---
+// One mw wraps both a nothrow route and a throws route.  The mw's `next.call`
+// must observe Ok from the nothrow handler and Err (after _dispatch_throws)
+// from the throws handler — both go through the same onion implementation.
+fn scenario_mixed_throws_and_nothrow_routes() nothrow -> Int {
+	var app = _build_test_app();
+	rest.add_middleware(&mut app, |r: &rest.Request, c: &mut rest.Context, next| => {
+		_trace_push(c, "MW:enter");
+		val result = next.call(r, c);
+		match &result {
+			core.Result::Ok(_) => { _trace_push(c, "MW:saw-ok"); },
+			core.Result::Err(_) => { _trace_push(c, "MW:saw-err"); }
+		}
+		_trace_push(c, "MW:exit");
+		return move result;
+	});
+	match rest.add_route(&mut app, "GET", "/ok", core.callback2(_ok_handler)) {
+		core.Result::Err(_) => { return 1501; },
+		core.Result::Ok(_) => {}
+	}
+	match rest.add_throws_route(&mut app, "POST", "/bad", core.callback_throw2(_bad_request_throws_handler)) {
+		core.Result::Err(_) => { return 1502; },
+		core.Result::Ok(_) => {}
+	}
+	val app_arc = conc.arc(move app);
+
+	// Nothrow route → mw observes Ok.
+	var req_ok = rest.new_request("GET", "/ok");
+	var ctx_ok = rest.new_context();
+	match rest.dispatch(app_arc.clone(), &mut req_ok, &mut ctx_ok) {
+		core.Result::Err(_) => { return 1503; },
+		core.Result::Ok(_) => {}
+	}
+	val expected_ok: Array<String> = ["MW:enter", "H:enter", "H:exit", "MW:saw-ok", "MW:exit"];
+	match rest.ctx_get<type Trace>(&ctx_ok) {
+		Optional::None => { return 1504; },
+		Optional::Some(t) => { if !_trace_eq(&t.events, &expected_ok) { return 1505; } }
+	}
+
+	// Throws route → framework converts to Err; mw observes Err.
+	var req_bad = rest.new_request("POST", "/bad");
+	var ctx_bad = rest.new_context();
+	match rest.dispatch(app_arc.clone(), &mut req_bad, &mut ctx_bad) {
+		core.Result::Ok(_) => { return 1506; },
+		core.Result::Err(e) => {
+			if e.status != 400 { return 1507; }
+			if e.tag != "h-bad" { return 1508; }
+		}
+	}
+	val expected_bad: Array<String> = ["MW:enter", "H:enter", "MW:saw-err", "MW:exit"];
+	match rest.ctx_get<type Trace>(&ctx_bad) {
+		Optional::None => { return 1509; },
+		Optional::Some(t) => { if !_trace_eq(&t.events, &expected_bad) { return 1510; } }
+	}
+	return 0;
+}
+
 fn main() nothrow -> Int {
 	val r1 = scenario_single_middleware_passthrough();
 	if r1 != 0 { return r1; }
@@ -501,6 +777,21 @@ fn main() nothrow -> Int {
 
 	val r10 = scenario_global_plus_group_mw_composition();
 	if r10 != 0 { return r10; }
+
+	val r11 = scenario_guard_rejection_skips_middleware();
+	if r11 != 0 { return r11; }
+
+	val r12 = scenario_group_before_global_layering();
+	if r12 != 0 { return r12; }
+
+	val r13 = scenario_multiple_route_groups_isolation();
+	if r13 != 0 { return r13; }
+
+	val r14 = scenario_group_of_one_pattern();
+	if r14 != 0 { return r14; }
+
+	val r15 = scenario_mixed_throws_and_nothrow_routes();
+	if r15 != 0 { return r15; }
 
 	return 0;
 }

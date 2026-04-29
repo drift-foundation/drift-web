@@ -1,0 +1,340 @@
+module web.rest.tests.e2e.middleware_test;
+
+import std.core as core;
+import std.io as io;
+import std.net as net;
+import std.concurrent as conc;
+import std.console as console;
+import web.rest as rest;
+
+// E2E coverage for web-rest 0.4 middleware over real start() + HTTP, including
+// keep-alive reuse to prove per-request Context isolation. Validates:
+//   - Server bootstrap with both add_middleware and add_route_group_middleware
+//   - serve() Arc-wraps App; per-request Context is freshly constructed
+//   - Two requests on the same TCP connection: each handler sees only its own
+//     ctx_set<...> state; no leak across requests
+//   - Memcheck-clean run via `just test`
+
+struct ReqMark { pub path: String }
+
+fn _handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	// If the Context is clean per request, the only ReqMark we see is the
+	// one our middleware set this request — its `path` must equal req.path.
+	match rest.ctx_get<type ReqMark>(ctx) {
+		Optional::None => {
+			return core.Result::Err(rest.rest_error(500, "internal", "ctx-missing", "no ReqMark in ctx"));
+		},
+		Optional::Some(m) => {
+			if m.path != req.path {
+				val body = "{\"leak\":\"saw-" + m.path + "\"}";
+				return core.Result::Ok(rest.json_response(500, body));
+			}
+			val body = "{\"path\":\"" + req.path + "\"}";
+			return core.Result::Ok(rest.json_response(200, body));
+		}
+	}
+}
+
+fn _to_bytes(s: &String) nothrow -> Array<Byte> {
+	var out: Array<Byte> = [];
+	var i = 0;
+	val n = s.byte_length();
+	while i < n {
+		out.push(core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return move out;
+}
+
+fn _write_raw(stream: &net.TcpStream, s: &String, timeout: conc.Duration) nothrow -> core.Result<Void, rest.RestError> {
+	val bytes = s.byte_length();
+	var wbuf = io.buffer(bytes);
+	var i = 0;
+	while i < bytes {
+		io.buffer_write(&mut wbuf, i, core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	match stream.write(&wbuf, timeout) {
+		core.Result::Err(_) => { return core.Result::Err(rest.rest_error(500, "internal", "write-failed", "")); },
+		core.Result::Ok(_) => { return core.Result::Ok(core.void_value()); }
+	}
+}
+
+// Read one HTTP response (until a complete message: blank-line headers + Content-Length body, OR until EOF).
+fn _read_one_response(stream: &net.TcpStream, conn_buf: &mut Array<Byte>, timeout: conc.Duration) nothrow -> core.Result<String, rest.RestError> {
+	// Loop until response_end is found (blank-line + body length).
+	var done = false;
+	while !done {
+		// Try parsing what we have for headers + Content-Length.
+		val parsed = _try_extract_response(conn_buf);
+		match parsed {
+			Optional::Some(s) => { return core.Result::Ok(s); },
+			Optional::None => {
+				var rbuf = io.buffer(4096);
+				match stream.read(&mut rbuf, timeout) {
+					core.Result::Err(_) => { done = true; },
+					core.Result::Ok(n) => {
+						if n == 0 { done = true; }
+						else {
+							var j = 0;
+							while j < n {
+								conn_buf.push(io.buffer_read(&mut rbuf, j));
+								j = j + 1;
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return core.Result::Err(rest.rest_error(500, "internal", "read-failed", "no full response"));
+}
+
+// Extract one complete HTTP response from conn_buf if possible. Removes those
+// bytes from conn_buf and returns the response as a String. Returns None if
+// we don't yet have a complete response.
+fn _try_extract_response(conn_buf: &mut Array<Byte>) nothrow -> Optional<String> {
+	// Find header terminator "\r\n\r\n".
+	val n = conn_buf.len;
+	if n < 4 { return Optional<String>::None(); }
+	var hdr_end = -1;
+	var i = 0;
+	val limit = n - 3;
+	while i < limit {
+		if conn_buf[i] == cast<Byte>(13) {
+			if conn_buf[i + 1] == cast<Byte>(10) {
+				if conn_buf[i + 2] == cast<Byte>(13) {
+					if conn_buf[i + 3] == cast<Byte>(10) {
+						hdr_end = i + 4;
+						i = limit;
+					}
+				}
+			}
+		}
+		i = i + 1;
+	}
+	if hdr_end == -1 { return Optional<String>::None(); }
+
+	// Find Content-Length value within header bytes.
+	val cl_len = _find_content_length(conn_buf, hdr_end);
+	val total = hdr_end + cl_len;
+	if conn_buf.len < total { return Optional<String>::None(); }
+
+	// Build the response String from the first `total` bytes.
+	var b = io.buffer(total);
+	var j = 0;
+	while j < total {
+		io.buffer_write(&mut b, j, conn_buf[j]);
+		j = j + 1;
+	}
+	val resp = core.string_from_utf8_bytes(io.buffer_ptr(&b), total);
+
+	// Compact conn_buf: remove the consumed bytes.
+	var rest_arr: Array<Byte> = [];
+	var k = total;
+	while k < conn_buf.len {
+		rest_arr.push(conn_buf[k]);
+		k = k + 1;
+	}
+	*conn_buf = move rest_arr;
+	return Optional::Some(move resp);
+}
+
+// Scan header bytes for "Content-Length: N\r\n" (case-insensitive on header name)
+// and return N. Default 0 if header is missing.
+fn _find_content_length(conn_buf: &Array<Byte>, hdr_end: Int) nothrow -> Int {
+	val needle: Array<Byte> = [
+		cast<Byte>(67), cast<Byte>(111), cast<Byte>(110), cast<Byte>(116),
+		cast<Byte>(101), cast<Byte>(110), cast<Byte>(116), cast<Byte>(45),
+		cast<Byte>(76), cast<Byte>(101), cast<Byte>(110), cast<Byte>(103),
+		cast<Byte>(116), cast<Byte>(104), cast<Byte>(58), cast<Byte>(32)
+	];
+	val nlen = needle.len;
+	var i = 0;
+	val end = hdr_end - nlen;
+	while i <= end {
+		var matched = true;
+		var j = 0;
+		while j < nlen {
+			if conn_buf[i + j] != needle[j] { matched = false; j = nlen; }
+			else { j = j + 1; }
+		}
+		if matched == true {
+			var v = 0;
+			var k = i + nlen;
+			while k < hdr_end {
+				val b = conn_buf[k];
+				if b == cast<Byte>(13) { return v; }
+				if b == cast<Byte>(10) { return v; }
+				v = v * 10 + (cast<Int>(b) - 48);
+				k = k + 1;
+			}
+			return v;
+		}
+		i = i + 1;
+	}
+	return 0;
+}
+
+fn _contains(haystack: &String, needle: &String) nothrow -> Bool {
+	val h_len = haystack.byte_length();
+	val n_len = needle.byte_length();
+	if n_len > h_len { return false; }
+	var i = 0;
+	val limit = h_len - n_len + 1;
+	while i < limit {
+		var matched = true;
+		var j = 0;
+		while j < n_len {
+			if core.string_byte_at(haystack, i + j) != core.string_byte_at(needle, j) {
+				matched = false;
+				j = n_len;
+			} else {
+				j = j + 1;
+			}
+		}
+		if matched { return true; }
+		i = i + 1;
+	}
+	return false;
+}
+
+fn _starts_with(s: &String, prefix: &String) nothrow -> Bool {
+	val n = prefix.byte_length();
+	if s.byte_length() < n { return false; }
+	var i = 0;
+	while i < n {
+		if core.string_byte_at(s, i) != core.string_byte_at(prefix, i) { return false; }
+		i = i + 1;
+	}
+	return true;
+}
+
+fn main() nothrow -> Int {
+	val timeout = conc.Duration(millis = 5000);
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(a) => {
+			var app = move a;
+
+			// Global mw — sets ReqMark with this request's path.
+			rest.add_middleware(&mut app, |req: &rest.Request, ctx: &mut rest.Context, next| => {
+				rest.ctx_set<type ReqMark>(ctx, ReqMark(path = req.path.clone()));
+				return next.call(req, ctx);
+			});
+
+			match rest.add_route(&mut app, "GET", "/req1", core.callback2(_handler)) {
+				core.Result::Err(_) => { return 2; },
+				core.Result::Ok(_) => {}
+			}
+			match rest.add_route(&mut app, "GET", "/req2", core.callback2(_handler)) {
+				core.Result::Err(_) => { return 3; },
+				core.Result::Ok(_) => {}
+			}
+
+			match rest.start(move app, timeout) {
+				core.Result::Err(_) => { return 4; },
+				core.Result::Ok(rs) => {
+					var running = move rs;
+					val port = rest.server_port(&running);
+
+					var addr = net.socket_addr("127.0.0.1", port);
+					match net.connect(&addr, timeout) {
+						core.Result::Err(_) => {
+							val _ = rest.shutdown(&mut running);
+							return 5;
+						},
+						core.Result::Ok(conn) => {
+							var stream = move conn;
+							var read_buf: Array<Byte> = [];
+
+							// Request 1 — keep-alive (no Connection: close).
+							val req1_raw = "GET /req1 HTTP/1.1\r\nHost: localhost\r\n\r\n";
+							match _write_raw(&stream, &req1_raw, timeout) {
+								core.Result::Err(_) => {
+									val _ = stream.close(timeout);
+									val _ = rest.shutdown(&mut running);
+									return 6;
+								},
+								core.Result::Ok(_) => {}
+							}
+							match _read_one_response(&stream, &mut read_buf, timeout) {
+								core.Result::Err(_) => {
+									val _ = stream.close(timeout);
+									val _ = rest.shutdown(&mut running);
+									return 7;
+								},
+								core.Result::Ok(resp1) => {
+									val ok_line = "HTTP/1.1 200 OK";
+									if !_starts_with(&resp1, &ok_line) {
+										val _ = stream.close(timeout);
+										val _ = rest.shutdown(&mut running);
+										return 8;
+									}
+									val body1 = "{\"path\":\"/req1\"}";
+									if !_contains(&resp1, &body1) {
+										val _ = stream.close(timeout);
+										val _ = rest.shutdown(&mut running);
+										return 9;
+									}
+								}
+							}
+
+							// Request 2 on the SAME connection — different path.
+							// If Context leaked across requests, handler would see
+							// "saw-/req1" body (status 500) when serving /req2.
+							val req2_raw = "GET /req2 HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+							match _write_raw(&stream, &req2_raw, timeout) {
+								core.Result::Err(_) => {
+									val _ = stream.close(timeout);
+									val _ = rest.shutdown(&mut running);
+									return 10;
+								},
+								core.Result::Ok(_) => {}
+							}
+							match _read_one_response(&stream, &mut read_buf, timeout) {
+								core.Result::Err(_) => {
+									val _ = stream.close(timeout);
+									val _ = rest.shutdown(&mut running);
+									return 11;
+								},
+								core.Result::Ok(resp2) => {
+									val ok_line = "HTTP/1.1 200 OK";
+									if !_starts_with(&resp2, &ok_line) {
+										val _ = stream.close(timeout);
+										val _ = rest.shutdown(&mut running);
+										return 12;
+									}
+									val body2 = "{\"path\":\"/req2\"}";
+									if !_contains(&resp2, &body2) {
+										val _ = stream.close(timeout);
+										val _ = rest.shutdown(&mut running);
+										return 13;
+									}
+									// Defensive: ensure no "leak" indicator from a stale Context.
+									val leak_marker = "leak";
+									if _contains(&resp2, &leak_marker) {
+										val _ = stream.close(timeout);
+										val _ = rest.shutdown(&mut running);
+										return 14;
+									}
+								}
+							}
+							val _ = stream.close(timeout);
+						}
+					}
+
+					match rest.shutdown(&mut running) {
+						core.Result::Err(_) => { return 15; },
+						core.Result::Ok(_) => {
+							console.println("e2e middleware (keep-alive + ctx isolation): passed");
+							return 0;
+						}
+					}
+				}
+			}
+		}
+	}
+}

@@ -1,0 +1,165 @@
+module consumer.rest_ctx_test;
+
+import std.core as core;
+import std.io as io;
+import std.net as net;
+import std.concurrent as conc;
+import std.console as console;
+import web.rest as rest;
+
+// Consumer-path coverage for web-rest 0.4 Context typed slot map: ctx_set,
+// ctx_get, ctx_take exercised through the published package surface
+// (--dep web-rest@0.4.0). Pins the package-boundary behavior of the generic
+// API and the underlying TypeBox/rt.take used to back it.
+//
+// Verifies:
+//   - Owning payload (struct holding String) round-trips through ctx_set/get.
+//   - Middleware sets a value in Context, handler reads it via ctx_get.
+//   - Middleware retakes ownership via ctx_take after next.call() returns,
+//     mirroring the bookkeeper SpanHandle close pattern.
+//   - Memcheck-clean drop on Context end (covered by `just test` running this
+//     test in plain + ASAN + memcheck passes).
+
+struct OwnedHandle { pub name: String, pub count: Int }
+
+fn _handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	// Read the OwnedHandle that middleware stashed.  Echo the name into the
+	// response body so we can assert from the HTTP client side.
+	match rest.ctx_get<type OwnedHandle>(ctx) {
+		Optional::None => {
+			return core.Result::Err(rest.rest_error(500, "internal", "ctx-missing", "handler did not see ctx state"));
+		},
+		Optional::Some(h) => {
+			val body = "{\"name\":\"" + h.name + "\"}";
+			return core.Result::Ok(rest.json_response(200, body));
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	val timeout = conc.Duration(millis = 5000);
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(a) => {
+			var app = move a;
+
+			// Middleware that:
+			//   1. ctx_set<OwnedHandle> — stash an owning struct holding a String
+			//   2. next.call — handler runs, reads it via ctx_get
+			//   3. ctx_take<OwnedHandle> — retake ownership, drop deterministically
+			rest.add_middleware(&mut app, |req: &rest.Request, ctx: &mut rest.Context, next| => {
+				rest.ctx_set<type OwnedHandle>(ctx, OwnedHandle(name = "test-resource", count = 7));
+				val result = next.call(req, ctx);
+				match rest.ctx_take<type OwnedHandle>(ctx) {
+					Optional::Some(taken) => {
+						// Owned — proves take returned the same logical resource.
+						val _consumed = move taken;
+					},
+					Optional::None => {
+						// Defensive — handler shouldn't have taken it.
+						return core.Result::Err(rest.rest_error(500, "internal", "ctx-take-missing", "mw could not take after next"));
+					}
+				}
+				return move result;
+			});
+
+			match rest.add_route(&mut app, "GET", "/echo", core.callback2(_handler)) {
+				core.Result::Err(_) => { return 2; },
+				core.Result::Ok(_) => {}
+			}
+
+			match rest.start(move app, timeout) {
+				core.Result::Err(_) => { return 3; },
+				core.Result::Ok(rs) => {
+					var running = move rs;
+					val port = rest.server_port(&running);
+
+					val rc = _send_and_check_body(&running, port, "GET", "/echo", 200, "{\"name\":\"test-resource\"}", timeout);
+					if rc != 0 { val _ = rest.shutdown(&mut running); return 100 + rc; }
+
+					match rest.shutdown(&mut running) {
+						core.Result::Err(_) => { return 99; },
+						core.Result::Ok(_) => {
+							console.println("consumer rest-ctx: passed");
+							return 0;
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// HTTP send + assert status + body-substring helper.
+fn _send_and_check_body(running: &rest.RunningServer, port: Int, method: String, path: String, expected_status: Int, expected_body_substr: String, timeout: conc.Duration) nothrow -> Int {
+	var raw_req = method + " " + path + " HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+
+	var addr = net.socket_addr("127.0.0.1", port);
+	match net.connect(&addr, timeout) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(conn) => {
+			var stream = move conn;
+			val bytes = raw_req.byte_length();
+			var wbuf = io.buffer(bytes);
+			var i = 0;
+			while i < bytes {
+				io.buffer_write(&mut wbuf, i, core.string_byte_at(&raw_req, i));
+				i = i + 1;
+			}
+			match stream.write(&wbuf, timeout) {
+				core.Result::Err(_) => {
+					val _ = stream.close(timeout);
+					return 2;
+				},
+				core.Result::Ok(_) => {}
+			}
+			var resp: Array<Byte> = [];
+			var done = false;
+			while !done {
+				var rbuf = io.buffer(4096);
+				match stream.read(&mut rbuf, timeout) {
+					core.Result::Err(_) => { done = true; },
+					core.Result::Ok(n) => {
+						if n == 0 { done = true; }
+						else {
+							var j = 0;
+							while j < n {
+								resp.push(io.buffer_read(&mut rbuf, j));
+								j = j + 1;
+							}
+						}
+					}
+				}
+			}
+			val _ = stream.close(timeout);
+
+			if resp.len < 12 { return 3; }
+			val d0 = cast<Int>(resp[9]) - 48;
+			val d1 = cast<Int>(resp[10]) - 48;
+			val d2 = cast<Int>(resp[11]) - 48;
+			val status = d0 * 100 + d1 * 10 + d2;
+			if status != expected_status { return 4; }
+
+			// Substring scan over response bytes for expected_body_substr.
+			val sub_len = expected_body_substr.byte_length();
+			if sub_len == 0 { return 0; }
+			var k = 0;
+			val end = resp.len - sub_len + 1;
+			while k < end {
+				var matched = true;
+				var s = 0;
+				while s < sub_len {
+					val rb = resp[k + s];
+					val sb = core.string_byte_at(&expected_body_substr, s);
+					if rb != sb { matched = false; s = sub_len; }
+					else { s = s + 1; }
+				}
+				if matched == true { return 0; }
+				k = k + 1;
+			}
+			return 5;
+		}
+	}
+}

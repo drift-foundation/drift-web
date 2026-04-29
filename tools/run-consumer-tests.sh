@@ -144,6 +144,26 @@ run_test "rest_or_throw_test" \
     --dep "web-rest@${rest_ver}" \
     --dep "web-jwt@${jwt_ver}"
 
+# 6b. web-rest 0.4 middleware: add_middleware + add_route_group_middleware
+#     + captures(share app_arc) + Ok->Err / Err->Err transforms +
+#     short-circuit + typed-throw observation, all through the package boundary.
+run_test "rest_middleware_test" \
+    "consumer.rest_middleware_test::main" \
+    "${TEST_DIR}/rest_middleware_test.drift" \
+    no \
+    --dep "web-rest@${rest_ver}" \
+    --dep "web-jwt@${jwt_ver}"
+
+# 6c. web-rest 0.4 Context typed slot map: ctx_set / ctx_get / ctx_take with
+#     an owning struct payload (struct holding String).  Pins package-boundary
+#     behavior of the generic API.
+run_test "rest_ctx_test" \
+    "consumer.rest_ctx_test::main" \
+    "${TEST_DIR}/rest_ctx_test.drift" \
+    no \
+    --dep "web-rest@${rest_ver}" \
+    --dep "web-jwt@${jwt_ver}"
+
 # 7. K28 probe consumer (package-local ProbeError + stdlib String)
 run_test "or_throw_probe_test" \
     "consumer.or_throw_probe_test::main" \

@@ -1,0 +1,195 @@
+module consumer.rest_middleware_test;
+
+import std.core as core;
+import std.io as io;
+import std.net as net;
+import std.concurrent as conc;
+import std.console as console;
+import web.rest as rest;
+import web.rest.events as events;
+
+// Consumer-path coverage for web-rest 0.4 middleware: add_middleware (global),
+// add_route_group_middleware, captures(share app_state) over conc.Arc<T>,
+// short-circuit, typed-throw observation, Ok->Err / Err->Ok transforms.
+//
+// All exercised through the published package surface (--dep web-rest@0.4.0)
+// after the 0.31.28 Share-impl encoding fix for Callback3 + share-capture.
+
+// Shared state captured by the global middleware via `captures(share cfg)`.
+// Exercises Share-for-Arc through the package boundary.
+struct SharedConfig {
+	pub label: String,
+	pub transform_503: Bool
+}
+
+fn _no_fields() nothrow -> DiagnosticValue {
+	var f: Array<core.DiagnosticEntry> = [];
+	return DiagnosticValue::Object(move f);
+}
+
+fn _ok_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
+	return core.Result::Ok(rest.json_response(200, "{\"ok\":true}"));
+}
+
+fn _bad_throws_handler(req: &rest.Request, ctx: &mut rest.Context) -> rest.Response {
+	throw events:RestBadRequest(tag = "h-bad", message = "bad request from handler", fields = _no_fields());
+}
+
+fn main() nothrow -> Int {
+	val timeout = conc.Duration(millis = 5000);
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(a) => {
+			var app = move a;
+
+			// Arc'd shared state captured by the global mw via share-capture.
+			val cfg = conc.arc(SharedConfig(label = "consumer-mw", transform_503 = true));
+
+			// Global middleware:
+			//   - Verifies captures(share cfg) compiles + runs from consumer mode.
+			//   - On Err with status 4xx, transforms to 503 (Err -> Err transform)
+			//     when cfg.transform_503 is set. Acts as observable signal that the
+			//     global mw saw and processed the inner Err.
+			rest.add_middleware(&mut app, |req: &rest.Request, ctx: &mut rest.Context, next| captures(share cfg) => {
+				val result = next.call(req, ctx);
+				val do_transform = cfg.get().transform_503;
+				match move result {
+					core.Result::Ok(resp) => { return core.Result::Ok(move resp); },
+					core.Result::Err(e) => {
+						if do_transform == true {
+							if e.status == 400 {
+								return core.Result::Err(rest.rest_error(503, "internal", "global-saw-4xx", "global mw observed 4xx"));
+							}
+						}
+						return core.Result::Err(move e);
+					}
+				}
+			});
+
+			// Group + group middleware: short-circuit /api/blocked with 401.
+			match rest.add_route_group(&mut app, "/api") {
+				core.Result::Err(_) => { return 2; },
+				core.Result::Ok(rg) => {
+					rest.add_route_group_middleware(&mut app, &rg, |req: &rest.Request, ctx: &mut rest.Context, next| => {
+						if req.path == "/api/blocked" {
+							return core.Result::Err(rest.rest_error(401, "unauthorized", "group-blocked", "blocked by group mw"));
+						}
+						return next.call(req, ctx);
+					});
+					match rest.add_route_group_route(&mut app, &rg, "GET", "/ok", core.callback2(_ok_handler)) {
+						core.Result::Err(_) => { return 3; },
+						core.Result::Ok(_) => {}
+					}
+					match rest.add_route_group_route(&mut app, &rg, "GET", "/blocked", core.callback2(_ok_handler)) {
+						core.Result::Err(_) => { return 4; },
+						core.Result::Ok(_) => {}
+					}
+					// Throws-route that emits typed exception — global mw observes the Err.
+					match rest.add_route_group_throws_route(&mut app, &rg, "POST", "/throws", core.callback_throw2(_bad_throws_handler)) {
+						core.Result::Err(_) => { return 5; },
+						core.Result::Ok(_) => {}
+					}
+				}
+			}
+
+			// Out-of-group plain route — no group mw applies.
+			match rest.add_route(&mut app, "GET", "/health", core.callback2(_ok_handler)) {
+				core.Result::Err(_) => { return 6; },
+				core.Result::Ok(_) => {}
+			}
+
+			match rest.start(move app, timeout) {
+				core.Result::Err(_) => { return 7; },
+				core.Result::Ok(rs) => {
+					var running = move rs;
+					val port = rest.server_port(&running);
+
+					// Site A: out-of-group plain → 200.
+					val a1 = _send_and_check(&running, port, "GET", "/health", 200, timeout);
+					if a1 != 0 { val _ = rest.shutdown(&mut running); return 100 + a1; }
+
+					// Site B: in-group, plain handler → 200 (passes through both mws).
+					val a2 = _send_and_check(&running, port, "GET", "/api/ok", 200, timeout);
+					if a2 != 0 { val _ = rest.shutdown(&mut running); return 200 + a2; }
+
+					// Site C: group mw short-circuits → 401 (handler not invoked).
+					val a3 = _send_and_check(&running, port, "GET", "/api/blocked", 401, timeout);
+					if a3 != 0 { val _ = rest.shutdown(&mut running); return 300 + a3; }
+
+					// Site D: throws-route handler throws RestBadRequest → 400 from
+					// _dispatch_throws → global mw observes and transforms to 503.
+					val a4 = _send_and_check(&running, port, "POST", "/api/throws", 503, timeout);
+					if a4 != 0 { val _ = rest.shutdown(&mut running); return 400 + a4; }
+
+					match rest.shutdown(&mut running) {
+						core.Result::Err(_) => { return 99; },
+						core.Result::Ok(_) => {
+							console.println("consumer rest-middleware: all 4 sites passed");
+							return 0;
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// HTTP send-and-assert helper (same shape as rest_throws_test.drift).
+fn _send_and_check(running: &rest.RunningServer, port: Int, method: String, path: String, expected_status: Int, timeout: conc.Duration) nothrow -> Int {
+	var raw_req = method + " " + path + " HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n";
+	if method == "POST" or method == "PUT" {
+		raw_req = raw_req + "Content-Length: 0\r\n";
+	}
+	raw_req = raw_req + "\r\n";
+
+	var addr = net.socket_addr("127.0.0.1", port);
+	match net.connect(&addr, timeout) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(conn) => {
+			var stream = move conn;
+			val bytes = raw_req.byte_length();
+			var wbuf = io.buffer(bytes);
+			var i = 0;
+			while i < bytes {
+				io.buffer_write(&mut wbuf, i, core.string_byte_at(&raw_req, i));
+				i = i + 1;
+			}
+			match stream.write(&wbuf, timeout) {
+				core.Result::Err(_) => {
+					val _ = stream.close(timeout);
+					return 2;
+				},
+				core.Result::Ok(_) => {}
+			}
+			var resp: Array<Byte> = [];
+			var done = false;
+			while !done {
+				var rbuf = io.buffer(4096);
+				match stream.read(&mut rbuf, timeout) {
+					core.Result::Err(_) => { done = true; },
+					core.Result::Ok(n) => {
+						if n == 0 { done = true; }
+						else {
+							var j = 0;
+							while j < n {
+								resp.push(io.buffer_read(&mut rbuf, j));
+								j = j + 1;
+							}
+						}
+					}
+				}
+			}
+			val _ = stream.close(timeout);
+
+			if resp.len < 12 { return 3; }
+			val d0 = cast<Int>(resp[9]) - 48;
+			val d1 = cast<Int>(resp[10]) - 48;
+			val d2 = cast<Int>(resp[11]) - 48;
+			val status = d0 * 100 + d1 * 10 + d2;
+			if status != expected_status { return 4; }
+			return 0;
+		}
+	}
+}

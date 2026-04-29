@@ -31,8 +31,8 @@
       "kind": "library",
       "name": "web-rest",
       "module_namespace": "web.rest",
-      "version": "0.3.1",
-      "description": "HTTP/1.1 REST server with routing, guards, and JSON body handling",
+      "version": "0.4.0",
+      "description": "HTTP/1.1 REST server with routing, route-group guards, wrapping middleware, and per-request typed Context slot map",
       "entry_module": "packages/web-rest/src/lib.drift",
       "modules": [
         "packages/web-rest/src/lib.drift",
