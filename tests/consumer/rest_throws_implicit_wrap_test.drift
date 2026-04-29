@@ -1,0 +1,210 @@
+module consumer.rest_throws_implicit_wrap_test;
+
+import std.core as core;
+import std.io as io;
+import std.net as net;
+import std.concurrent as conc;
+import std.console as console;
+import web.rest as rest;
+import web.rest.events as events;
+
+// Consumer-path regression: bare-lambda implicit wrap into rest.add_throws_route /
+// rest.add_group_throws_route, the shape that surfaced as a 0.31.18 LANGUAGE_BUG
+// against pushcoin/bookkeeper and was fixed in 0.31.19.
+//
+// The existing rest_throws_test.drift exercises add_throws_route only with named
+// functions wrapped explicitly via core.callback_throw2(_handler).  This file
+// covers the bare-lambda paths that the implicit-wrap helper at
+// `lang/driftc/checker/call_resolver.py::_wrap_explicit_capture_callbacks` (and
+// the lambda-pre-typing scan above it) must dispatch correctly:
+//
+//   - bare lambda with untyped params → implicit core.callback_throw2 wrap
+//   - bare lambda body that throws (typical app shape)
+//   - bare lambda with `captures(share arc)` over a throwing method call (bookkeeper)
+//
+// The 0.31.18 bug had the fallback wrap path hardcoding is_throw=False so a
+// CallbackThrow2 param got wrapped as core.callback2 (nothrow), surfacing as
+// "lambda can throw but is expected to be nothrow for Fn(...) nothrow -> Unknown"
+// + "callback2 expects a function value".
+
+// --- Helpers ---
+
+fn _no_fields() nothrow -> DiagnosticValue {
+	var f: Array<core.DiagnosticEntry> = [];
+	return DiagnosticValue::Object(move f);
+}
+
+fn _throw_bad() -> rest.Response {
+	throw events:RestBadRequest(tag = "iw-bad", message = "implicit-wrap bad", fields = _no_fields());
+}
+
+fn _throw_unauth() -> rest.Response {
+	throw events:RestUnauthorized(tag = "iw-unauth", message = "implicit-wrap unauth", fields = _no_fields());
+}
+
+// Shared state: a tag arc captured by share into the lambda.  Mirrors
+// pushcoin/bookkeeper's `add_throws_route(..., |req, ctx| captures(share app) =>
+// app.get().handle(...))` shape — concrete CallbackThrow2 target, untyped
+// lambda params, share-captured Arc, throwing call inside the body.
+struct AppTag {
+	pub tag: Int
+}
+
+implement AppTag {
+	pub fn handle_ok(self: &AppTag, req: &rest.Request, ctx: &mut rest.Context) -> rest.Response {
+		return rest.json_response(200, "{\"shared-handle\":\"ok\"}");
+	}
+}
+
+fn main() nothrow -> Int {
+	val timeout = conc.Duration(millis = 5000);
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(a) => {
+			var app = move a;
+
+			// Site A — bare-lambda + CallbackThrow2 param, untyped params,
+			// happy-path body.  Pre-fix: dispatch picked nothrow callback2,
+			// resulting in E-AUTO-fc123347 / E-AUTO-d5fc8414.  Post-fix:
+			// lambda is implicitly wrapped via callback_throw2, params
+			// concretized from the candidate's CallbackThrow2 type args.
+			match rest.add_throws_route(&mut app, "GET", "/iw/ok", |req, ctx| => {
+				return rest.json_response(200, "{\"iw\":\"ok\"}");
+			}) {
+				core.Result::Err(_) => { return 2; },
+				core.Result::Ok(_) => {}
+			}
+
+			// Site B — bare-lambda body that actually throws.  Lambda body
+			// throws-ness must NOT be the dispatch authority; the parameter
+			// type CallbackThrow2 is.  The lambda's own may-throw default
+			// composes correctly with the throws-variant wrap.
+			match rest.add_throws_route(&mut app, "POST", "/iw/bad", |req, ctx| => {
+				return _throw_bad();
+			}) {
+				core.Result::Err(_) => { return 3; },
+				core.Result::Ok(_) => {}
+			}
+
+			// Site C — bare-lambda + captures(share arc) + throwing method
+			// call on the shared value.  Mirrors bookkeeper's irreducible
+			// shape, composing fix #1 (implicit throws-variant wrap) with
+			// fix #2 (share-capture).
+			val app_tag = conc.arc(AppTag(tag = 7));
+			match rest.add_throws_route(&mut app, "GET", "/iw/share", |req, ctx| captures(share app_tag) => {
+				val a = app_tag.get();
+				return a.handle_ok(req, ctx);
+			}) {
+				core.Result::Err(_) => { return 4; },
+				core.Result::Ok(_) => {}
+			}
+
+			// Site D — group throws route via add_group_throws_route + bare
+			// lambda.  Same dispatch authority on the group-route surface.
+			match rest.add_group(&mut app, "/api") {
+				core.Result::Err(_) => { return 5; },
+				core.Result::Ok(group) => {
+					match rest.add_group_throws_route(&mut app, &group, "GET", "/iw/unauth", |req, ctx| => {
+						return _throw_unauth();
+					}) {
+						core.Result::Err(_) => { return 6; },
+						core.Result::Ok(_) => {}
+					}
+				}
+			}
+
+			match rest.start(move app, timeout) {
+				core.Result::Err(_) => { return 7; },
+				core.Result::Ok(rs) => {
+					var running = move rs;
+					val port = rest.server_port(&running);
+
+					// Site A: bare-lambda happy path → 200
+					val rc1 = _send_and_check(&running, port, "GET", "/iw/ok", 200, timeout);
+					if rc1 != 0 { val _ = rest.shutdown(&mut running); return 100 + rc1; }
+
+					// Site B: bare-lambda throws RestBadRequest → 400
+					val rc2 = _send_and_check(&running, port, "POST", "/iw/bad", 400, timeout);
+					if rc2 != 0 { val _ = rest.shutdown(&mut running); return 200 + rc2; }
+
+					// Site C: share-captured throwing-method-call lambda → 200
+					val rc3 = _send_and_check(&running, port, "GET", "/iw/share", 200, timeout);
+					if rc3 != 0 { val _ = rest.shutdown(&mut running); return 300 + rc3; }
+
+					// Site D: group bare-lambda throws RestUnauthorized → 401
+					val rc4 = _send_and_check(&running, port, "GET", "/api/iw/unauth", 401, timeout);
+					if rc4 != 0 { val _ = rest.shutdown(&mut running); return 400 + rc4; }
+
+					match rest.shutdown(&mut running) {
+						core.Result::Err(_) => { return 99; },
+						core.Result::Ok(_) => {
+							console.println("consumer rest-throws-implicit-wrap: all 4 sites passed");
+							return 0;
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// --- HTTP helper (copied from rest_throws_test.drift; same shape) ---
+
+fn _send_and_check(running: &rest.RunningServer, port: Int, method: String, path: String, expected_status: Int, timeout: conc.Duration) nothrow -> Int {
+	var raw_req = method + " " + path + " HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n";
+	if method == "POST" or method == "PUT" {
+		raw_req = raw_req + "Content-Length: 0\r\n";
+	}
+	raw_req = raw_req + "\r\n";
+
+	var addr = net.socket_addr("127.0.0.1", port);
+	match net.connect(&addr, timeout) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(conn) => {
+			var stream = move conn;
+			val bytes = raw_req.byte_length();
+			var wbuf = io.buffer(bytes);
+			var i = 0;
+			while i < bytes {
+				io.buffer_write(&mut wbuf, i, core.string_byte_at(&raw_req, i));
+				i = i + 1;
+			}
+			match stream.write(&wbuf, timeout) {
+				core.Result::Err(_) => {
+					val _ = stream.close(timeout);
+					return 2;
+				},
+				core.Result::Ok(_) => {}
+			}
+			var resp: Array<Byte> = [];
+			var done = false;
+			while !done {
+				var rbuf = io.buffer(4096);
+				match stream.read(&mut rbuf, timeout) {
+					core.Result::Err(_) => { done = true; },
+					core.Result::Ok(n) => {
+						if n == 0 { done = true; }
+						else {
+							var j = 0;
+							while j < n {
+								resp.push(io.buffer_read(&mut rbuf, j));
+								j = j + 1;
+							}
+						}
+					}
+				}
+			}
+			val _ = stream.close(timeout);
+
+			if resp.len < 12 { return 3; }
+			val d0 = cast<Int>(resp[9]) - 48;
+			val d1 = cast<Int>(resp[10]) - 48;
+			val d2 = cast<Int>(resp[11]) - 48;
+			val status = d0 * 100 + d1 * 10 + d2;
+			if status != expected_status { return 4; }
+			return 0;
+		}
+	}
+}

@@ -124,6 +124,18 @@ run_test "rest_throws_test" \
     --dep "web-rest@${rest_ver}" \
     --dep "web-jwt@${jwt_ver}"
 
+# 5b. web-rest bare-lambda implicit-wrap into add_throws_route /
+#     add_group_throws_route (0.31.19 LANGUAGE_BUG regression: dispatch
+#     selected callback2 instead of callback_throw2 for CallbackThrow*
+#     params).  Mirrors pushcoin/bookkeeper's call shape — bare lambdas
+#     with untyped params, throwing bodies, and `captures(share arc)`.
+run_test "rest_throws_implicit_wrap_test" \
+    "consumer.rest_throws_implicit_wrap_test::main" \
+    "${TEST_DIR}/rest_throws_implicit_wrap_test.drift" \
+    no \
+    --dep "web-rest@${rest_ver}" \
+    --dep "web-jwt@${jwt_ver}"
+
 # 6. web-rest or_throw consumer (typed Throw path regression)
 run_test "rest_or_throw_test" \
     "consumer.rest_or_throw_test::main" \
