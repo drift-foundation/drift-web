@@ -250,66 +250,13 @@ fn scenario_multiple_path_params() nothrow -> Int {
 	}
 }
 
-// --- Middleware chain ---
-
-// Filter that sets principal on context
-fn _set_principal_filter(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<Void, rest.RestError> {
-	rest.ctx_set<type rest.Principal>(ctx, rest.Principal(sub = "filter-user"));
-	return core.Result::Ok(core.void_value());
-}
-
-// Filter that always rejects with 403
-fn _reject_filter(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<Void, rest.RestError> {
-	return core.Result::Err(rest.rest_error(403, "forbidden", "deny-all", "filter denied"));
-}
+// --- Guard ---
 
 // Guard that checks principal is set
 fn _require_principal_guard(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<Void, rest.RestError> {
 	match rest.ctx_get<type rest.Principal>(ctx) {
 		Optional::Some(_) => { return core.Result::Ok(core.void_value()); },
 		Optional::None => { return core.Result::Err(rest.rest_error(401, "unauthorized", "guard-no-principal", "no principal")); }
-	}
-}
-
-// Scenario: filter sets context, handler reads it
-fn scenario_filter_runs_before_handler() nothrow -> Int {
-	var app = _build_test_app();
-	rest.add_filter(&mut app, core.callback2(_set_principal_filter));
-	match rest_app.add_route(&mut app, "GET", "/me", core.callback2(_guarded_handler)) {
-		core.Result::Err(_) => { return 801; },
-		core.Result::Ok(_) => {}
-	}
-	var req = rest.new_request("GET", "/me");
-	var ctx = rest.new_context();
-	val app_arc = conc.arc(move app);
-	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
-		core.Result::Err(_) => { return 802; },
-		core.Result::Ok(resp) => {
-			if resp.status != 200 { return 803; }
-			if resp.body != "{\"sub\":\"filter-user\"}" { return 804; }
-			return 0;
-		}
-	}
-}
-
-// Scenario: filter returns Err → handler never called
-fn scenario_filter_rejects() nothrow -> Int {
-	var app = _build_test_app();
-	rest.add_filter(&mut app, core.callback2(_reject_filter));
-	match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
-		core.Result::Err(_) => { return 901; },
-		core.Result::Ok(_) => {}
-	}
-	var req = rest.new_request("GET", "/health");
-	var ctx = rest.new_context();
-	val app_arc = conc.arc(move app);
-	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
-		core.Result::Ok(_) => { return 902; },
-		core.Result::Err(e) => {
-			if e.status != 403 { return 903; }
-			if e.tag != "deny-all" { return 904; }
-			return 0;
-		}
 	}
 }
 
@@ -388,60 +335,6 @@ fn scenario_guard_rejects() nothrow -> Int {
 		core.Result::Err(e) => {
 			if e.status != 401 { return 1104; }
 			if e.tag != "guard-no-principal" { return 1105; }
-			return 0;
-		}
-	}
-}
-
-// Order trail — typed scratch payload used by filter-order test.
-struct OrderTrail { pub path: String }
-
-fn _append_trail(ctx: &mut rest.Context, suffix: String) nothrow -> Void {
-	var path = "";
-	match rest.ctx_take<type OrderTrail>(ctx) {
-		Optional::Some(t) => { path = t.path.clone(); },
-		Optional::None => {}
-	}
-	rest.ctx_set<type OrderTrail>(ctx, OrderTrail(path = path + suffix));
-	return core.void_value();
-}
-
-// Filter that appends "A" to the OrderTrail (used to verify filter order)
-fn _filter_a(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<Void, rest.RestError> {
-	_append_trail(ctx, "A");
-	return core.Result::Ok(core.void_value());
-}
-
-// Filter that appends "B" to the OrderTrail
-fn _filter_b(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<Void, rest.RestError> {
-	_append_trail(ctx, "B");
-	return core.Result::Ok(core.void_value());
-}
-
-// Handler that returns the OrderTrail's path as response body
-fn _echo_ctx_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
-	match rest.ctx_get<type OrderTrail>(ctx) {
-		Optional::Some(t) => { return core.Result::Ok(rest.json_response(200, t.path.clone())); },
-		Optional::None => { return core.Result::Ok(rest.json_response(200, "")); }
-	}
-}
-
-// Scenario: multiple filters run in registration order
-fn scenario_filter_order_preserved() nothrow -> Int {
-	var app = _build_test_app();
-	rest.add_filter(&mut app, core.callback2(_filter_a));
-	rest.add_filter(&mut app, core.callback2(_filter_b));
-	match rest_app.add_route(&mut app, "GET", "/echo", core.callback2(_echo_ctx_handler)) {
-		core.Result::Err(_) => { return 1201; },
-		core.Result::Ok(_) => {}
-	}
-	var req = rest.new_request("GET", "/echo");
-	var ctx = rest.new_context();
-	val app_arc = conc.arc(move app);
-	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
-		core.Result::Err(_) => { return 1202; },
-		core.Result::Ok(resp) => {
-			if resp.body != "AB" { return 1203; }
 			return 0;
 		}
 	}
@@ -667,17 +560,11 @@ fn main() nothrow -> Int {
 	val g = scenario_multiple_path_params();
 	if g != 0 { return g; }
 
-	// Middleware chain
-	val h = scenario_filter_runs_before_handler();
-	if h != 0 { return h; }
-	val i = scenario_filter_rejects();
-	if i != 0 { return i; }
+	// Guard chain
 	val j = scenario_guard_runs_for_group();
 	if j != 0 { return j; }
 	val k = scenario_guard_rejects();
 	if k != 0 { return k; }
-	val l = scenario_filter_order_preserved();
-	if l != 0 { return l; }
 
 	// Adapter (throws → nothrow)
 	val m = scenario_throws_handler_success();

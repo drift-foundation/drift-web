@@ -29,14 +29,11 @@
 - `get_principal(ctx: &Context) -> Optional<Principal>`
 - `Context.has_principal: Bool`
 - `Context.principal_sub: String`
+- `add_filter(app: &mut App, filter: ...) -> Void` (along with `App.filters` and the dispatch filters loop)
 
 `Principal` struct stays as a public type. Apps that previously called `set_principal(ctx, sub)` switch to `ctx_set<Principal>(ctx, Principal(sub = ...))`. Apps that called `get_principal(ctx)` switch to `ctx_get<Principal>(ctx)`.
 
-### Deprecated (kept in 0.4, removal target 0.5)
-
-- `add_filter(app: &mut App, filter: ...) -> Void`
-
-`add_filter` is functionally subsumed by global `add_middleware` — a middleware that returns its own `Err` before calling `next.call(...)` is exactly the pre-only filter case. Keeping one compositional primitive is easier to teach and maintain. 0.4 retains existing `add_filter` behavior unchanged but does not extend it; doc strings and the integration guide direct new code to `add_middleware`. 0.5 removes `add_filter` unless a sharper-break decision moves removal earlier.
+`add_filter` is functionally subsumed by global `add_middleware` — a middleware that returns its own `Err` before calling `next.call(...)` is exactly the pre-only filter case. Hard cut in 0.4 — one compositional primitive is easier to teach and maintain.
 
 ### New
 
@@ -140,14 +137,11 @@ Helpers `_dispatch_throws`, route-handler invocation etc. continue taking `&App`
 1. Path → segments
 2. Best route match (404 on miss)
 3. Clear/extract path params; cache body JSON
-4. Global filters (existing — pre-only, short-circuit on Err)              [DEPRECATED]
-5. Route-group guards (existing — pre-only, short-circuit on Err)
-6. Build middleware onion → invoke
+4. Route-group guards (existing — pre-only, short-circuit on Err)
+5. Build middleware onion → invoke
    ├─ outermost: globals + matched route-group middleware (filtered + ordered)
    └─ innermost: route handler (nothrow direct, or _dispatch_throws)
 ```
-
-`add_filter` runs *outside* the middleware onion, preserving existing semantics for any 0.4 code that retained it.
 
 ## Two pinned invariants
 
@@ -180,9 +174,9 @@ Six commits, each independently green-CI'd (`just rest-check-par`, `just test`, 
 
 4. **`add_middleware` (global) + onion fold in `dispatch`.** Onion-fold algorithm using the verified `captures(move next, copy idx, share app_arc)` shape. Validation tests 1-5 from the app-team spec: single mw, composition, handler-throws-typed, handler-throws-unknown, short-circuit.
 
-5. **`add_route_group_middleware`.** Onion respects the filtering rule above. Validation tests 6, 7: group scoping (only fires for routes in that group), full composition with guards + global mw + group mw + handler.
+5. **`add_route_group_middleware` + hard-cut `add_filter`.** Onion respects the filtering rule above. Validation tests 6, 7: group scoping (only fires for routes in that group), full composition with guards + global mw + group mw + handler. Removes `add_filter`, `App.filters`, the dispatch filters loop, and the filter-using scenarios in `dispatch_test.drift` (equivalents are in `middleware_test.drift`).
 
-6. **lib.drift facade + version bump 0.4.0.** Final commit. Doc updates (deprecation note for `add_filter`; new sections for middleware + Context slot map). Removed exports drop from the facade.
+6. **lib.drift facade + version bump 0.4.0.** Final commit. New sections for middleware + Context slot map. Verify the export list matches the API surface above.
 
 Stress + perf-smoke run at the end of the sequence (serial per project parallelism policy).
 
@@ -216,7 +210,7 @@ Owned by Phase 2 commit #2 (`context_slot_test.drift`) and commit #4 (`middlewar
 
 | Q | Resolution |
 |---|---|
-| Q1: `add_filter` deprecation | Deprecate in 0.4 docs; prefer `add_middleware`. Keep behavior in 0.4, no extension. Removal target 0.5. |
+| Q1: `add_filter` deprecation | Hard cut in 0.4. Removed entirely along with `App.filters` and the dispatch filters loop. Apps migrate to `add_middleware`. |
 | Q2: Onion construction (lambda fold vs. recursive helper) | Verified lambda-fold for first cut; refactor to recursive helper later only if review prefers. |
 | Q3: Defensive throws-wrapping around middleware | No. Type contract is `nothrow -> Result`; trust the type. |
 | Q4: `Context` slot field privacy | Package-private. Public access only through `ctx_set` / `ctx_get` / `ctx_take`. |

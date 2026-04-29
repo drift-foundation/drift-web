@@ -17,8 +17,8 @@ export {
 	new_app_builder,
 	bind,
 	build_app,
-	add_filter,
 	add_middleware,
+	add_route_group_middleware,
 	add_route_group,
 	add_route_group_guard,
 	add_route,
@@ -47,10 +47,6 @@ pub struct App {
 	pub route_throws_handlers: Array<core.CallbackThrow2<&request.Request, &mut context.Context, response.Response>>,
 	pub route_is_throws: Array<Bool>,
 	pub route_group_ids: Array<Int>,
-
-	// Global filters (flat array). DEPRECATED in 0.4 — use add_middleware
-	// for new cross-cutting request logic. Removal target 0.5.
-	pub filters: Array<core.Callback2<&request.Request, &mut context.Context, core.Result<Void, errors.RestError>>>,
 
 	// Wrapping middleware (flat array, parallel route_group_id discriminator).
 	// route_group_id == -1 → global; else → middleware applies to routes in
@@ -106,7 +102,6 @@ fn _build_app_inner(b: AppBuilder) nothrow -> core.Result<App, errors.RestError>
 	var rth: Array<core.CallbackThrow2<&request.Request, &mut context.Context, response.Response>> = [];
 	var rit: Array<Bool> = [];
 	var rg: Array<Int> = [];
-	var filters: Array<core.Callback2<&request.Request, &mut context.Context, core.Result<Void, errors.RestError>>> = [];
 	var mwc: Array<core.Callback3<&request.Request, &mut context.Context, core.Callback2<&request.Request, &mut context.Context, core.Result<response.Response, errors.RestError>>, core.Result<response.Response, errors.RestError>>> = [];
 	var mwgi: Array<Int> = [];
 	var gc: Array<core.Callback2<&request.Request, &mut context.Context, core.Result<Void, errors.RestError>>> = [];
@@ -128,7 +123,6 @@ fn _build_app_inner(b: AppBuilder) nothrow -> core.Result<App, errors.RestError>
 		route_throws_handlers = move rth,
 		route_is_throws = move rit,
 		route_group_ids = move rg,
-		filters = move filters,
 		middleware_callbacks = move mwc,
 		middleware_route_group_ids = move mwgi,
 		guard_callbacks = move gc,
@@ -143,11 +137,6 @@ fn _build_app_inner(b: AppBuilder) nothrow -> core.Result<App, errors.RestError>
 
 // --- Registration ---
 
-pub fn add_filter(app: &mut App, filter: core.Callback2<&request.Request, &mut context.Context, core.Result<Void, errors.RestError>>) nothrow -> Void {
-	app.filters.push(move filter);
-	return core.void_value();
-}
-
 // Wrapping middleware. Runs in onion shape around the matched route's handler:
 // outside-in entry on the way down, inside-out exit as each layer's post-next
 // code runs while the chain returns. Middleware is nothrow and returns
@@ -155,10 +144,19 @@ pub fn add_filter(app: &mut App, filter: core.Callback2<&request.Request, &mut c
 // Err by the framework's _dispatch_throws adapter before next.call() returns.
 //
 // Registration scope: global (applies to every request that reaches dispatch
-// after filters + guards). For per-RouteGroup scope use add_route_group_middleware.
+// after route-group guards). For per-RouteGroup scope use add_route_group_middleware.
 pub fn add_middleware(app: &mut App, mw: core.Callback3<&request.Request, &mut context.Context, core.Callback2<&request.Request, &mut context.Context, core.Result<response.Response, errors.RestError>>, core.Result<response.Response, errors.RestError>>) nothrow -> Void {
 	app.middleware_callbacks.push(move mw);
 	app.middleware_route_group_ids.push(-1);
+	return core.void_value();
+}
+
+// Per-RouteGroup wrapping middleware. Onion-fold composes globals + matched
+// route-group middleware in registration order across the single registry
+// (see dispatch). For routes outside this group, this middleware does not run.
+pub fn add_route_group_middleware(app: &mut App, rg: &RouteGroup, mw: core.Callback3<&request.Request, &mut context.Context, core.Callback2<&request.Request, &mut context.Context, core.Result<response.Response, errors.RestError>>, core.Result<response.Response, errors.RestError>>) nothrow -> Void {
+	app.middleware_callbacks.push(move mw);
+	app.middleware_route_group_ids.push(rg.id);
 	return core.void_value();
 }
 
@@ -393,20 +391,7 @@ pub fn dispatch(app_arc: conc.Arc<App>, req: &mut request.Request, ctx: &mut con
 	// 4b. Cache body JSON parse result
 	request.cache_body_json(req);
 
-	// 5. Run all global filters in order; short-circuit on Err
-	var fi = 0;
-	while fi < app.filters.len {
-		val f = &app.filters[fi];
-		match (*f).call(req, ctx) {
-			core.Result::Ok(_) => {},
-			core.Result::Err(e) => {
-				return core.Result::Err(e);
-			}
-		}
-		fi = fi + 1;
-	}
-
-	// 6. If route has a group → run group guards
+	// 5. If route has a group → run group guards
 	val gid = app.route_group_ids[best_idx];
 	if gid >= 0 {
 		var gi = 0;
@@ -424,7 +409,7 @@ pub fn dispatch(app_arc: conc.Arc<App>, req: &mut request.Request, ctx: &mut con
 		}
 	}
 
-	// 7. Build middleware onion + invoke. Outermost layer = first applicable
+	// 6. Build middleware onion + invoke. Outermost layer = first applicable
 	// middleware in registration order; innermost = the route handler.
 	val matched_group = app.route_group_ids[best_idx];
 

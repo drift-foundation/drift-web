@@ -340,6 +340,110 @@ fn scenario_transform_err_to_ok() nothrow -> Int {
 	return 0;
 }
 
+// --- Scenario 750a: route-group middleware fires only for routes in that group ---
+// Two routes — one in /grp, one at /. One group-mw on /grp, no globals.
+// /grp/X: trace must include the group-mw enter/exit.
+// /:     trace must NOT include the group-mw enter/exit (different group, no match).
+fn scenario_group_middleware_only_fires_in_group() nothrow -> Int {
+	var app = _build_test_app();
+	match rest.add_route_group(&mut app, "/grp") {
+		core.Result::Err(_) => { return 751; },
+		core.Result::Ok(rg) => {
+			rest.add_route_group_middleware(&mut app, &rg, |r: &rest.Request, c: &mut rest.Context, next| => {
+				_trace_push(c, "GROUP:enter");
+				val result = next.call(r, c);
+				_trace_push(c, "GROUP:exit");
+				return move result;
+			});
+			match rest.add_route_group_route(&mut app, &rg, "GET", "/in", core.callback2(_ok_handler)) {
+				core.Result::Err(_) => { return 752; },
+				core.Result::Ok(_) => {}
+			}
+		}
+	}
+	match rest.add_route(&mut app, "GET", "/out", core.callback2(_ok_handler)) {
+		core.Result::Err(_) => { return 753; },
+		core.Result::Ok(_) => {}
+	}
+	val app_arc = conc.arc(move app);
+
+	// /grp/in — group mw should fire
+	var req_in = rest.new_request("GET", "/grp/in");
+	var ctx_in = rest.new_context();
+	match rest.dispatch(app_arc.clone(), &mut req_in, &mut ctx_in) {
+		core.Result::Err(_) => { return 754; },
+		core.Result::Ok(_) => {}
+	}
+	val expected_in: Array<String> = ["GROUP:enter", "H:enter", "H:exit", "GROUP:exit"];
+	match rest.ctx_get<type Trace>(&ctx_in) {
+		Optional::None => { return 755; },
+		Optional::Some(t) => { if !_trace_eq(&t.events, &expected_in) { return 756; } }
+	}
+
+	// /out — group mw must NOT fire
+	var req_out = rest.new_request("GET", "/out");
+	var ctx_out = rest.new_context();
+	match rest.dispatch(app_arc.clone(), &mut req_out, &mut ctx_out) {
+		core.Result::Err(_) => { return 757; },
+		core.Result::Ok(_) => {}
+	}
+	val expected_out: Array<String> = ["H:enter", "H:exit"];
+	match rest.ctx_get<type Trace>(&ctx_out) {
+		Optional::None => { return 758; },
+		Optional::Some(t) => { if !_trace_eq(&t.events, &expected_out) { return 759; } }
+	}
+	return 0;
+}
+
+// --- Scenario 750b: full composition — guard + global mw + group mw + handler ---
+// For an in-group route, dispatch order is:
+//   group guard → onion (global mw outer, group mw inner) → handler
+// Trace verifies the guard runs first and the onion folds outside-in
+// across the combined globals + matched group middleware in registration order.
+fn scenario_global_plus_group_mw_composition() nothrow -> Int {
+	var app = _build_test_app();
+	rest.add_middleware(&mut app, |r: &rest.Request, c: &mut rest.Context, next| => {
+		_trace_push(c, "GLOBAL:enter");
+		val result = next.call(r, c);
+		_trace_push(c, "GLOBAL:exit");
+		return move result;
+	});
+	match rest.add_route_group(&mut app, "/api") {
+		core.Result::Err(_) => { return 761; },
+		core.Result::Ok(rg) => {
+			rest.add_route_group_guard(&mut app, &rg, |r: &rest.Request, c: &mut rest.Context| => {
+				_trace_push(c, "GUARD");
+				return core.Result::Ok(core.void_value());
+			});
+			rest.add_route_group_middleware(&mut app, &rg, |r: &rest.Request, c: &mut rest.Context, next| => {
+				_trace_push(c, "GROUP:enter");
+				val result = next.call(r, c);
+				_trace_push(c, "GROUP:exit");
+				return move result;
+			});
+			match rest.add_route_group_route(&mut app, &rg, "GET", "/x", core.callback2(_ok_handler)) {
+				core.Result::Err(_) => { return 762; },
+				core.Result::Ok(_) => {}
+			}
+		}
+	}
+	val app_arc = conc.arc(move app);
+	var req = rest.new_request("GET", "/api/x");
+	var ctx = rest.new_context();
+	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+		core.Result::Err(_) => { return 763; },
+		core.Result::Ok(_) => {}
+	}
+	// Guard runs before the onion. Onion: GLOBAL is registered before GROUP, so
+	// GLOBAL is outer, GROUP is inner.
+	val expected: Array<String> = ["GUARD", "GLOBAL:enter", "GROUP:enter", "H:enter", "H:exit", "GROUP:exit", "GLOBAL:exit"];
+	match rest.ctx_get<type Trace>(&ctx) {
+		Optional::None => { return 764; },
+		Optional::Some(t) => { if !_trace_eq(&t.events, &expected) { return 765; } }
+	}
+	return 0;
+}
+
 // --- Scenario 800: zero-middleware fast path ---
 // No middleware registered. Dispatch must still run and call the handler.
 fn scenario_zero_middleware_fast_path() nothrow -> Int {
@@ -391,6 +495,12 @@ fn main() nothrow -> Int {
 
 	val r8 = scenario_zero_middleware_fast_path();
 	if r8 != 0 { return r8; }
+
+	val r9 = scenario_group_middleware_only_fires_in_group();
+	if r9 != 0 { return r9; }
+
+	val r10 = scenario_global_plus_group_mw_composition();
+	if r10 != 0 { return r10; }
 
 	return 0;
 }
