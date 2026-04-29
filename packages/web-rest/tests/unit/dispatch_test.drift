@@ -83,7 +83,7 @@ fn _admin_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Re
 }
 
 fn _guarded_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
-	match rest.get_principal(ctx) {
+	match rest.ctx_get<type rest.Principal>(ctx) {
 		Optional::Some(p) => {
 			val body = "{\"sub\":\"" + p.sub + "\"}";
 			return core.Result::Ok(rest.json_response(200, body));
@@ -246,7 +246,7 @@ fn scenario_multiple_path_params() nothrow -> Int {
 
 // Filter that sets principal on context
 fn _set_principal_filter(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<Void, rest.RestError> {
-	rest.set_principal(ctx, "filter-user");
+	rest.ctx_set<type rest.Principal>(ctx, rest.Principal(sub = "filter-user"));
 	return core.Result::Ok(core.void_value());
 }
 
@@ -257,7 +257,7 @@ fn _reject_filter(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Re
 
 // Guard that checks principal is set
 fn _require_principal_guard(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<Void, rest.RestError> {
-	match rest.get_principal(ctx) {
+	match rest.ctx_get<type rest.Principal>(ctx) {
 		Optional::Some(_) => { return core.Result::Ok(core.void_value()); },
 		Optional::None => { return core.Result::Err(rest.rest_error(401, "unauthorized", "guard-no-principal", "no principal")); }
 	}
@@ -345,7 +345,7 @@ fn scenario_guard_runs_for_group() nothrow -> Int {
 	// Route-group route with principal → succeeds
 	var req3 = rest.new_request("GET", "/admin/dash");
 	var ctx3 = rest.new_context();
-	rest.set_principal(&mut ctx3, "admin-user");
+	rest.ctx_set<type rest.Principal>(&mut ctx3, rest.Principal(sub = "admin-user"));
 	match rest.dispatch(&app, &mut req3, &mut ctx3) {
 		core.Result::Err(_) => { return 1009; },
 		core.Result::Ok(resp) => {
@@ -381,21 +381,37 @@ fn scenario_guard_rejects() nothrow -> Int {
 	}
 }
 
-// Filter that appends "A" to context principal_sub (used to verify order)
+// Order trail — typed scratch payload used by filter-order test.
+struct OrderTrail { pub path: String }
+
+fn _append_trail(ctx: &mut rest.Context, suffix: String) nothrow -> Void {
+	var path = "";
+	match rest.ctx_take<type OrderTrail>(ctx) {
+		Optional::Some(t) => { path = t.path.clone(); },
+		Optional::None => {}
+	}
+	rest.ctx_set<type OrderTrail>(ctx, OrderTrail(path = path + suffix));
+	return core.void_value();
+}
+
+// Filter that appends "A" to the OrderTrail (used to verify filter order)
 fn _filter_a(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<Void, rest.RestError> {
-	ctx.principal_sub = ctx.principal_sub + "A";
+	_append_trail(ctx, "A");
 	return core.Result::Ok(core.void_value());
 }
 
-// Filter that appends "B" to context principal_sub
+// Filter that appends "B" to the OrderTrail
 fn _filter_b(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<Void, rest.RestError> {
-	ctx.principal_sub = ctx.principal_sub + "B";
+	_append_trail(ctx, "B");
 	return core.Result::Ok(core.void_value());
 }
 
-// Handler that returns context principal_sub as response body
+// Handler that returns the OrderTrail's path as response body
 fn _echo_ctx_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
-	return core.Result::Ok(rest.json_response(200, ctx.principal_sub));
+	match rest.ctx_get<type OrderTrail>(ctx) {
+		Optional::Some(t) => { return core.Result::Ok(rest.json_response(200, t.path.clone())); },
+		Optional::None => { return core.Result::Ok(rest.json_response(200, "")); }
+	}
 }
 
 // Scenario: multiple filters run in registration order

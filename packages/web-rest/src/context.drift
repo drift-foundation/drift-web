@@ -1,37 +1,89 @@
 module web.rest.context;
 
 import std.core as core;
+import std.runtime as rt;
 
 export {
 	Context,
 	Principal,
 	new_context,
-	set_principal,
-	get_principal
+	ctx_set,
+	ctx_get,
+	ctx_take
 };
 
 pub struct Principal {
 	pub sub: String
 }
 
+// Per-request typed slot map. Lifetime = one request.
+//
+// Storage: parallel arrays — slots_keys[i] is core.type_id<type T>() for the
+// payload stored at slots_vals[i]. Linear scan on access; N is the number of
+// distinct types stashed per request, typically single digits.
+//
+// Slot fields are package-private. Public access is exclusively through
+// ctx_set / ctx_get / ctx_take.
 pub struct Context {
-	pub has_principal: Bool,
-	pub principal_sub: String
+	slots_keys: Array<Uint64>,
+	slots_vals: Array<rt.TypeBox>
 }
 
 pub fn new_context() nothrow -> Context {
-	return Context(has_principal = false, principal_sub = "");
+	var k: Array<Uint64> = [];
+	var v: Array<rt.TypeBox> = [];
+	return Context(slots_keys = move k, slots_vals = move v);
 }
 
-pub fn set_principal(ctx: &mut Context, sub: String) nothrow -> Void {
-	ctx.has_principal = true;
-	ctx.principal_sub = sub;
+// Stash an owned value of type T. Overwrite drops the previous value cleanly
+// — the prior TypeBox at that slot drops, which drops the owned T inside.
+pub fn ctx_set<T>(ctx: &mut Context, value: T) nothrow -> Void {
+	val tid = core.type_id<type T>();
+	var i = 0;
+	while i < ctx.slots_keys.len {
+		if ctx.slots_keys[i] == tid {
+			ctx.slots_vals[i] = rt.type_box<type T>(move value);
+			return core.void_value();
+		}
+		i = i + 1;
+	}
+	ctx.slots_keys.push(tid);
+	ctx.slots_vals.push(rt.type_box<type T>(move value));
 	return core.void_value();
 }
 
-pub fn get_principal(ctx: &Context) nothrow -> Optional<Principal> {
-	if ctx.has_principal {
-		return Optional::Some(Principal(sub = ctx.principal_sub));
+// Read the stashed T by reference, or None if absent.
+pub fn ctx_get<T>(ctx: &Context) nothrow -> Optional<&T> {
+	val tid = core.type_id<type T>();
+	var i = 0;
+	while i < ctx.slots_keys.len {
+		if ctx.slots_keys[i] == tid {
+			return rt.downcast<type T>(&ctx.slots_vals[i]);
+		}
+		i = i + 1;
 	}
-	return Optional<Principal>::None();
+	return Optional<&T>::None();
+}
+
+// Remove and return the stashed T. Slot disappears; subsequent ctx_get<T>
+// returns None. Swap-remove keeps remaining slots intact.
+pub fn ctx_take<T>(ctx: &mut Context) nothrow -> Optional<T> {
+	val tid = core.type_id<type T>();
+	var i = 0;
+	while i < ctx.slots_keys.len {
+		if ctx.slots_keys[i] == tid {
+			val last = ctx.slots_keys.len - 1;
+			if i != last {
+				ctx.slots_keys.swap(i, last);
+				ctx.slots_vals.swap(i, last);
+			}
+			val _k = ctx.slots_keys.pop();
+			match ctx.slots_vals.pop() {
+				Optional::None => { return Optional<T>::None(); },
+				Optional::Some(tb) => { return rt.take<type T>(move tb); }
+			}
+		}
+		i = i + 1;
+	}
+	return Optional<T>::None();
 }

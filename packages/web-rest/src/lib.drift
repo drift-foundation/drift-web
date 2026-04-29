@@ -68,12 +68,13 @@ export {
 	validation_error,
 	// Request construction / accessors
 	new_context,
+	ctx_set,
+	ctx_get,
+	ctx_take,
 	new_request,
 	add_query_param,
 	add_header,
 	header,
-	set_principal,
-	get_principal,
 	require_principal,
 	query_param,
 	require_query_param,
@@ -173,18 +174,24 @@ pub fn header(req: &Request, name: &String) nothrow -> Optional<String> {
 	return request.header(req, name);
 }
 
-pub fn set_principal(ctx: &mut Context, sub: String) nothrow -> Void {
-	return context.set_principal(ctx, sub);
+pub fn ctx_set<T>(ctx: &mut Context, value: T) nothrow -> Void {
+	return context.ctx_set<type T>(ctx, move value);
 }
 
-pub fn get_principal(ctx: &Context) nothrow -> Optional<Principal> {
-	return context.get_principal(ctx);
+pub fn ctx_get<T>(ctx: &Context) nothrow -> Optional<&T> {
+	return context.ctx_get<type T>(ctx);
+}
+
+pub fn ctx_take<T>(ctx: &mut Context) nothrow -> Optional<T> {
+	return context.ctx_take<type T>(ctx);
 }
 
 pub fn require_principal(ctx: &Context) nothrow -> core.Result<Principal, RestError> {
-	match context.get_principal(ctx) {
+	match context.ctx_get<type context.Principal>(ctx) {
 		Optional::Some(p) => {
-			return core.Result::Ok(p);
+			val sub_str = p.sub.clone();
+			val cloned = context.Principal(sub = move sub_str);
+			return core.Result::Ok(move cloned);
 		},
 		Optional::None => {
 			return core.Result::Err(errors.rest_error(401, "unauthorized", "missing-principal", "no authenticated principal in context"));

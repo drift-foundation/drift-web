@@ -1,0 +1,313 @@
+module web.rest.tests.unit.context_slot_test;
+
+import std.core as core;
+import std.concurrent as conc;
+import web.rest as rest;
+
+// Tests for the per-request typed slot map on Context (web-rest 0.4).
+// Covers: ctx_set / ctx_get / ctx_take, overwrite-drops, swap-remove correctness,
+// multi-type isolation, drop-on-Context-end.
+//
+// Runs under plain + ASAN + memcheck via `just test`. Memcheck is the load-bearing
+// pass for ownership/drop coverage.
+
+// --- Payload shapes ---
+
+// Scratch primitive payloads.
+struct TypeA { pub a: Int }
+struct TypeB { pub b: String }
+struct TypeC { pub c: Int }
+
+// Owning struct holding a String — exercises the RawBufferRead<String> ownership
+// path that 0.31.24 fixed.
+struct OwnedHandle { pub name: String, pub count: Int }
+
+// Arc-bearing payload — drop-on-Context-end coverage. The Arc's strong-count is
+// observable, so we can verify the TypeBox drop chain runs through to the inner T.
+struct SharedResource { pub handle: conc.Arc<TypeC> }
+
+// --- Scenario 100: ctx_set + ctx_get round-trip on a single type ---
+fn scenario_set_get_roundtrip() nothrow -> Int {
+	var ctx = rest.new_context();
+	rest.ctx_set<type TypeA>(&mut ctx, TypeA(a = 42));
+	match rest.ctx_get<type TypeA>(&ctx) {
+		Optional::None => { return 101; },
+		Optional::Some(v) => { if v.a != 42 { return 102; } }
+	}
+	return 0;
+}
+
+// --- Scenario 200: ctx_get on absent returns None ---
+fn scenario_get_absent_returns_none() nothrow -> Int {
+	val ctx = rest.new_context();
+	match rest.ctx_get<type TypeA>(&ctx) {
+		Optional::Some(_) => { return 201; },
+		Optional::None => { return 0; }
+	}
+}
+
+// --- Scenario 300: multi-type isolation (different T's keep distinct slots) ---
+fn scenario_multi_type_isolation() nothrow -> Int {
+	var ctx = rest.new_context();
+	rest.ctx_set<type TypeA>(&mut ctx, TypeA(a = 1));
+	rest.ctx_set<type TypeB>(&mut ctx, TypeB(b = "two"));
+	rest.ctx_set<type TypeC>(&mut ctx, TypeC(c = 3));
+
+	match rest.ctx_get<type TypeA>(&ctx) {
+		Optional::Some(v) => { if v.a != 1 { return 301; } },
+		Optional::None => { return 302; }
+	}
+	match rest.ctx_get<type TypeB>(&ctx) {
+		Optional::Some(v) => { if v.b != "two" { return 303; } },
+		Optional::None => { return 304; }
+	}
+	match rest.ctx_get<type TypeC>(&ctx) {
+		Optional::Some(v) => { if v.c != 3 { return 305; } },
+		Optional::None => { return 306; }
+	}
+	return 0;
+}
+
+// --- Scenario 400: ctx_set overwrite (String payload) drops the previous value ---
+// The first String in the slot must drop cleanly when the second set replaces it.
+// Memcheck flags any leak; ASAN flags any double-drop or stale-pointer use.
+fn scenario_overwrite_string_drops_previous() nothrow -> Int {
+	var ctx = rest.new_context();
+	rest.ctx_set<type TypeB>(&mut ctx, TypeB(b = "first"));
+	rest.ctx_set<type TypeB>(&mut ctx, TypeB(b = "second"));
+	rest.ctx_set<type TypeB>(&mut ctx, TypeB(b = "third"));
+	match rest.ctx_get<type TypeB>(&ctx) {
+		Optional::None => { return 401; },
+		Optional::Some(v) => { if v.b != "third" { return 402; } }
+	}
+	return 0;
+}
+
+// --- Scenario 500: ctx_set overwrite on owning struct holding String ---
+// Same shape as 400 but the payload owns its String field — overwrite must drop
+// the previous OwnedHandle, which drops its String field cleanly.
+fn scenario_overwrite_owning_struct_drops_previous() nothrow -> Int {
+	var ctx = rest.new_context();
+	rest.ctx_set<type OwnedHandle>(&mut ctx, OwnedHandle(name = "alpha", count = 1));
+	rest.ctx_set<type OwnedHandle>(&mut ctx, OwnedHandle(name = "beta", count = 2));
+	match rest.ctx_get<type OwnedHandle>(&ctx) {
+		Optional::None => { return 501; },
+		Optional::Some(v) => {
+			if v.name != "beta" { return 502; }
+			if v.count != 2 { return 503; }
+		}
+	}
+	return 0;
+}
+
+// --- Scenario 600: ctx_take returns owned T; subsequent ctx_get is None ---
+fn scenario_take_returns_owned() nothrow -> Int {
+	var ctx = rest.new_context();
+	rest.ctx_set<type TypeA>(&mut ctx, TypeA(a = 99));
+	match rest.ctx_take<type TypeA>(&mut ctx) {
+		Optional::None => { return 601; },
+		Optional::Some(v) => {
+			if v.a != 99 { return 602; }
+			// v is owned — confirm we can move it again without compiler complaint.
+			val _moved = move v;
+		}
+	}
+	match rest.ctx_get<type TypeA>(&ctx) {
+		Optional::Some(_) => { return 603; },
+		Optional::None => { return 0; }
+	}
+}
+
+// --- Scenario 700: ctx_take on absent returns None ---
+fn scenario_take_absent_returns_none() nothrow -> Int {
+	var ctx = rest.new_context();
+	match rest.ctx_take<type TypeA>(&mut ctx) {
+		Optional::Some(_) => { return 701; },
+		Optional::None => { return 0; }
+	}
+}
+
+// --- Scenario 800: take from FIRST slot — swap moves last entry into [0] ---
+// Slots populated in order: A (idx 0), B (idx 1), C (idx 2). Take A.
+// Post-take: A absent; B, C still readable with their original values.
+fn scenario_take_first_swap_remove() nothrow -> Int {
+	var ctx = rest.new_context();
+	rest.ctx_set<type TypeA>(&mut ctx, TypeA(a = 10));
+	rest.ctx_set<type TypeB>(&mut ctx, TypeB(b = "twenty"));
+	rest.ctx_set<type TypeC>(&mut ctx, TypeC(c = 30));
+
+	match rest.ctx_take<type TypeA>(&mut ctx) {
+		Optional::None => { return 801; },
+		Optional::Some(v) => { if v.a != 10 { return 802; } }
+	}
+	match rest.ctx_get<type TypeA>(&ctx) {
+		Optional::Some(_) => { return 803; },
+		Optional::None => {}
+	}
+	match rest.ctx_get<type TypeB>(&ctx) {
+		Optional::None => { return 804; },
+		Optional::Some(v) => { if v.b != "twenty" { return 805; } }
+	}
+	match rest.ctx_get<type TypeC>(&ctx) {
+		Optional::None => { return 806; },
+		Optional::Some(v) => { if v.c != 30 { return 807; } }
+	}
+	return 0;
+}
+
+// --- Scenario 900: take from MIDDLE slot — swap-remove preserves first + last ---
+fn scenario_take_middle_swap_remove() nothrow -> Int {
+	var ctx = rest.new_context();
+	rest.ctx_set<type TypeA>(&mut ctx, TypeA(a = 11));
+	rest.ctx_set<type TypeB>(&mut ctx, TypeB(b = "middle"));
+	rest.ctx_set<type TypeC>(&mut ctx, TypeC(c = 33));
+
+	match rest.ctx_take<type TypeB>(&mut ctx) {
+		Optional::None => { return 901; },
+		Optional::Some(v) => { if v.b != "middle" { return 902; } }
+	}
+	match rest.ctx_get<type TypeB>(&ctx) {
+		Optional::Some(_) => { return 903; },
+		Optional::None => {}
+	}
+	match rest.ctx_get<type TypeA>(&ctx) {
+		Optional::None => { return 904; },
+		Optional::Some(v) => { if v.a != 11 { return 905; } }
+	}
+	match rest.ctx_get<type TypeC>(&ctx) {
+		Optional::None => { return 906; },
+		Optional::Some(v) => { if v.c != 33 { return 907; } }
+	}
+	return 0;
+}
+
+// --- Scenario 1000: take from LAST slot — no swap needed, just pop ---
+fn scenario_take_last_no_swap() nothrow -> Int {
+	var ctx = rest.new_context();
+	rest.ctx_set<type TypeA>(&mut ctx, TypeA(a = 12));
+	rest.ctx_set<type TypeB>(&mut ctx, TypeB(b = "last"));
+	rest.ctx_set<type TypeC>(&mut ctx, TypeC(c = 34));
+
+	match rest.ctx_take<type TypeC>(&mut ctx) {
+		Optional::None => { return 1001; },
+		Optional::Some(v) => { if v.c != 34 { return 1002; } }
+	}
+	match rest.ctx_get<type TypeC>(&ctx) {
+		Optional::Some(_) => { return 1003; },
+		Optional::None => {}
+	}
+	match rest.ctx_get<type TypeA>(&ctx) {
+		Optional::None => { return 1004; },
+		Optional::Some(v) => { if v.a != 12 { return 1005; } }
+	}
+	match rest.ctx_get<type TypeB>(&ctx) {
+		Optional::None => { return 1006; },
+		Optional::Some(v) => { if v.b != "last" { return 1007; } }
+	}
+	return 0;
+}
+
+// --- Scenario 1100: set after take re-creates the slot cleanly ---
+fn scenario_set_after_take_recreates() nothrow -> Int {
+	var ctx = rest.new_context();
+	rest.ctx_set<type TypeA>(&mut ctx, TypeA(a = 5));
+	match rest.ctx_take<type TypeA>(&mut ctx) {
+		Optional::None => { return 1101; },
+		Optional::Some(_) => {}
+	}
+	rest.ctx_set<type TypeA>(&mut ctx, TypeA(a = 6));
+	match rest.ctx_get<type TypeA>(&ctx) {
+		Optional::None => { return 1102; },
+		Optional::Some(v) => { if v.a != 6 { return 1103; } }
+	}
+	return 0;
+}
+
+// --- Scenario 1200: take consumes ownership; Arc-bearing payload drops cleanly ---
+// We stash a SharedResource holding a conc.Arc<TypeC> alongside a sibling Arc
+// retained in this scope. Take pulls the resource out and drops it at end of
+// match arm — the Arc inside must drop, releasing one strong reference.
+//
+// Drift stdlib does not expose Arc.strong_count() at the source level, so this
+// scenario asserts only the value-correctness path. Drop-correctness is
+// verified by the ASAN + memcheck passes (`just test`), which flag any leak or
+// double-free in the TypeBox → SharedResource → Arc drop chain.
+fn scenario_take_drops_arc() nothrow -> Int {
+	var ctx = rest.new_context();
+	val arc_outside = conc.arc(TypeC(c = 77));
+	val arc_for_ctx = arc_outside.clone();
+
+	rest.ctx_set<type SharedResource>(&mut ctx, SharedResource(handle = move arc_for_ctx));
+
+	match rest.ctx_take<type SharedResource>(&mut ctx) {
+		Optional::None => { return 1201; },
+		Optional::Some(res) => {
+			// Confirm the Arc is reachable through the taken resource.
+			if res.handle.get().c != 77 { return 1202; }
+			val _consume = move res;   // resource drops at end of arm
+		}
+	}
+	// Outer Arc still valid; reading it must succeed.
+	if arc_outside.get().c != 77 { return 1203; }
+	return 0;
+}
+
+// --- Scenario 1300: drop-on-Context-end runs the inner T's destructor ---
+// Stash the SharedResource in ctx but don't take it. When ctx drops at end of
+// inner scope, the TypeBox drop chain must reach the inner T, which drops the
+// Arc inside SharedResource. ASAN + memcheck assert this; the scenario logic
+// verifies the outer Arc remains usable post-Context-drop.
+fn scenario_drop_on_context_end() nothrow -> Int {
+	val arc_outside = conc.arc(TypeC(c = 88));
+	{
+		var ctx = rest.new_context();
+		val arc_for_ctx = arc_outside.clone();
+		rest.ctx_set<type SharedResource>(&mut ctx, SharedResource(handle = move arc_for_ctx));
+		// ctx drops here at end of inner scope
+	}
+	if arc_outside.get().c != 88 { return 1301; }
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	val r1 = scenario_set_get_roundtrip();
+	if r1 != 0 { return r1; }
+
+	val r2 = scenario_get_absent_returns_none();
+	if r2 != 0 { return r2; }
+
+	val r3 = scenario_multi_type_isolation();
+	if r3 != 0 { return r3; }
+
+	val r4 = scenario_overwrite_string_drops_previous();
+	if r4 != 0 { return r4; }
+
+	val r5 = scenario_overwrite_owning_struct_drops_previous();
+	if r5 != 0 { return r5; }
+
+	val r6 = scenario_take_returns_owned();
+	if r6 != 0 { return r6; }
+
+	val r7 = scenario_take_absent_returns_none();
+	if r7 != 0 { return r7; }
+
+	val r8 = scenario_take_first_swap_remove();
+	if r8 != 0 { return r8; }
+
+	val r9 = scenario_take_middle_swap_remove();
+	if r9 != 0 { return r9; }
+
+	val r10 = scenario_take_last_no_swap();
+	if r10 != 0 { return r10; }
+
+	val r11 = scenario_set_after_take_recreates();
+	if r11 != 0 { return r11; }
+
+	val r12 = scenario_take_drops_arc();
+	if r12 != 0 { return r12; }
+
+	val r13 = scenario_drop_on_context_end();
+	if r13 != 0 { return r13; }
+
+	return 0;
+}

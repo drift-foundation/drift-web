@@ -114,15 +114,15 @@ fn _verify_token(token: &String, config: &JwtGuardConfig, ctx: &mut context.Cont
 					val sub_key = "sub";
 					match payload_node.get(&sub_key) {
 						Optional::None => {
-							context.set_principal(ctx, "");
+							context.ctx_set<type context.Principal>(ctx, context.Principal(sub = ""));
 						},
 						Optional::Some(sub_node) => {
 							match sub_node.as_string() {
 								Optional::None => {
-									context.set_principal(ctx, "");
+									context.ctx_set<type context.Principal>(ctx, context.Principal(sub = ""));
 								},
 								Optional::Some(sub_val) => {
-									context.set_principal(ctx, sub_val);
+									context.ctx_set<type context.Principal>(ctx, context.Principal(sub = sub_val));
 								}
 							}
 						}

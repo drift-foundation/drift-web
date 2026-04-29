@@ -119,7 +119,7 @@ fn _health_handler(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Res
 }
 
 fn _me_handler(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
-	match rest.get_principal(c) {
+	match rest.ctx_get<type rest.Principal>(c) {
 		Optional::Some(p) => {
 			val body = "{\"sub\":\"" + p.sub + "\"}";
 			return core.Result::Ok(rest.json_response(200, body));

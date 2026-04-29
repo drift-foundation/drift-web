@@ -114,7 +114,7 @@ fn scenario_valid_token_authorized() nothrow -> Int {
 		core.Result::Ok(_) => {},
 		core.Result::Err(_) => { return 102; }
 	}
-	match rest.get_principal(&ctx) {
+	match rest.ctx_get<type rest.Principal>(&ctx) {
 		Optional::None => { return 103; },
 		Optional::Some(p) => {
 			if p.sub != "user-42" { return 104; }
@@ -410,7 +410,7 @@ fn scenario_lowercase_authorization_header() nothrow -> Int {
 		core.Result::Ok(_) => {},
 		core.Result::Err(_) => { return 1502; }
 	}
-	match rest.get_principal(&ctx) {
+	match rest.ctx_get<type rest.Principal>(&ctx) {
 		Optional::None => { return 1503; },
 		Optional::Some(p) => {
 			if p.sub != "user-42" { return 1504; }
