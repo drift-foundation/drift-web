@@ -315,3 +315,31 @@
   - `just rest-check-par` — 16/16 REST unit tests pass
   - `just test` — full suite green, memcheck clean (0 leaks, 0 errors) including all consumer tests
   - `just stress-test` and `just perf-smoke` — pass
+
+## 2026-05-12
+
+- Migrated drift-web to staged toolchain `drift 0.31.67 / ABI 14` (full plan and review notes in `work/abi14-migration-report.md`):
+  - all public Result error carriers are now `pub error` types; manual `core.Diagnostic` and `core.Throw` impls deleted (compiler synthesizes both):
+    - `JwtError`, `JwtConfigError` in `packages/web-jwt/src/errors.drift`
+    - `ClientError` in `packages/web-client/src/errors.drift`
+    - `ProbeError` in `packages/or-throw-probe/src/lib.drift` (`ProbeException` retired — the carrier IS the throw type under ABI 14)
+    - `RestError` in `packages/web-rest/src/errors.drift` — fields shape changed from `Array<core.DiagnosticEntry>` to canonical lex-ordered `fields_json: String` (built via `std.json` end-to-end; invariant: empty == `"{}"`, never `""`)
+  - the six typed REST events in `packages/web-rest/src/events.drift` are now `pub error Rest{BadRequest,Unauthorized,Forbidden,NotFound,Conflict,Internal}` with `tag, message, fields_json` scalar fields (replacing the old `pub exception ...(fields: DiagnosticValue)` shape)
+  - `_dispatch_throws` (`packages/web-rest/src/app.drift`) rewritten to typed catch projection: seven arms, `errors:RestError` first (for the `or_throw` pathway) then 6× `events:Rest*` (for explicit handler throws), both converging on the same `Result::Err(RestError)` shape; no more `e.attrs[...]` dynamic projection
+  - `error_envelope` (`packages/web-rest/src/response.drift`) now passes `fields_json` through a defensive `_safe_fields_json` helper before splicing into the response body: since `RestError` is a `pub error` and callers can hand-construct one with arbitrary content, the helper parses `fields_json` and falls back to `"{}"` if it's not a JSON object — every error response stays well-formed regardless of caller misuse (covered by `validation_test::scenario_error_envelope_fields_json_{not_json,is_array}`)
+  - new public helper `web.rest.field(err: &RestError, key: &String) nothrow -> Optional<String>` so consumers don't have to reach into `std.json` to read a single field
+  - `merge_validation_error` (`packages/web-rest/src/validation_collector.drift`) now bridges `fields_json: String` → `ValidationErrors` via `json.parse` + `node.entries()` iterator
+- Updated all affected unit and consumer tests to the new typed-catch / `fields_json` shape (`dispatch_test`, `middleware_test`, `throws_route_test`, `json_extract_test`, `validation_test`, `validators_test`, `validation_collector_test`, `ux_pass2_test`, `or_throw_probe_test`, plus consumer-side `rest_middleware_test`, `rest_throws_test`, `rest_throws_implicit_wrap_test`, `or_throw_probe_test`)
+- Updated framework docs to match (`docs/effective-web-jwt.md`, `docs/effective-web-rest.md`)
+- Pre-prepare manifest consistency check (`tools/check-manifest-consistency.sh`) updated to v2-manifest semantics: dep versions are `M`/`M.N` ranges that must prefix the declared concrete version, not exact-match
+- Bumped published `drift-web` package versions:
+  - `web-jwt@0.4.0`
+  - `web-rest@0.5.0` (+ `web-jwt` dep range 0.3 → 0.4)
+  - `web-client@0.4.0` (+ `net-tls` dep range 0.4 → 0.5; resolves to `net-tls@0.5.0`)
+  - `or-throw-probe@0.0.2`
+- Validation under the staged toolchain:
+  - `just rest-check-par` — 18/18 REST unit tests pass
+  - `just jwt-check-par` — 5/5 JWT unit tests pass
+  - `just consumer-check` — 11/11 consumer tests pass
+  - `just test` — full suite green (plain + ASAN + memcheck concurrent), memcheck clean (0 leaks, 0 errors)
+  - `just stress-test` and `just perf-smoke` — not yet run; planned before release

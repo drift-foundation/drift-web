@@ -5,18 +5,19 @@ import web.rest as rest;
 import std.concurrent as conc;
 
 // Tests that .or_throw() on Result<T, RestError> (e.g. from require_query_param)
-// flows through the typed Throw impl and is caught by the framework's
-// throws-route catch arms as the original RestError — not a generic 500.
+// throws errors:RestError directly under ABI 14 (synthesized core.Throw for the
+// pub error carrier) and is caught by the framework's throws-route adapter via
+// `catch errors:RestError(e)` — no event-bounce, no generic 500.
 
-// Handler uses .or_throw() on a missing query param → RestError(400) is thrown
-// via Throw.throw_self → RestBadRequest → caught by dispatch as 400.
+// Handler uses .or_throw() on a missing query param → errors:RestError(status=400)
+// is thrown and caught by _dispatch_throws as RestError(400, "request-invalid", ...).
 fn _handler_or_throw(req: &rest.Request, ctx: &mut rest.Context) throws -> rest.Response {
 	val value = rest.require_query_param(req, &"missing_param").or_throw();
 	return rest.json_response(200, "{\"got\":\"" + value + "\"}");
 }
 
-// Handler uses .or_throw() on a missing path param → RestError(404) thrown
-// via Throw.throw_self → RestNotFound → caught by dispatch as 404.
+// Handler uses .or_throw() on a missing path param → errors:RestError(status=404)
+// thrown and caught by _dispatch_throws as RestError(404, "not-found", ...).
 // (path_param returns 404/not-found for missing params per request.drift:188.)
 fn _handler_path_or_throw(req: &rest.Request, ctx: &mut rest.Context) throws -> rest.Response {
 	val id = rest.path_param(req, &"no_such_param").or_throw();
@@ -54,14 +55,10 @@ fn scenario_query_param_or_throw_400() nothrow -> Int {
 			if e.status != 400 { return 103; }
 			if e.event != "request-invalid" { return 104; }
 			// Field metadata round-trip: require_query_param attaches
-			// {missing_param: "required"} → throw_self → RestBadRequest(fields=DV::Object)
-			// → _dispatch_throws reconstructs RestError with fields array intact.
-			if e.fields.len != 1 { return 105; }
-			if e.fields[0].key != "missing_param" { return 106; }
-			match e.fields[0].value.as_string() {
-				Optional::Some(v) => { if v != "required" { return 107; } },
-				Optional::None => { return 108; }
-			}
+			// {"missing_param":"required"} → or_throw routes Result<T, RestError>
+			// directly to catch errors:RestError in _dispatch_throws → RestError
+			// reconstructed with fields_json intact.
+			if e.fields_json != "{\"missing_param\":\"required\"}" { return 105; }
 			return 0;
 		}
 	}

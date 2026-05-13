@@ -23,27 +23,15 @@ export {
 	jwt_config_error
 };
 
-pub struct JwtConfigError {
-	pub tag: String,
-	pub field: String,
-	pub message: String
+pub error JwtConfigError {
+	tag: String,
+	field: String,
+	message: String,
 }
 
-pub struct JwtError {
-	pub tag: String,
-	pub message: String
-}
-
-implement core.Diagnostic for JwtConfigError {
-	pub fn to_diag(self: &JwtConfigError) nothrow -> DiagnosticValue {
-		return DiagnosticValue::String(self.tag + ":" + self.field);
-	}
-}
-
-implement core.Diagnostic for JwtError {
-	pub fn to_diag(self: &JwtError) nothrow -> DiagnosticValue {
-		return DiagnosticValue::String(self.tag);
-	}
+pub error JwtError {
+	tag: String,
+	message: String,
 }
 
 pub const TAG_CONFIG_INVALID: String = "jwt-config-invalid";

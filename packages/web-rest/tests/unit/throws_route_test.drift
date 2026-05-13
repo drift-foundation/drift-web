@@ -11,9 +11,8 @@ import std.concurrent as conc;
 
 // --- Handlers ---
 
-fn _no_fields() nothrow -> DiagnosticValue {
-	var f: Array<core.DiagnosticEntry> = [];
-	return DiagnosticValue::Object(move f);
+fn _no_fields() nothrow -> String {
+	return "{}";
 }
 
 fn _ok_handler(req: &rest.Request, ctx: &mut rest.Context) -> rest.Response {
@@ -21,27 +20,27 @@ fn _ok_handler(req: &rest.Request, ctx: &mut rest.Context) -> rest.Response {
 }
 
 fn _bad_request_handler(req: &rest.Request, ctx: &mut rest.Context) -> rest.Response {
-	throw events:RestBadRequest(tag = "pub-bad", message = "bad request", fields = _no_fields());
+	throw events:RestBadRequest(tag = "pub-bad", message = "bad request", fields_json = _no_fields());
 }
 
 fn _unauthorized_handler(req: &rest.Request, ctx: &mut rest.Context) -> rest.Response {
-	throw events:RestUnauthorized(tag = "pub-unauth", message = "unauthorized", fields = _no_fields());
+	throw events:RestUnauthorized(tag = "pub-unauth", message = "unauthorized", fields_json = _no_fields());
 }
 
 fn _forbidden_handler(req: &rest.Request, ctx: &mut rest.Context) -> rest.Response {
-	throw events:RestForbidden(tag = "pub-forbidden", message = "forbidden", fields = _no_fields());
+	throw events:RestForbidden(tag = "pub-forbidden", message = "forbidden", fields_json = _no_fields());
 }
 
 fn _not_found_handler(req: &rest.Request, ctx: &mut rest.Context) -> rest.Response {
-	throw events:RestNotFound(tag = "pub-notfound", message = "not found", fields = _no_fields());
+	throw events:RestNotFound(tag = "pub-notfound", message = "not found", fields_json = _no_fields());
 }
 
 fn _conflict_handler(req: &rest.Request, ctx: &mut rest.Context) -> rest.Response {
-	throw events:RestConflict(tag = "pub-conflict", message = "conflict", fields = _no_fields());
+	throw events:RestConflict(tag = "pub-conflict", message = "conflict", fields_json = _no_fields());
 }
 
 fn _internal_handler(req: &rest.Request, ctx: &mut rest.Context) -> rest.Response {
-	throw events:RestInternal(tag = "pub-internal", message = "internal", fields = _no_fields());
+	throw events:RestInternal(tag = "pub-internal", message = "internal", fields_json = _no_fields());
 }
 
 // --- Helpers ---

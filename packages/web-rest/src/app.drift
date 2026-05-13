@@ -296,49 +296,33 @@ pub fn add_route_group_throws_route(app: &mut App, rg: &RouteGroup, method: Stri
 }
 
 // --- Throws adapter (internal, called at dispatch time) ---
-
-fn _exc_string(dv: DiagnosticValue) nothrow -> String {
-	match dv.as_string() {
-		Optional::Some(s) => { return s; },
-		Optional::None => { return ""; }
-	}
-}
+//
+// Handlers reach this adapter via two pathways under ABI 14:
+//   1. `Result<T, RestError>.or_throw()` — throws errors:RestError directly,
+//      carrying its own status/event/tag/message/fields_json.
+//   2. Explicit `throw events:Rest{BadRequest|Unauthorized|...}` — throws the
+//      typed event with a fixed HTTP status implied by the event name.
+// Both converge on a Result::Err(RestError) shape for the response builder.
 
 fn _dispatch_throws(app: &App, idx: Int, req: &request.Request, ctx: &mut context.Context) nothrow -> core.Result<response.Response, errors.RestError> {
 	val h = &app.route_throws_handlers[idx];
 	try {
 		val resp = (*h).call(req, ctx);
 		return core.Result::Ok(resp);
+	} catch errors:RestError(e) {
+		return core.Result::Err(errors.RestError(status = e.status, event = e.event, tag = e.tag, message = e.message, fields_json = e.fields_json));
 	} catch events:RestBadRequest(e) {
-		val t = _exc_string(e.attrs["tag"]);
-		val m = _exc_string(e.attrs["message"]);
-		val f = e.attrs["fields"].entries();
-		return core.Result::Err(errors.RestError(status = 400, event = "request-invalid", tag = t, message = m, fields = f));
+		return core.Result::Err(errors.RestError(status = 400, event = "request-invalid", tag = e.tag, message = e.message, fields_json = e.fields_json));
 	} catch events:RestUnauthorized(e) {
-		val t = _exc_string(e.attrs["tag"]);
-		val m = _exc_string(e.attrs["message"]);
-		val f = e.attrs["fields"].entries();
-		return core.Result::Err(errors.RestError(status = 401, event = "unauthorized", tag = t, message = m, fields = f));
+		return core.Result::Err(errors.RestError(status = 401, event = "unauthorized", tag = e.tag, message = e.message, fields_json = e.fields_json));
 	} catch events:RestForbidden(e) {
-		val t = _exc_string(e.attrs["tag"]);
-		val m = _exc_string(e.attrs["message"]);
-		val f = e.attrs["fields"].entries();
-		return core.Result::Err(errors.RestError(status = 403, event = "forbidden", tag = t, message = m, fields = f));
+		return core.Result::Err(errors.RestError(status = 403, event = "forbidden", tag = e.tag, message = e.message, fields_json = e.fields_json));
 	} catch events:RestNotFound(e) {
-		val t = _exc_string(e.attrs["tag"]);
-		val m = _exc_string(e.attrs["message"]);
-		val f = e.attrs["fields"].entries();
-		return core.Result::Err(errors.RestError(status = 404, event = "not-found", tag = t, message = m, fields = f));
+		return core.Result::Err(errors.RestError(status = 404, event = "not-found", tag = e.tag, message = e.message, fields_json = e.fields_json));
 	} catch events:RestConflict(e) {
-		val t = _exc_string(e.attrs["tag"]);
-		val m = _exc_string(e.attrs["message"]);
-		val f = e.attrs["fields"].entries();
-		return core.Result::Err(errors.RestError(status = 409, event = "conflict", tag = t, message = m, fields = f));
+		return core.Result::Err(errors.RestError(status = 409, event = "conflict", tag = e.tag, message = e.message, fields_json = e.fields_json));
 	} catch events:RestInternal(e) {
-		val t = _exc_string(e.attrs["tag"]);
-		val m = _exc_string(e.attrs["message"]);
-		val f = e.attrs["fields"].entries();
-		return core.Result::Err(errors.RestError(status = 500, event = "internal", tag = t, message = m, fields = f));
+		return core.Result::Err(errors.RestError(status = 500, event = "internal", tag = e.tag, message = e.message, fields_json = e.fields_json));
 	} catch {
 		return core.Result::Err(errors.rest_error(500, "internal", "internal-error", "unhandled exception"));
 	}

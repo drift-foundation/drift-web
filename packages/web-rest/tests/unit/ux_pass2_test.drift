@@ -6,13 +6,6 @@ import std.parse as parse;
 import web.rest as rest;
 import web.rest.request as request;
 
-fn _dv_str(dv: &DiagnosticValue) nothrow -> String {
-	match dv.as_string() {
-		Optional::Some(s) => { return s; },
-		Optional::None => { return ""; }
-	}
-}
-
 // UX Pass 2 acceptance tests — 7 scenarios from work/rest-next/plan.md.
 // Stories 1–7: acceptance tests. Story 6: body parse caching with JsonHandle.
 // Full gap report: work/rest/progress.md.
@@ -51,10 +44,8 @@ fn scenario_validation_fields_email_age() nothrow -> Int {
 				core.Result::Ok(_) => { return 202; },
 				core.Result::Err(field_err) => {
 					if field_err.tag != "missing-field" { return 217; }
-					if field_err.fields.len != 1 { return 219; }
-					if field_err.fields[0].key != "email" { return 220; }
-					if _dv_str(&field_err.fields[0].value) != "missing-field" { return 221; }
-					rest.add_field(&mut err, field_err.fields[0].key, _dv_str(&field_err.fields[0].value));
+					if field_err.fields_json != "{\"email\":\"missing-field\"}" { return 219; }
+					rest.add_field(&mut err, "email", "missing-field");
 				}
 			}
 
@@ -63,10 +54,8 @@ fn scenario_validation_fields_email_age() nothrow -> Int {
 				core.Result::Ok(_) => { return 204; },
 				core.Result::Err(field_err) => {
 					if field_err.tag != "invalid-type" { return 218; }
-					if field_err.fields.len != 1 { return 222; }
-					if field_err.fields[0].key != "age" { return 223; }
-					if _dv_str(&field_err.fields[0].value) != "invalid-type" { return 224; }
-					rest.add_field(&mut err, field_err.fields[0].key, _dv_str(&field_err.fields[0].value));
+					if field_err.fields_json != "{\"age\":\"invalid-type\"}" { return 222; }
+					rest.add_field(&mut err, "age", "invalid-type");
 				}
 			}
 
@@ -188,9 +177,7 @@ fn scenario_query_int_parse_failure() nothrow -> Int {
 				core.Result::Err(e) => {
 					// Verify field entry contract from validator.
 					if e.tag != "invalid-integer" { return 409; }
-					if e.fields.len != 1 { return 410; }
-					if e.fields[0].key != "page" { return 411; }
-					if _dv_str(&e.fields[0].value) != "invalid-integer" { return 412; }
+					if e.fields_json != "{\"page\":\"invalid-integer\"}" { return 410; }
 
 					// Build envelope from the returned error directly.
 					val event_id = "evt-ux2-s4";

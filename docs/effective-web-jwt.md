@@ -51,15 +51,15 @@ pub struct JwtVerifyPolicyBuilder {
 	pub require_typ_jwt: Bool
 }
 
-pub struct JwtConfigError {
-	pub tag: String,
-	pub field: String,
-	pub message: String
+pub error JwtConfigError {
+	tag: String,
+	field: String,
+	message: String,
 }
 
-pub struct JwtError {
-	pub tag: String,
-	pub message: String
+pub error JwtError {
+	tag: String,
+	message: String,
 }
 
 pub struct VerifiedJwt {

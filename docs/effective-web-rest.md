@@ -73,8 +73,7 @@ fn _me(req: &rest.Request, ctx: &mut rest.Context) -> rest.Response {
 	match rest.require_principal(ctx) {
 		core.Result::Ok(p) => { return rest.json_response(200, "{\"sub\":\"" + p.sub + "\"}"); },
 		core.Result::Err(e) => {
-			var f: Array<core.DiagnosticEntry> = [];
-			throw events:RestUnauthorized(tag = "missing-principal", message = e.message, fields = DiagnosticValue::Object(move f));
+			throw events:RestUnauthorized(tag = "missing-principal", message = e.message, fields_json = "{}");
 		}
 	}
 }

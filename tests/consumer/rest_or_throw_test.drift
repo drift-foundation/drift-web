@@ -9,12 +9,15 @@ import web.rest as rest;
 
 // Consumer-path regression: typed .or_throw() on Result<T, RestError>.
 //
-// Proves through the package-consumer path (--dep) that the ideal UX works:
+// Proves through the package-consumer path (--dep) that the ideal UX works
+// under ABI 14:
 //   - rest.path_param(req, &"id").or_throw() in a throws-route handler
 //   - present path param → handler returns 200 with value
-//   - missing query param → RestError(400) → Throw.throw_self → RestBadRequest → 400
+//   - missing query param → errors:RestError(status=400) thrown by or_throw,
+//     caught by _dispatch_throws → 400 response
 //   - present query param → handler returns 200 with value
-//   - missing path param → RestError(404) → Throw.throw_self → RestNotFound → 404
+//   - missing path param → errors:RestError(status=404) thrown by or_throw,
+//     caught by _dispatch_throws → 404 response
 //     (path_param returns 404/not-found per its contract)
 
 // Handler: .or_throw() on path param

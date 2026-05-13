@@ -9,9 +9,38 @@ export {
 	RestInternal
 };
 
-pub exception RestBadRequest(tag: String, message: String, fields: DiagnosticValue)
-pub exception RestUnauthorized(tag: String, message: String, fields: DiagnosticValue)
-pub exception RestForbidden(tag: String, message: String, fields: DiagnosticValue)
-pub exception RestNotFound(tag: String, message: String, fields: DiagnosticValue)
-pub exception RestConflict(tag: String, message: String, fields: DiagnosticValue)
-pub exception RestInternal(tag: String, message: String, fields: DiagnosticValue)
+pub error RestBadRequest {
+	tag: String,
+	message: String,
+	fields_json: String,
+}
+
+pub error RestUnauthorized {
+	tag: String,
+	message: String,
+	fields_json: String,
+}
+
+pub error RestForbidden {
+	tag: String,
+	message: String,
+	fields_json: String,
+}
+
+pub error RestNotFound {
+	tag: String,
+	message: String,
+	fields_json: String,
+}
+
+pub error RestConflict {
+	tag: String,
+	message: String,
+	fields_json: String,
+}
+
+pub error RestInternal {
+	tag: String,
+	message: String,
+	fields_json: String,
+}

@@ -4,13 +4,6 @@ import std.core as core;
 import std.json as json;
 import web.rest as rest;
 
-fn _dv_str(dv: &DiagnosticValue) nothrow -> String {
-	match dv.as_string() {
-		Optional::Some(s) => { return s; },
-		Optional::None => { return ""; }
-	}
-}
-
 // Story 3: Invalid input path returning request-invalid with structured fields.
 // Tests require_query_param, require_body_json, and error envelope with fields.
 
@@ -25,9 +18,7 @@ fn scenario_missing_query_param() nothrow -> Int {
 			if e.status != 400 { return 102; }
 			if e.event != "request-invalid" { return 103; }
 			if e.tag != "missing-query-param" { return 104; }
-			if e.fields.len != 1 { return 105; }
-			if e.fields[0].key != "q" { return 106; }
-			if _dv_str(&e.fields[0].value) != "required" { return 107; }
+			if e.fields_json != "{\"q\":\"required\"}" { return 105; }
 			return 0;
 		}
 	}
@@ -224,6 +215,58 @@ fn scenario_error_envelope_empty_fields() nothrow -> Int {
 	}
 }
 
+// --- Scenario: error envelope is defensive against malformed fields_json ---
+//
+// RestError is a `pub error`, so callers can construct it with any String in
+// `fields_json` — including non-JSON, a JSON array, or a JSON scalar. The
+// envelope serializer must not splice that raw into the response body; it
+// MUST fall back to "{}" and still emit a well-formed envelope.
+
+fn scenario_error_envelope_fields_json_not_json() nothrow -> Int {
+	val err = rest.RestError(status = 400, event = "request-invalid", tag = "x", message = "y", fields_json = "this is not json");
+	val event_id = "evt-bad-1";
+	val resp = rest.error_envelope(&err, &event_id);
+	if resp.status != 400 { return 1001; }
+	// Body must still parse and "fields" must be an object.
+	match json.parse(&resp.body) {
+		core.Result::Err(_) => { return 1002; },
+		core.Result::Ok(node) => {
+			val fields_key = "fields";
+			match node.get(&fields_key) {
+				Optional::None => { return 1003; },
+				Optional::Some(f) => {
+					match f.as_object() {
+						Optional::Some(_) => { return 0; },
+						default => { return 1004; }
+					}
+				}
+			}
+		}
+	}
+}
+
+fn scenario_error_envelope_fields_json_is_array() nothrow -> Int {
+	val err = rest.RestError(status = 400, event = "request-invalid", tag = "x", message = "y", fields_json = "[1,2,3]");
+	val event_id = "evt-bad-2";
+	val resp = rest.error_envelope(&err, &event_id);
+	if resp.status != 400 { return 1101; }
+	match json.parse(&resp.body) {
+		core.Result::Err(_) => { return 1102; },
+		core.Result::Ok(node) => {
+			val fields_key = "fields";
+			match node.get(&fields_key) {
+				Optional::None => { return 1103; },
+				Optional::Some(f) => {
+					match f.as_object() {
+						Optional::Some(_) => { return 0; },
+						default => { return 1104; }
+					}
+				}
+			}
+		}
+	}
+}
+
 // --- Scenario: header lookup is case-insensitive (RFC 7230) ---
 
 fn scenario_header_case_insensitive() nothrow -> Int {
@@ -270,6 +313,10 @@ fn main() nothrow -> Int {
 	if g != 0 { return g; }
 	val h = scenario_error_envelope_empty_fields();
 	if h != 0 { return h; }
+	val h2 = scenario_error_envelope_fields_json_not_json();
+	if h2 != 0 { return h2; }
+	val h3 = scenario_error_envelope_fields_json_is_array();
+	if h3 != 0 { return h3; }
 	val i = scenario_header_case_insensitive();
 	if i != 0 { return i; }
 	return 0;

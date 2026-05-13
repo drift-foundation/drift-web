@@ -1,7 +1,7 @@
 module web.rest.response;
 
 import std.core as core;
-import std.io as io;
+import std.json as json;
 import std.text as text;
 import web.rest.errors as errors;
 
@@ -29,85 +29,44 @@ pub fn with_response_header(resp: &mut Response, key: String, value: String) not
 	resp.header_values.push(value);
 }
 
-fn _dup_string(s: &String) nothrow -> String {
-	val n = s.byte_length();
-	var b = io.buffer(n);
-	var i = 0;
-	while i < n {
-		io.buffer_write(&mut b, i, core.string_byte_at(s, i));
-		i = i + 1;
-	}
-	return core.string_from_utf8_bytes(io.buffer_ptr(&b), n);
-}
-
-fn _exc_dv_string(dv: &DiagnosticValue) nothrow -> String {
-	match dv.as_string() {
-		Optional::Some(s) => { return s; },
-		Optional::None => { return ""; }
-	}
-}
-
-fn _escape_json_to_sb(sb: &mut text.StringBuilder, s: &String) nothrow -> Void {
-	val q = "\"";
-	text.sb_append_string(sb, &q);
-	var i = 0;
-	val n = s.byte_length();
-	while i < n {
-		val ch = core.string_byte_at(s, i);
-		if ch == cast<Byte>(34) {
-			val esc = "\\\"";
-			text.sb_append_string(sb, &esc);
-		} else {
-			if ch == cast<Byte>(92) {
-				val esc = "\\\\";
-				text.sb_append_string(sb, &esc);
-			} else {
-				if ch == cast<Byte>(10) {
-					val esc = "\\n";
-					text.sb_append_string(sb, &esc);
-				} else {
-					var buf = io.buffer(1);
-					io.buffer_write(&mut buf, 0, ch);
-					val one = core.string_from_utf8_bytes(io.buffer_ptr(&buf), 1);
-					text.sb_append_string(sb, &one);
-				}
+// Defensive accessor: RestError is a `pub error`, so callers can construct
+// it with `fields_json` set to anything — non-JSON, a JSON scalar, an array,
+// or a deliberately malformed object. The envelope contract requires a JSON
+// object at `fields`; if the caller's value doesn't parse as an object, fall
+// back to "{}". add_field always produces canonical lex-ordered object text,
+// so this fallback never trips on the supported construction paths.
+fn _safe_fields_json(fields_json: &String) nothrow -> String {
+	match json.parse(fields_json) {
+		core.Result::Ok(node) => {
+			match node.as_object() {
+				Optional::Some(_) => { return *fields_json; },
+				default => { return "{}"; }
 			}
-		}
-		i = i + 1;
+		},
+		default => { return "{}"; }
 	}
-	text.sb_append_string(sb, &q);
-	return core.void_value();
 }
 
 pub fn error_envelope(err: &errors.RestError, event_id: &String) nothrow -> Response {
+	val event_enc = core.diagnostic_json_string(&err.event);
+	val tag_enc = core.diagnostic_json_string(&err.tag);
+	val eid_enc = core.diagnostic_json_string(event_id);
 	var sb = text.string_builder(256);
 	val p1 = "{\"event\":";
 	text.sb_append_string(&mut sb, &p1);
-	_escape_json_to_sb(&mut sb, &err.event);
+	text.sb_append_string(&mut sb, &event_enc);
 	val p2 = ",\"tag\":";
 	text.sb_append_string(&mut sb, &p2);
-	_escape_json_to_sb(&mut sb, &err.tag);
+	text.sb_append_string(&mut sb, &tag_enc);
 	val p3 = ",\"event_id\":";
 	text.sb_append_string(&mut sb, &p3);
-	_escape_json_to_sb(&mut sb, event_id);
-	val p4 = ",\"fields\":{";
+	text.sb_append_string(&mut sb, &eid_enc);
+	val p4 = ",\"fields\":";
 	text.sb_append_string(&mut sb, &p4);
-	var fi = 0;
-	while fi < err.fields.len {
-		if fi > 0 {
-			val comma = ",";
-			text.sb_append_string(&mut sb, &comma);
-		}
-		val entry = &err.fields[fi];
-		_escape_json_to_sb(&mut sb, &entry.key);
-		val colon = ":";
-		text.sb_append_string(&mut sb, &colon);
-		val v = _exc_dv_string(&entry.value);
-		_escape_json_to_sb(&mut sb, &v);
-		fi = fi + 1;
-	}
-	val p5 = "}}";
-	text.sb_append_string(&mut sb, &p5);
+	val fields = _safe_fields_json(&err.fields_json);
+	text.sb_append_string(&mut sb, &fields);
+	val close = "}";
+	text.sb_append_string(&mut sb, &close);
 	val body = text.sb_build(&mut sb);
 	var hk: Array<String> = [];
 	var hv: Array<String> = [];

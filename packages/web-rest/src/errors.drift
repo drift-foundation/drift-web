@@ -1,13 +1,13 @@
 module web.rest.errors;
 
 import std.core as core;
-import std.mem as mem;
-import web.rest.events as events;
+import std.json as json;
 
 export {
 	RestError,
 	rest_error,
 	add_field,
+	field,
 	EVENT_REQUEST_INVALID,
 	EVENT_UNAUTHORIZED,
 	EVENT_FORBIDDEN,
@@ -17,41 +17,16 @@ export {
 	TAG_INTERNAL_ERROR
 };
 
-pub struct RestError {
-	pub status: Int,
-	pub event: String,
-	pub tag: String,
-	pub message: String,
-	pub fields: Array<core.DiagnosticEntry>
-}
-
-implement core.Diagnostic for RestError {
-	pub fn to_diag(self: &RestError) nothrow -> DiagnosticValue {
-		return DiagnosticValue::String(self.event + ":" + self.tag);
-	}
-}
-
-implement core.Throw for RestError {
-	pub fn throw_self(var self: RestError) throws {
-		var empty: Array<core.DiagnosticEntry> = [];
-		val fields = mem.replace(&mut self.fields, move empty);
-		if self.status == 400 {
-			throw events:RestBadRequest(tag = self.tag, message = self.message, fields = DiagnosticValue::Object(move fields));
-		}
-		if self.status == 401 {
-			throw events:RestUnauthorized(tag = self.tag, message = self.message, fields = DiagnosticValue::Object(move fields));
-		}
-		if self.status == 403 {
-			throw events:RestForbidden(tag = self.tag, message = self.message, fields = DiagnosticValue::Object(move fields));
-		}
-		if self.status == 404 {
-			throw events:RestNotFound(tag = self.tag, message = self.message, fields = DiagnosticValue::Object(move fields));
-		}
-		if self.status == 409 {
-			throw events:RestConflict(tag = self.tag, message = self.message, fields = DiagnosticValue::Object(move fields));
-		}
-		throw events:RestInternal(tag = self.tag, message = self.message, fields = DiagnosticValue::Object(move fields));
-	}
+// `fields_json` is canonical JSON object text (lex-ordered keys, no
+// whitespace) produced via std.json. Empty == "{}", never "".
+// error_envelope and merge_validation_error rely on it being valid
+// JSON; treat as opaque outside this module.
+pub error RestError {
+	status: Int,
+	event: String,
+	tag: String,
+	message: String,
+	fields_json: String,
 }
 
 pub const EVENT_REQUEST_INVALID: String = "request-invalid";
@@ -63,11 +38,42 @@ pub const EVENT_INTERNAL: String = "internal";
 pub const TAG_INTERNAL_ERROR: String = "internal-error";
 
 pub fn rest_error(status: Int, event: String, tag: String, message: String) nothrow -> RestError {
-	var f: Array<core.DiagnosticEntry> = [];
-	return RestError(status = status, event = event, tag = tag, message = message, fields = move f);
+	return RestError(status = status, event = event, tag = tag, message = message, fields_json = "{}");
 }
 
+fn _canonical_config() nothrow -> json.JsonConfig {
+	var b = json.config_builder();
+	b.key_order(json.JsonKeyOrder::OrderedLexUtf8());
+	return b.build();
+}
+
+// Look up a single string-valued field by key. Returns None if the key
+// is absent, the value isn't a string, or fields_json is malformed.
+// Saves callers from writing the json.parse + cursor lookup boilerplate.
+pub fn field(err: &RestError, key: &String) nothrow -> Optional<String> {
+	match json.parse(&err.fields_json) {
+		core.Result::Ok(node) => { return node.select().field(key).as_string(); },
+		core.Result::Err(_) => { return Optional::None(); }
+	}
+}
+
+// Append a string-valued field to fields_json, preserving the
+// canonical (lex-ordered) JSON-object invariant. Reuses the existing
+// object so prior entries are kept; last-write-wins on duplicate keys.
 pub fn add_field(err: &mut RestError, key: String, value: String) nothrow -> Void {
-	err.fields.push(core.diagnostic_entry(key, DiagnosticValue::String(value)));
+	var obj = json.new_object();
+	match json.parse(&err.fields_json) {
+		core.Result::Ok(node) => {
+			match node.into_object() {
+				Optional::Some(o) => { obj = move o; },
+				Optional::None() => {}
+			}
+		},
+		core.Result::Err(_) => {}
+	}
+	obj.set(move key, json.JsonNode::String(move value));
+	val node = obj.to_node();
+	val cfg = _canonical_config();
+	err.fields_json = json.encode_compact_with_config(&node, &cfg);
 	return core.void_value();
 }

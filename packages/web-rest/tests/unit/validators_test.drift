@@ -3,13 +3,6 @@ module web.rest.tests.unit.validators_test;
 import std.core as core;
 import web.rest as rest;
 
-fn _dv_str(dv: &DiagnosticValue) nothrow -> String {
-	match dv.as_string() {
-		Optional::Some(s) => { return s; },
-		Optional::None => { return ""; }
-	}
-}
-
 // --- validate_int ---
 
 fn test_validate_int_ok() nothrow -> Int {
@@ -27,9 +20,7 @@ fn test_validate_int_not_integer() nothrow -> Int {
 		core.Result::Ok(_) => { return 1101; },
 		core.Result::Err(e) => {
 			if e.tag != "invalid-integer" { return 1102; }
-			if e.fields.len != 1 { return 1103; }
-			if e.fields[0].key != "age" { return 1104; }
-			if _dv_str(&e.fields[0].value) != "invalid-integer" { return 1105; }
+			if e.fields_json != "{\"age\":\"invalid-integer\"}" { return 1103; }
 			return 0;
 		}
 	}
@@ -40,7 +31,7 @@ fn test_validate_int_empty_string() nothrow -> Int {
 		core.Result::Ok(_) => { return 1201; },
 		core.Result::Err(e) => {
 			if e.tag != "invalid-integer" { return 1202; }
-			if e.fields[0].key != "id" { return 1203; }
+			if e.fields_json != "{\"id\":\"invalid-integer\"}" { return 1203; }
 			return 0;
 		}
 	}
@@ -63,9 +54,7 @@ fn test_validate_int_range_below_min() nothrow -> Int {
 		core.Result::Ok(_) => { return 2101; },
 		core.Result::Err(e) => {
 			if e.tag != "out-of-range" { return 2102; }
-			if e.fields.len != 1 { return 2103; }
-			if e.fields[0].key != "page" { return 2104; }
-			if _dv_str(&e.fields[0].value) != "out-of-range" { return 2105; }
+			if e.fields_json != "{\"page\":\"out-of-range\"}" { return 2103; }
 			return 0;
 		}
 	}
@@ -76,8 +65,7 @@ fn test_validate_int_range_above_max() nothrow -> Int {
 		core.Result::Ok(_) => { return 2201; },
 		core.Result::Err(e) => {
 			if e.tag != "out-of-range" { return 2202; }
-			if e.fields[0].key != "page" { return 2203; }
-			if _dv_str(&e.fields[0].value) != "out-of-range" { return 2204; }
+			if e.fields_json != "{\"page\":\"out-of-range\"}" { return 2203; }
 			return 0;
 		}
 	}
@@ -100,9 +88,7 @@ fn test_validate_non_empty_fails() nothrow -> Int {
 		core.Result::Ok(_) => { return 3101; },
 		core.Result::Err(e) => {
 			if e.tag != "empty-value" { return 3102; }
-			if e.fields.len != 1 { return 3103; }
-			if e.fields[0].key != "name" { return 3104; }
-			if _dv_str(&e.fields[0].value) != "empty-value" { return 3105; }
+			if e.fields_json != "{\"name\":\"empty-value\"}" { return 3103; }
 			return 0;
 		}
 	}
@@ -125,9 +111,7 @@ fn test_validate_min_length_too_short() nothrow -> Int {
 		core.Result::Ok(_) => { return 4101; },
 		core.Result::Err(e) => {
 			if e.tag != "too-short" { return 4102; }
-			if e.fields.len != 1 { return 4103; }
-			if e.fields[0].key != "password" { return 4104; }
-			if _dv_str(&e.fields[0].value) != "too-short" { return 4105; }
+			if e.fields_json != "{\"password\":\"too-short\"}" { return 4103; }
 			return 0;
 		}
 	}

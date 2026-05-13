@@ -10,7 +10,7 @@
       "kind": "library",
       "name": "web-jwt",
       "module_namespace": "web.jwt",
-      "version": "0.3.1",
+      "version": "0.4.0",
       "description": "HS256 JWT sign/verify with temporal claims validation",
       "entry_module": "packages/web-jwt/src/lib.drift",
       "modules": [
@@ -31,7 +31,7 @@
       "kind": "library",
       "name": "web-rest",
       "module_namespace": "web.rest",
-      "version": "0.4.1",
+      "version": "0.5.0",
       "description": "HTTP/1.1 REST server with routing, route-group guards, wrapping middleware, and per-request typed Context slot map",
       "entry_module": "packages/web-rest/src/lib.drift",
       "modules": [
@@ -53,7 +53,7 @@
       "package_deps": [
         {
           "name": "web-jwt",
-          "version": "0.3"
+          "version": "0.4"
         }
       ],
       "assets": [
@@ -67,7 +67,7 @@
       "kind": "library",
       "name": "or-throw-probe",
       "module_namespace": "probe",
-      "version": "0.0.1",
+      "version": "0.0.2",
       "description": "K28 diagnostic probe for package-boundary Throw/Result interaction",
       "entry_module": "packages/or-throw-probe/src/lib.drift",
       "modules": [
@@ -78,7 +78,7 @@
       "kind": "library",
       "name": "web-client",
       "module_namespace": "web.client",
-      "version": "0.3.1",
+      "version": "0.4.0",
       "description": "HTTP/1.1 and HTTPS client for outbound requests",
       "entry_module": "packages/web-client/src/lib.drift",
       "modules": [
@@ -96,7 +96,7 @@
       "package_deps": [
         {
           "name": "net-tls",
-          "version": "0.4"
+          "version": "0.5"
         }
       ],
       "assets": [

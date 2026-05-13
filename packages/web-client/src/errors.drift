@@ -15,9 +15,9 @@ export {
 	TAG_INCOMPLETE
 };
 
-pub struct ClientError {
-	pub tag: String,
-	pub message: String
+pub error ClientError {
+	tag: String,
+	message: String,
 }
 
 pub const TAG_INVALID_URL: String = "client-invalid-url";

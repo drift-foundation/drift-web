@@ -1,15 +1,18 @@
 module consumer.or_throw_probe_test;
 
 import std.core as core;
-import std.err as stderr;
 import std.console as console;
 import probe as probe;
 
 // K28 diagnostic probe. Consumes the or-throw-probe package via --dep and
-// exercises .or_throw() on Result<T, E> values returned across the package
-// boundary, for two E shapes:
-//   - package-local producer error (ProbeError → probe:ProbeException)
-//   - stdlib E (String → std.err:ResultError via stdlib Throw impl)
+// exercises .or_throw() on Result<T, E> across the package boundary, where
+// E is a `pub error` carrier (ABI 14 contract).
+//
+// The earlier `make_string_err()` scenario probing `Result<Int, String>`
+// via or_throw is retired: under ABI 14 the Err type of `or_throw()` MUST
+// be a `pub error` (E_OR_THROW_NOT_ERROR_TYPE), so the path no longer
+// compiles. `make_string_err()` itself stays exported; only the consumer
+// scenario that called .or_throw() on it is removed.
 
 // Scenario 1: make_probe_ok().or_throw() returns 42.
 fn scenario_probe_ok() nothrow -> Int {
@@ -17,7 +20,7 @@ fn scenario_probe_ok() nothrow -> Int {
 		val v = probe.make_probe_ok().or_throw();
 		if v == 42 { return 0; }
 		return 1;
-	} catch probe:ProbeException(_) {
+	} catch probe:ProbeError(_) {
 		return 2;
 	} catch {
 		return 3;
@@ -25,25 +28,12 @@ fn scenario_probe_ok() nothrow -> Int {
 	return 99;
 }
 
-// Scenario 2: make_probe_err().or_throw() throws probe:ProbeException.
+// Scenario 2: make_probe_err().or_throw() throws probe:ProbeError.
 fn scenario_probe_err() nothrow -> Int {
 	try {
 		val _ = probe.make_probe_err().or_throw();
 		return 1;
-	} catch probe:ProbeException(_) {
-		return 0;
-	} catch {
-		return 2;
-	}
-	return 99;
-}
-
-// Scenario 3: make_string_err().or_throw() throws std.err:ResultError.
-fn scenario_string_err() nothrow -> Int {
-	try {
-		val _ = probe.make_string_err().or_throw();
-		return 1;
-	} catch stderr:ResultError(_) {
+	} catch probe:ProbeError(_) {
 		return 0;
 	} catch {
 		return 2;
@@ -56,8 +46,6 @@ fn main() nothrow -> Int {
 	if a != 0 { return 100 + a; }
 	val b = scenario_probe_err();
 	if b != 0 { return 200 + b; }
-	val c = scenario_string_err();
-	if c != 0 { return 300 + c; }
-	console.println("consumer or-throw-probe: all 3 scenarios passed");
+	console.println("consumer or-throw-probe: all 2 scenarios passed");
 	return 0;
 }
