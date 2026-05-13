@@ -2,7 +2,7 @@
 
 **Author:** sl@pushcoin.com
 **Date:** 2026-05-12
-**Status:** Implemented; all gates green; ready for review.
+**Status:** Implemented; all four cert gates green; pushed to orch; **certified 2026-05-12** — now the active certified toolchain. Follow-on patch: `web-rest 0.5.0 → 0.5.1` (doc-only fix to `Request Accessors` block after the app team flagged `body_json()` shape; pending re-cert).
 **Staged toolchain:** `~/opt/drift/staged/toolchain/drift-0.31.67+abi14`
 **Prior toolchain:** `~/opt/drift/certified/current/toolchain` (0.31.40 / ABI 10)
 
@@ -433,7 +433,8 @@ Migration applied across drift-web on the staged 0.31.67 / ABI 14 toolchain. All
 - `just rest-check-par` — 18/18 unit tests pass.
 - `just consumer-check` — all 11 consumer tests pass (jwt_compile, rest_startup, rest_serve, rest_sequential, rest_throws, rest_throws_implicit_wrap, rest_or_throw, rest_middleware, rest_ctx, or_throw_probe, client_compile).
 - `just test` (plain + ASAN + memcheck concurrent, including consumer-check under each lane) — **all three passes green**. No leaks, no ASAN errors, no memcheck errors.
-- `just stress-test` and `just perf-smoke` — not yet run; not blockers for the migration's correctness signal but should be run before the version-bump commit lands.
+- `just stress-test` — green.
+- `just perf-smoke` — green.
 
 ### 7.6 Applied during the run (added to the change set after the first gate run)
 
@@ -447,7 +448,6 @@ Migration applied across drift-web on the staged 0.31.67 / ABI 14 toolchain. All
 
 ### 7.7 Deferred / not in this change set
 
-- `just stress-test` and `just perf-smoke` — should be run before release. No concern surfaced in the regular gates; not blockers for review.
 - Net-tls in-place 0.4.1 rehash — flag to upstream team independently of this migration; not blocking us since we pin 0.5.0.
 
 ### 7.8 Notes for reviewers

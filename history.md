@@ -342,4 +342,8 @@
   - `just jwt-check-par` — 5/5 JWT unit tests pass
   - `just consumer-check` — 11/11 consumer tests pass
   - `just test` — full suite green (plain + ASAN + memcheck concurrent), memcheck clean (0 leaks, 0 errors)
-  - `just stress-test` and `just perf-smoke` — not yet run; planned before release
+  - `just stress-test` and `just perf-smoke` — pass
+
+- Patch bump `web-rest@0.5.0` → `web-rest@0.5.1`: doc-only fix to `docs/effective-web-rest.md` after the app team reported the Request-Accessor block listed `req.body_json()` (method-style) returning `Result<JsonNode, RestError>`. Actual API is `rest.body_json(req)` (free function on the `rest` facade) returning `Result<JsonHandle, RestError>` — JsonHandle is Arc-backed (O(1) clone) and dispatch caches the parse. The other three accessors in the same block (`path_param`, `query_param`, `require_query_param`) were also corrected to free-function form for consistency. No source changes; per-immutability discipline a doc asset edit requires a new version number rather than a republished 0.5.0.
+- Validation under certified toolchain `drift-0.31.67+abi14`:
+  - `just rest-check-par` — 18/18 pass (sanity check; behavior unchanged)

@@ -143,10 +143,10 @@ Both styles compose with middleware identically — the framework converts typed
 
 ## Request Accessors
 
-- `req.path_param(name) -> core.Result<String, rest.RestError>`
-- `req.query_param(name) -> Optional<String>`
-- `req.require_query_param(name) -> core.Result<String, rest.RestError>` (adds field info on missing)
-- `req.body_json() -> core.Result<json.JsonNode, rest.RestError>`
+- `rest.path_param(req, &name) -> core.Result<String, rest.RestError>`
+- `rest.query_param(req, &name) -> Optional<String>`
+- `rest.require_query_param(req, &name) -> core.Result<String, rest.RestError>` (adds field info on missing)
+- `rest.body_json(req) -> core.Result<json.JsonHandle, rest.RestError>` (returns a JsonHandle — Arc-backed, O(1) clone; dispatch caches the parse, so multiple calls in the same request are free)
 
 ## Error Envelope (Pinned)
 
