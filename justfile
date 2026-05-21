@@ -345,8 +345,12 @@ prepare: _require-env
     {{DRIFT}} prepare --dest "${DRIFT_PKG_ROOT:?set DRIFT_PKG_ROOT to the package root}"
 
 # Deploy to staging (build, sign, smoke, publish).
+# Local dev default: --cert-suite-id drift-web/dev --cert-suite-no-evidence.
+# Orchestrated certification must override --cert-suite-id (and bind real
+# evidence via --cert-suite-evidence-sha256) — these flags only set a local
+# fallback for ad-hoc deploys.
 deploy *ARGS: _require-env lock-check
-    {{DRIFT}} deploy --dest "${DRIFT_PKG_ROOT:?set DRIFT_PKG_ROOT to the package root}" --driftc "${DRIFTC}" {{ARGS}}
+    {{DRIFT}} deploy --dest "${DRIFT_PKG_ROOT:?set DRIFT_PKG_ROOT to the package root}" --driftc "${DRIFTC}" --cert-suite-id drift-web/dev --cert-suite-no-evidence {{ARGS}}
 
 # Show driftc version info.
 driftc-help: _require-env

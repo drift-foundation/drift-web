@@ -1,6 +1,6 @@
 {
   "format": "drift-trust",
-  "version": 0,
+  "version": 1,
   "keys": {
     "ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0=": {
       "algo": "ed25519",
@@ -8,11 +8,26 @@
     }
   },
   "namespaces": {
-    "web.jwt.*": ["ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0="],
-    "web.rest.*": ["ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0="],
-    "web.client.*": ["ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0="],
-    "net_tls.*": ["ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0="],
-    "probe.*": ["ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0="]
+    "web.jwt.*": {
+      "authors": ["ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0="],
+      "certifiers": ["ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0="]
+    },
+    "web.rest.*": {
+      "authors": ["ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0="],
+      "certifiers": ["ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0="]
+    },
+    "web.client.*": {
+      "authors": ["ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0="],
+      "certifiers": ["ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0="]
+    },
+    "net_tls.*": {
+      "authors": ["ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0="],
+      "certifiers": ["ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0="]
+    },
+    "probe.*": {
+      "authors": ["ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0="],
+      "certifiers": ["ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0="]
+    }
   },
   "revoked": []
 }

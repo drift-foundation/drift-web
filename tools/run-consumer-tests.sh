@@ -36,6 +36,8 @@ echo "=== staging local packages ==="
     --package-root "${LOCAL_PKG}" \
     --package-root "${DRIFT_PKG_ROOT}" \
     --driftc "${DRIFTC}" \
+    --cert-suite-id drift-web/dev \
+    --cert-suite-no-evidence \
     --skip-smoke \
     2>&1
 echo ""
