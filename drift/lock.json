@@ -16,7 +16,7 @@
     "web-rest": {
       "resolved": {
         "web-jwt": {
-          "version": "0.4.1",
+          "version": "0.4.2",
           "sha256": "",
           "author_key": "",
           "source_content_id": "",

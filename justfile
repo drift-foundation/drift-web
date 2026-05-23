@@ -343,6 +343,42 @@ client-compile-check FILE="packages/web-client/src/lib.drift": _require-env
 build ARTIFACT="": _require-env
     {{DRIFT}} build {{ARTIFACT}} --driftc "${DRIFTC}"
 
+# Re-mint drift/<artifact>.author-claim under the Foundation author key against
+# the current manifest. Run after any source change that affects an artifact's
+# SCI (version, modules, assets, deps). The author-claim is committed alongside
+# source; the cert-claim is emitted by the orchestrator at certification time
+# and is NOT committed.
+#
+# With no ARTIFACT, mints all four drift-web artifacts. Pass a single artifact
+# name to limit the mint to that one (avoids signature churn on unchanged
+# claims when only one version was bumped).
+#
+# Overrides:
+#   DRIFT_LANG_ROOT      — drift-lang checkout providing tools.drift_author
+#                          (default: $HOME/src/drift-lang).
+#   DRIFT_SIGN_KEY_FILE  — ed25519 seed used as the author key
+#                          (default: $HOME/.config/drift/keys/default.seed).
+author-claim ARTIFACT="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    DRIFT_LANG_ROOT="${DRIFT_LANG_ROOT:-${HOME}/src/drift-lang}"
+    KEY_FILE="${DRIFT_SIGN_KEY_FILE:-${HOME}/.config/drift/keys/default.seed}"
+    [[ -d "${DRIFT_LANG_ROOT}/tools/drift_author" ]] || { echo "error: tools.drift_author not found at ${DRIFT_LANG_ROOT}" >&2; exit 1; }
+    [[ -f "${KEY_FILE}" ]] || { echo "error: signing key not found: ${KEY_FILE}" >&2; exit 1; }
+    if [[ -n "{{ARTIFACT}}" ]]; then
+        ARTS=("{{ARTIFACT}}")
+    else
+        ARTS=(web-jwt web-rest web-client or-throw-probe)
+    fi
+    for ART in "${ARTS[@]}"; do
+        echo "[author-claim] minting drift/${ART}.author-claim"
+        PYTHONPATH="${DRIFT_LANG_ROOT}" python3 -m tools.drift_author publish \
+            --manifest "$(pwd)/drift/manifest.json" \
+            --artifact "${ART}" \
+            --key-file "${KEY_FILE}" \
+            --overwrite
+    done
+
 # Prepare lockfile (resolve dependencies against package root).
 prepare: _require-env
     @tools/check-manifest-consistency.sh
