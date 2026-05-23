@@ -37,12 +37,13 @@ lock-check: _require-env
 #   so all 3 lanes share one N-slot pool on this host. Total concurrent
 #   driftc processes are bounded by DRIFT_TEST_JOBS regardless of lane count,
 #   preventing OOM cascades (driftc 0.32.x peaks ~500-800 MB RSS per process).
-#   Defaults to nproc/3; override via env.
+#   Defaults to nproc/2 (16 on a 32-core box → ~11 GB peak compile RAM with
+#   headroom for memcheck/valgrind). Override via env.
 # perf and stress gates stay serial — see their recipes.
 test: _require-env lock-check
     #!/usr/bin/env bash
     set -uo pipefail
-    : "${DRIFT_TEST_JOBS:=$(( $(nproc) / 3 ))}"
+    : "${DRIFT_TEST_JOBS:=$(( $(nproc) / 2 ))}"
     export DRIFT_TEST_JOBS
     LOG_DIR="$(mktemp -d -t drift-web-test-XXXXXX)"
     HB_PID=""
