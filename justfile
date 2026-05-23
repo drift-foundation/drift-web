@@ -32,8 +32,12 @@ lock-check: _require-env
 
 # Certification gate: correctness + safety instrumentation.
 # Plain, ASAN, and memcheck passes run concurrently (32GB RAM headroom).
-# Per-pass compile parallelism defaults to nproc/3 to avoid triple-stacking
-# the compile storm; override via DRIFT_TEST_JOBS.
+#   DRIFT_TEST_JOBS is a GLOBAL compile-slot count: the runner wraps each
+#   driftc invocation with the toolchain's `flocker --key drift-jobs -j N`,
+#   so all 3 lanes share one N-slot pool on this host. Total concurrent
+#   driftc processes are bounded by DRIFT_TEST_JOBS regardless of lane count,
+#   preventing OOM cascades (driftc 0.32.x peaks ~500-800 MB RSS per process).
+#   Defaults to nproc/3; override via env.
 # perf and stress gates stay serial — see their recipes.
 test: _require-env lock-check
     #!/usr/bin/env bash
@@ -47,7 +51,7 @@ test: _require-env lock-check
         rm -rf "${LOG_DIR}"
     }
     trap cleanup EXIT
-    echo "=== test: plain + asan + memcheck concurrent (DRIFT_TEST_JOBS=${DRIFT_TEST_JOBS} per pass, logs in ${LOG_DIR}) ==="
+    echo "=== test: plain + asan + memcheck concurrent (DRIFT_TEST_JOBS=${DRIFT_TEST_JOBS} global flocker slots, logs in ${LOG_DIR}) ==="
     ( just _test-suite                    > "${LOG_DIR}/plain.log"    2>&1 ) & pid_plain=$!
     ( DRIFT_ASAN=1     just _test-suite   > "${LOG_DIR}/asan.log"     2>&1 ) & pid_asan=$!
     ( DRIFT_MEMCHECK=1 just _test-suite   > "${LOG_DIR}/memcheck.log" 2>&1 ) & pid_memcheck=$!

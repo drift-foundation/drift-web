@@ -10,7 +10,7 @@
       "kind": "library",
       "name": "web-jwt",
       "module_namespace": "web.jwt",
-      "version": "0.4.1",
+      "version": "0.4.2",
       "description": "HS256 JWT sign/verify with temporal claims validation",
       "entry_module": "packages/web-jwt/src/lib.drift",
       "modules": [
@@ -31,7 +31,7 @@
       "kind": "library",
       "name": "web-rest",
       "module_namespace": "web.rest",
-      "version": "0.5.2",
+      "version": "0.5.3",
       "description": "HTTP/1.1 REST server with routing, route-group guards, wrapping middleware, and per-request typed Context slot map",
       "entry_module": "packages/web-rest/src/lib.drift",
       "modules": [
@@ -78,7 +78,7 @@
       "kind": "library",
       "name": "web-client",
       "module_namespace": "web.client",
-      "version": "0.4.1",
+      "version": "0.4.2",
       "description": "HTTP/1.1 and HTTPS client for outbound requests",
       "entry_module": "packages/web-client/src/lib.drift",
       "modules": [
