@@ -308,7 +308,7 @@ fn _dispatch_throws(app: &App, idx: Int, req: &request.Request, ctx: &mut contex
 	val h = &app.route_throws_handlers[idx];
 	try {
 		val resp = (*h).call(req, ctx);
-		return core.Result::Ok(resp);
+		return core.Result::Ok(move resp);
 	} catch errors:RestError(e) {
 		return core.Result::Err(errors.RestError(status = e.status, event = e.event, tag = e.tag, message = e.message, fields_json = e.fields_json));
 	} catch events:RestBadRequest(e) {
