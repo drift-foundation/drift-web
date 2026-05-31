@@ -393,6 +393,27 @@ prepare: _require-env
 deploy *ARGS: _require-env lock-check
     {{DRIFT}} deploy --dest "${DRIFT_PKG_ROOT:?set DRIFT_PKG_ROOT to the package root}" --driftc "${DRIFTC}" --cert-suite-id drift-web/dev --cert-suite-no-evidence {{ARGS}}
 
+# Read-only trust preflight: validates author-claims, SCI equality, and trust
+# grants against drift/manifest.json (what `drift deploy` checks). Run it to
+# confirm the repo is deploy-ready without actually deploying.
+trust-check: _require-env
+    @{{DRIFT}} trust check
+
+# Author ceremony for a version bump: re-mint author-claims, re-resolve the
+# lockfile, then trust-check. Run this after bumping a version (or any source
+# change that affects SCI) and before committing.
+#
+# Both steps are safe to over-run: `prepare` is a no-op when deps are unchanged
+# and `author-claim --overwrite` is deterministic for an unchanged artifact, so
+# reseal removes the guesswork. With no ARTIFACT it re-mints all four artifacts;
+# pass one to limit the mint (avoids signature churn on unchanged claims).
+# reseal does not test — run `just test` separately first.
+reseal ARTIFACT="":
+    @just author-claim {{ARTIFACT}}
+    @just prepare
+    @just trust-check
+    @echo "[reseal] done — review & commit: drift/manifest.json, drift/lock.json, drift/*.author-claim"
+
 # Show driftc version info.
 driftc-help: _require-env
     @${DRIFTC} --help 2>&1 | head -5 || true
