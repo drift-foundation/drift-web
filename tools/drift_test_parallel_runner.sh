@@ -2,7 +2,10 @@
 set -euo pipefail
 
 usage() {
-	echo "usage: $0 <run-all|run-one|compile|compile-one> [--manifest FILE --artifact NAME] [--src-root DIR] [--test-root DIR] [--test-file FILE] [--file FILE] [--target-word-bits N] [--jobs N]" >&2
+	echo "usage: $0 <run-all|run-one|build-all|build-one|run-prebuilt|compile|compile-one> [--manifest FILE --artifact NAME] [--src-root DIR] [--test-root DIR] [--test-file FILE] [--file FILE] [--out-dir DIR] [--target-word-bits N] [--jobs N]" >&2
+	echo "  build-all:    compile every executable test in --test-root to --out-dir/bins (parallel). Sanitizer via --sanitize. No execution." >&2
+	echo "  build-one:    compile a single --test-file to --out-dir/bins/<name> (persistent). No execution." >&2
+	echo "  run-prebuilt: run binaries from a prior build-all/build-one --out-dir (parallel). Wraps valgrind when DRIFT_MEMCHECK=1. No compilation." >&2
 	exit 2
 }
 
@@ -17,6 +20,7 @@ SRC_ROOTS_OVERRIDDEN=0
 TEST_ROOT=""
 TEST_FILE=""
 CHECK_FILE=""
+OUT_DIR=""
 TARGET_WORD_BITS="64"
 PACKAGE_ROOTS=()
 DEP_PINS=()
@@ -60,6 +64,10 @@ while [[ $# -gt 0 ]]; do
 			CHECK_FILE="${2:-}"
 			shift 2
 			;;
+		--out-dir)
+			OUT_DIR="${2:-}"
+			shift 2
+			;;
 		--target-word-bits)
 			TARGET_WORD_BITS="${2:-}"
 			shift 2
@@ -82,6 +90,13 @@ while [[ $# -gt 0 ]]; do
 			;;
 		--link-search)
 			EXTRA_DRIFTC_FLAGS+=("--link-search" "${2:-}")
+			shift 2
+			;;
+		--sanitize)
+			# Explicit sanitizer selection (driftc 0.33.12+). Authoritative
+			# over DRIFT_ASAN/DRIFT_UBSAN and selects the matching runtime
+			# archive itself, so a sanitized build is a plain driftc call.
+			EXTRA_DRIFTC_FLAGS+=("--sanitize=${2:-}")
 			shift 2
 			;;
 		*)
@@ -283,12 +298,18 @@ compile_test_binary() {
 
 run_binary() {
 	local bin_path="$1"
+	# Route runs through the same global flocker pool as compiles (FLOCKER_WRAP
+	# is empty unless DRIFT_TEST_JOBS is set), so concurrent test processes —
+	# including heavy valgrind runs across all three lanes — stay bounded by the
+	# one host-wide slot count instead of 3×JOBS. No --heartbeat here: run output
+	# is captured to per-job logs, and flocker's heartbeat must not pollute
+	# captured data (it's fed at the gate level instead).
 	if [[ "${DRIFT_MEMCHECK:-0}" == "1" ]]; then
-		valgrind --tool=memcheck --error-exitcode=97 --leak-check=full "${bin_path}"
+		"${FLOCKER_WRAP[@]}" valgrind --tool=memcheck --error-exitcode=97 --leak-check=full "${bin_path}"
 	elif [[ "${DRIFT_MASSIF:-0}" == "1" ]]; then
-		valgrind --tool=massif --error-exitcode=97 "${bin_path}"
+		"${FLOCKER_WRAP[@]}" valgrind --tool=massif --error-exitcode=97 "${bin_path}"
 	else
-		"${bin_path}"
+		"${FLOCKER_WRAP[@]}" "${bin_path}"
 	fi
 }
 
@@ -379,6 +400,21 @@ run_compiled_parallel() {
 }
 
 run_all_tests() {
+	collect_test_files
+	local out_dir
+	out_dir="$(mktemp -d /tmp/drift-test-par-runner.XXXXXX)"
+	trap "rm -rf '${out_dir}'" EXIT
+	mkdir -p "${out_dir}/bins" "${out_dir}/logs"
+	echo "parallel compile: ${#TEST_FILES[@]} tests with jobs=${JOBS}"
+	compile_all_parallel "${out_dir}"
+	echo "parallel run: ${#TEST_FILES[@]} tests with jobs=${JOBS}"
+	run_compiled_parallel "${out_dir}"
+}
+
+# Shared: enumerate executable test entries under TEST_ROOT into TEST_FILES.
+# Selection logic is identical to run_all_tests so build-all and run-prebuilt
+# agree on which tests exist and what their binary names are.
+collect_test_files() {
 	mapfile -t CANDIDATE_TEST_FILES < <(find "${TEST_ROOT}" -type f -name "*.drift" | sort)
 	TEST_FILES=()
 	local f
@@ -391,14 +427,56 @@ run_all_tests() {
 		echo "error: no executable test entry files found under ${TEST_ROOT}" >&2
 		exit 2
 	fi
-	local out_dir
-	out_dir="$(mktemp -d /tmp/drift-test-par-runner.XXXXXX)"
-	trap "rm -rf '${out_dir}'" EXIT
-	mkdir -p "${out_dir}/bins" "${out_dir}/logs"
-	echo "parallel compile: ${#TEST_FILES[@]} tests with jobs=${JOBS}"
-	compile_all_parallel "${out_dir}"
-	echo "parallel run: ${#TEST_FILES[@]} tests with jobs=${JOBS}"
-	run_compiled_parallel "${out_dir}"
+}
+
+# build-all: compile every executable test in TEST_ROOT to a PERSISTENT
+# OUT_DIR/bins (no trap-cleanup — run-prebuilt consumes it in a later phase).
+# Variant (plain vs asan) follows DRIFT_ASAN, which driftc reads at compile.
+build_all_tests() {
+	[[ -n "${TEST_ROOT}" ]] || { echo "error: build-all requires --test-root" >&2; exit 2; }
+	[[ -n "${OUT_DIR}" ]] || { echo "error: build-all requires --out-dir" >&2; exit 2; }
+	collect_test_files
+	mkdir -p "${OUT_DIR}/bins" "${OUT_DIR}/logs"
+	echo "build-all: ${#TEST_FILES[@]} tests with jobs=${JOBS} -> ${OUT_DIR}/bins"
+	compile_all_parallel "${OUT_DIR}"
+}
+
+# run-prebuilt: execute binaries built by a prior build-all into OUT_DIR/bins.
+# Re-enumerates TEST_ROOT to recover the same name->binary mapping, then runs
+# them via the shared parallel runner (which honors DRIFT_MEMCHECK/valgrind).
+run_prebuilt_tests() {
+	[[ -n "${TEST_ROOT}" ]] || { echo "error: run-prebuilt requires --test-root" >&2; exit 2; }
+	[[ -n "${OUT_DIR}" ]] || { echo "error: run-prebuilt requires --out-dir" >&2; exit 2; }
+	collect_test_files
+	COMPILE_NAMES=()
+	COMPILE_BINS=()
+	local test_file name
+	for test_file in "${TEST_FILES[@]}"; do
+		name="$(basename "${test_file}" .drift)"
+		COMPILE_NAMES+=("${name}")
+		COMPILE_BINS+=("${OUT_DIR}/bins/${name}")
+	done
+	local missing=0 b
+	for b in "${COMPILE_BINS[@]}"; do
+		[[ -x "${b}" ]] || { echo "error: prebuilt binary missing (build-all not run?): ${b}" >&2; missing=1; }
+	done
+	[[ "${missing}" -eq 0 ]] || exit 1
+	echo "run-prebuilt: ${#COMPILE_BINS[@]} tests with jobs=${JOBS} <- ${OUT_DIR}/bins"
+	run_compiled_parallel "${OUT_DIR}"
+}
+
+# build-one: compile a single --test-file to a PERSISTENT --out-dir/bins/<name>
+# (no run, no trap-cleanup). The single-file analog of build-all, for gates that
+# build one specific binary (e.g. a perf workload) rather than a whole root.
+build_one_test() {
+	[[ -n "${TEST_FILE}" ]] || { echo "error: build-one requires --test-file" >&2; exit 2; }
+	[[ -n "${OUT_DIR}" ]] || { echo "error: build-one requires --out-dir" >&2; exit 2; }
+	[[ -f "${TEST_FILE}" ]] || { echo "error: missing test file ${TEST_FILE}" >&2; exit 2; }
+	is_executable_test_entry "${TEST_FILE}" || { echo "error: ${TEST_FILE} is not an executable test entry (requires module + fn main)" >&2; exit 2; }
+	mkdir -p "${OUT_DIR}/bins"
+	local name; name="$(basename "${TEST_FILE}" .drift)"
+	echo "compile ${name}"
+	compile_test_binary "${TEST_FILE}" "${OUT_DIR}/bins/${name}"
 }
 
 run_one_test() {
@@ -418,7 +496,11 @@ require_driftc
 resolve_flocker_wrap
 guard_jobs
 guard_incompat
-collect_src_files
+# run-prebuilt executes pre-built binaries; it neither compiles nor needs the
+# source/manifest resolution every other mode depends on.
+if [[ "${MODE}" != "run-prebuilt" ]]; then
+	collect_src_files
+fi
 
 case "${MODE}" in
 	compile)
@@ -434,6 +516,16 @@ case "${MODE}" in
 	run-all)
 	set_asan_defaults_for_run
 	run_all_tests
+	;;
+	build-all)
+	build_all_tests
+	;;
+	build-one)
+	build_one_test
+	;;
+	run-prebuilt)
+	set_asan_defaults_for_run
+	run_prebuilt_tests
 	;;
 	run-one)
 	[[ -n "${TEST_FILE}" ]] || { echo "error: --test-file is required for run-one mode" >&2; exit 2; }

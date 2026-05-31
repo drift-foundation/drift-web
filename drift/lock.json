@@ -5,7 +5,7 @@
       "resolved": {
         "net-tls": {
           "version": "0.5.2",
-          "sha256": "955d953a0a704bd3f4d76b3e4c413c6c26968806f7657b46356ec09f402d86c4",
+          "sha256": "055b3baf4c691e9bc5fb00ac194c5eba6209b79b8ef0a924f216b25111e55598",
           "author_key": "ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0=",
           "source_content_id": "sha256:73f4714af7918e23e1a0c649288afaa92f2bf48aa91a98d9a5819640f96be5bf",
           "source_attestation_key": "ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0=",

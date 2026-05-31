@@ -40,44 +40,51 @@ lock-check: _require-env
 #   Defaults to nproc/2 (16 on a 32-core box → ~11 GB peak compile RAM with
 #   headroom for memcheck/valgrind). Override via env.
 # perf and stress gates stay serial — see their recipes.
+# Two-phase split: compile every test ONCE per distinct binary variant, then
+# run the instrumentation lanes against the prebuilt binaries.
+#
+#   Phase 1 (compile, the ~99%-of-wall-clock part): build the plain and asan
+#     variants concurrently. memcheck reuses the PLAIN binaries — only ASAN is a
+#     distinct binary (built with `driftc --sanitize=address`, which also selects
+#     the matching asan runtime archive), so building 2 variants instead of 3
+#     removes ~1/3 of all driftc work. Both compile lanes share the one
+#     DRIFT_TEST_JOBS flocker slot pool, same global cap as before.
+#   Phase 2 (run, cheap — no driftc): plain/memcheck/asan run concurrently, also
+#     bounded by the shared flocker pool. plain + memcheck both execute the plain
+#     binaries (memcheck under valgrind); asan executes the asan binaries.
+#
+# Watchdog: a single `flocker --heartbeat` monitor feeds the orch ≤60s
+# stdout-inactivity contract — the blessed mechanism, not a hand-rolled loop.
+#
+# client-https-e2e and consumer-check don't fit the prebuilt model (inline /
+# published-artifact compiles) and keep their prior per-lane behavior.
 test: _require-env lock-check
     #!/usr/bin/env bash
     set -uo pipefail
     : "${DRIFT_TEST_JOBS:=$(( $(nproc) / 2 ))}"
     export DRIFT_TEST_JOBS
     LOG_DIR="$(mktemp -d -t drift-web-test-XXXXXX)"
+    BIN_CACHE="$(mktemp -d -t drift-web-bincache-XXXXXX)"
+    export DRIFT_BIN_CACHE="${BIN_CACHE}"
     HB_PID=""
+    status=0
     cleanup() {
         [[ -n "${HB_PID}" ]] && kill "${HB_PID}" 2>/dev/null
-        rm -rf "${LOG_DIR}"
+        rm -rf "${LOG_DIR}" "${BIN_CACHE}"
     }
     trap cleanup EXIT
-    echo "=== test: plain + asan + memcheck concurrent (DRIFT_TEST_JOBS=${DRIFT_TEST_JOBS} global flocker slots, logs in ${LOG_DIR}) ==="
-    ( just _test-suite                    > "${LOG_DIR}/plain.log"    2>&1 ) & pid_plain=$!
-    ( DRIFT_ASAN=1     just _test-suite   > "${LOG_DIR}/asan.log"     2>&1 ) & pid_asan=$!
-    ( DRIFT_MEMCHECK=1 just _test-suite   > "${LOG_DIR}/memcheck.log" 2>&1 ) & pid_memcheck=$!
-    # Heartbeat: keeps orch's stdout-inactivity watchdog fed (contract: ≤60s
-    # silence) AND gives a live view of each pass — runner emits `compile NAME`
-    # and `run NAME` per test, so ran-count + last-line is real progress.
-    (
-        t=0
-        while true; do
-            sleep 10
-            t=$((t+10))
-            line="[hb ${t}s]"
-            for pass in plain asan memcheck; do
-                log="${LOG_DIR}/${pass}.log"
-                # grep -c exits 1 on zero matches, 2 on missing file; fall
-                # back to 0 via parameter expansion instead of `|| echo 0`,
-                # which would double-print on the zero-match case.
-                ran=$(grep -c '^run ' "${log}" 2>/dev/null); ran=${ran:-0}
-                last=$(tail -n 1 "${log}" 2>/dev/null)
-                line+=" ${pass}(ran=${ran}; ${last:-starting})"
-            done
-            echo "${line}"
-        done
-    ) & HB_PID=$!
-    status=0
+    # Watchdog heartbeat via flocker's own --heartbeat (driftc 0.33.12+ toolchain),
+    # not a hand-rolled sleep loop. One monitor on a DEDICATED key (so it never
+    # consumes a drift-jobs compile/run slot) emits a liveness line to the gate's
+    # stdout every 20s — comfortably under the orch's ≤60s contract — and covers
+    # the whole run incl. the silent compile + memcheck stretches. flocker
+    # forwards SIGTERM, so cleanup's kill tears it down and releases the slot.
+    FLOCKER="${DRIFT_TOOLCHAIN_ROOT}/bin/flocker"
+    if [[ -x "${FLOCKER}" ]]; then
+        "${FLOCKER}" -k drift-web-hb -j 1 --heartbeat 20 -- sleep 86400 & HB_PID=$!
+    else
+        echo "warning: ${FLOCKER} not found — running without watchdog heartbeat" >&2
+    fi
     report() {
         local name="$1" pid="$2"
         if wait "${pid}"; then
@@ -88,14 +95,77 @@ test: _require-env lock-check
             status=1
         fi
     }
+
+    echo "=== phase 1: compile plain + asan (DRIFT_TEST_JOBS=${DRIFT_TEST_JOBS} global flocker slots, cache ${BIN_CACHE}, logs ${LOG_DIR}) ==="
+    ( just _compile-suite plain > "${LOG_DIR}/compile-plain.log" 2>&1 ) & pid_cp=$!
+    ( just _compile-suite asan  > "${LOG_DIR}/compile-asan.log"  2>&1 ) & pid_ca=$!
+    report compile-plain "${pid_cp}"
+    report compile-asan  "${pid_ca}"
+    if [[ "${status}" -ne 0 ]]; then
+        echo "=== phase 1 (compile) FAILED — skipping run phase ==="
+        exit 1
+    fi
+
+    echo "=== phase 2: run plain + memcheck + asan concurrent (prebuilt binaries, no driftc) ==="
+    ( just _run-suite plain    > "${LOG_DIR}/plain.log"    2>&1 ) & pid_plain=$!
+    ( just _run-suite memcheck > "${LOG_DIR}/memcheck.log" 2>&1 ) & pid_memcheck=$!
+    ( just _run-suite asan     > "${LOG_DIR}/asan.log"     2>&1 ) & pid_asan=$!
     report plain    "${pid_plain}"
     report asan     "${pid_asan}"
     report memcheck "${pid_memcheck}"
-    kill "${HB_PID}" 2>/dev/null || true
-    wait "${HB_PID}" 2>/dev/null || true
     exit "${status}"
 
-# Internal: full test suite (single pass).
+# Internal: compile all unit/e2e test roots into the shared binary cache for one
+# variant. VARIANT in {plain, asan}; asan adds `--sanitize=address` (driftc
+# 0.33.12+), which instruments AND selects the matching asan runtime archive —
+# no DRIFT_ASAN env. No run.
+_compile-suite VARIANT: _require-env
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source tools/web_test_roots.sh
+    SAN=()
+    case "{{VARIANT}}" in
+        plain) ;;
+        asan)  SAN=(--sanitize address) ;;
+        *) echo "error: unknown variant '{{VARIANT}}'" >&2; exit 2 ;;
+    esac
+    while IFS=$'\t' read -r ART ROOT EXTRA; do
+        [[ -n "${ROOT}" ]] || continue
+        out="${DRIFT_BIN_CACHE}/$(web_test_root_key "${ROOT}")-{{VARIANT}}"
+        tools/drift_test_parallel_runner.sh build-all \
+          --manifest drift/manifest.json --artifact "${ART}" \
+          --test-root "${ROOT}" ${EXTRA} "${SAN[@]}" \
+          --target-word-bits 64 --out-dir "${out}"
+    done < <(web_test_roots)
+
+# Internal: run one instrumentation lane against the prebuilt binary cache.
+# LANE in {plain, memcheck, asan}. plain + memcheck read the plain binaries
+# (memcheck wraps valgrind); asan reads the asan binaries.
+_run-suite LANE: _require-env
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source tools/web_test_roots.sh
+    case "{{LANE}}" in
+        plain)    binvar=plain ;;
+        memcheck) binvar=plain; export DRIFT_MEMCHECK=1 ;;
+        # asan binaries are built with --sanitize=address; at run time libasan
+        # only needs its options (no DRIFT_ASAN — that was the old compile knob).
+        asan)     binvar=asan;  export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0:halt_on_error=1}" ;;
+        *) echo "error: unknown lane '{{LANE}}'" >&2; exit 2 ;;
+    esac
+    while IFS=$'\t' read -r ART ROOT EXTRA; do
+        [[ -n "${ROOT}" ]] || continue
+        out="${DRIFT_BIN_CACHE}/$(web_test_root_key "${ROOT}")-${binvar}"
+        tools/drift_test_parallel_runner.sh run-prebuilt \
+          --test-root "${ROOT}" --target-word-bits 64 --out-dir "${out}"
+    done < <(web_test_roots)
+    # Non-prebuilt suites keep their prior per-lane behavior (they compile
+    # inline / against published artifacts; they inherit the lane's DRIFT_*).
+    just client-https-e2e
+    just consumer-check
+
+# Internal: full test suite, single lane, compile+run interleaved per root.
+# Retained for ad-hoc single-lane runs; `just test` uses the two-phase split.
 _test-suite:
     @just jwt-check-par
     @just jwt-e2e-par
@@ -167,27 +237,53 @@ rest-check-unit FILE: _require-env
 #             guards, JSON caching, keep-alive, malformed recovery, lifecycle).
 # Scenario B: Client TLS negative-path → valid-path contamination.
 # Scenario C: Pool reuse / stale-connection / forced-reconnect stress.
+#
+# Follows docs/certifiable-test-gates.md: a parallel COMPILE phase builds all
+# three scenario binaries at once (flocker pool), then a RUN phase where A
+# (independent REST server) runs in PARALLEL with the B→C chain, while B and C
+# (which share one HTTPS server) run SERIALLY on that exclusive resource.
 stress: _require-env lock-check
     #!/usr/bin/env bash
-    set -euo pipefail
-    echo "=== scenario A: REST concurrency/state stress ==="
-    just _stress-rest
-    echo "=== scenario A: PASS ==="
-    echo ""
-    just _stress-client
-    echo ""
-    echo "=== all stress scenarios complete ==="
+    set -uo pipefail
+    : "${DRIFT_TEST_JOBS:=$(( $(nproc) / 2 ))}"
+    export DRIFT_TEST_JOBS
+    WORK="$(mktemp -d -t drift-web-stress-XXXXXX)"
+    LOG="${WORK}/logs"; mkdir -p "${LOG}"
+    HB_PID=""; status=0
+    cleanup() {
+        [[ -n "${HB_PID}" ]] && kill "${HB_PID}" 2>/dev/null
+        if [[ -n "${WORK:-}" && "${WORK}" == */drift-web-stress-* && -d "${WORK}" ]]; then rm -rf "${WORK}"; fi
+    }
+    trap cleanup EXIT
+    FLOCKER="${DRIFT_TOOLCHAIN_ROOT}/bin/flocker"
+    [[ -x "${FLOCKER}" ]] && { "${FLOCKER}" -k drift-web-hb -j 1 --heartbeat 20 -- sleep 86400 & HB_PID=$!; }
+    report() {
+        local name="$1" pid="$2" log="$3"
+        if wait "${pid}"; then echo "=== ${name} — PASS ==="
+        else echo "=== ${name} — FAIL ==="; sed 's/^/['"${name}"'] /' "${log}"; status=1; fi
+    }
 
-# Internal: REST server stress (scenario A).
-_stress-rest:
-    @tools/drift_test_parallel_runner.sh run-one \
-      --manifest drift/manifest.json --artifact web-rest \
-      --test-file packages/web-rest/tests/stress/stress_test.drift \
-      --target-word-bits 64
+    echo "=== stress phase 1: compile all scenario binaries (parallel, flocker pool) ==="
+    ( tools/drift_test_parallel_runner.sh build-all --manifest drift/manifest.json --artifact web-rest \
+        --test-root packages/web-rest/tests/stress --target-word-bits 64 --out-dir "${WORK}/rest" \
+        > "${LOG}/compile-rest.log" 2>&1 ) & c_rest=$!
+    ( tools/drift_test_parallel_runner.sh build-all --manifest drift/manifest.json --artifact web-client \
+        --test-root packages/web-client/tests/stress --package-root {{PKG_ROOT}} --target-word-bits 64 --out-dir "${WORK}/client" \
+        > "${LOG}/compile-client.log" 2>&1 ) & c_client=$!
+    report compile-rest   "${c_rest}"   "${LOG}/compile-rest.log"
+    report compile-client "${c_client}" "${LOG}/compile-client.log"
+    if [[ "${status}" -ne 0 ]]; then echo "=== stress compile FAILED — skipping run phase ==="; exit 1; fi
 
-# Internal: Client TLS/pool stress (scenarios B + C).
-_stress-client:
-    @tools/run-stress-client.sh
+    echo "=== stress phase 2: run (A ∥ B→C) ==="
+    # Scenario A: REST concurrency/state stress — independent resource, parallel.
+    ( tools/drift_test_parallel_runner.sh run-prebuilt --test-root packages/web-rest/tests/stress \
+        --target-word-bits 64 --out-dir "${WORK}/rest" > "${LOG}/run-A.log" 2>&1 ) & r_a=$!
+    # Scenarios B,C: client TLS/pool stress — share one HTTPS server, run serially.
+    ( tools/run-stress-client.sh "${WORK}/client/bins" > "${LOG}/run-BC.log" 2>&1 ) & r_bc=$!
+    report stress-A-rest    "${r_a}"  "${LOG}/run-A.log"
+    report stress-BC-client "${r_bc}" "${LOG}/run-BC.log"
+    [[ "${status}" -eq 0 ]] && echo "=== all stress scenarios complete ==="
+    exit "${status}"
 
 # Certification gate: performance anomaly detection.
 # Machine-keyed pass/fail against baselines in perf-baselines.json.

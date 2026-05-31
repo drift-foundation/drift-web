@@ -47,7 +47,19 @@ echo "[perf-gate] thresholds (upper bound, higher=worse): raw<=${THRESHOLD_RAW} 
 # Capture perf-smoke output (it prints [perf-smoke] key=value lines).
 # Ignore the binary's own exit code — it enforces hardcoded thresholds;
 # the gate uses machine-keyed thresholds from perf-baselines.json instead.
+#
+# perf-smoke's stdout is CAPTURED here, so a heartbeat inside it would be
+# swallowed. Per docs/certifiable-test-gates.md the watchdog monitor must live
+# at this capturing level: a single flocker --heartbeat on a dedicated key,
+# writing to LIVE stdout, feeds the orch ≤60s watchdog during the (otherwise
+# silent, captured) compile+measure run. Dedicated key ⇒ no work slot consumed.
+HB_PID=""
+FLOCKER="${DRIFT_TOOLCHAIN_ROOT:-}/bin/flocker"
+if [[ -n "${DRIFT_TOOLCHAIN_ROOT:-}" && -x "${FLOCKER}" ]]; then
+    "${FLOCKER}" -k drift-web-hb -j 1 --heartbeat 20 -- sleep 86400 & HB_PID=$!
+fi
 OUTPUT="$(bash "${SCRIPT_DIR}/perf_smoke_runner.sh" 2>&1)" || true
+[[ -n "${HB_PID}" ]] && kill "${HB_PID}" 2>/dev/null || true
 echo "${OUTPUT}"
 
 # --- Parse measured throughput ratios and invert to cost ---
