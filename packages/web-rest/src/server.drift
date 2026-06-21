@@ -7,6 +7,7 @@ import std.concurrent as conc;
 import std.sync as sync;
 import std.format as fmt;
 import std.mem as mem;
+import std.time as time;
 import web.rest.errors as errors;
 import web.rest.response as response;
 import web.rest.context as context;
@@ -129,14 +130,65 @@ pub fn shutdown(rs: &mut RunningServer) nothrow -> core.Result<Void, errors.Rest
 	}
 }
 
+// One active connection's state in the single-fiber event loop.
+//   rbuf — bytes read so far, awaiting a complete request to parse.
+//   wbuf — serialized response bytes not yet written (pending write tail).
+//   close_after — close the socket once wbuf is fully drained (Connection:
+//     close, or a malformed-request error response).
+//   last_active_ms — monotonic ms of the last read/write progress, for idle
+//     timeout.
+struct _Conn {
+	stream: net.TcpStream,
+	fd: Int,
+	rbuf: Array<Byte>,
+	wbuf: Array<Byte>,
+	woff: Int,
+	close_after: Bool,
+	last_active_ms: Int,
+	readable: Bool
+}
+
+// Single-fiber event-loop server. ONE fiber multiplexes accept + all active
+// connections using exclusively NON-BLOCKING (Duration 0) socket ops, so no
+// single connection can stall the loop:
+//   - an idle keep-alive connection (waiting for its next request) just returns
+//     WOULD_BLOCK on read and is skipped — it never blocks accept or service of
+//     other connections (THE bug this fixes);
+//   - a slow/blocked reader can't monopolize the loop either: writes are
+//     non-blocking and any unwritten response tail is buffered in wbuf and
+//     retried on later ticks.
+// This deliberately avoids per-connection fibers: on this runtime's single
+// cooperative worker a freshly-spawned fiber starves behind ready I/O fibers
+// (co-located client/server, and under valgrind), which reintroduced the bug in
+// a new form. A single fiber that never parks behind one stream is the robust
+// root-cause fix. The `timeout` parameter (server lifecycle/startup) is no
+// longer used for per-connection I/O — all connection I/O is non-blocking.
 pub fn serve(a: app.App, listener: net.TcpListener, handle: ServerHandle, timeout: conc.Duration) nothrow -> core.Result<Void, errors.RestError> {
-	// App registration is complete once serve() begins. The Arc is the share
-	// handle for dispatch — onion-fold closures (web-rest 0.4 middleware) need
-	// it for share-capture; right now the per-request dispatch just clones it.
+	val _ = timeout;
 	val app_arc = conc.arc(move a);
-	val accept_timeout = conc.Duration(millis = 200);
+	val zero = conc.Duration(millis = 0);
+	val clock = time.now_monotonic();
+	val idle_ms = handle.idle_timeout_ms;
+	val listener_fd = listener.raw_fd();
+	// Bounds how long poll_many parks when nothing is ready — i.e. the worst-case
+	// latency for noticing shutdown and running idle-timeout housekeeping. It does
+	// NOT affect active throughput: poll_many returns immediately when a socket
+	// becomes ready, so request latency stays reactor-fast.
+	val poll_timeout = conc.Duration(millis = 200);
+	var conns: Array<_Conn> = [];
 	var requests_served = 0;
 	var event_counter = 0;
+	// Accept only when poll_many last reported the listener readable (plus the
+	// first iteration and a periodic safety sweep), so the hot path does not pay
+	// an accept() syscall every loop turn.
+	var listener_ready = true;
+	var accept_guard = 0;
+	// Reused scratch to avoid a per-request allocation: one read buffer (each
+	// read overwrites it; we copy out the n bytes returned) and one poll-entry
+	// list (rebuilt in place each park).
+	var read_scratch = io.buffer(4096);
+	var poll_entries: Array<io.PollEntry> = [];
+
 	while !_is_stopped(&handle) {
 		if handle.max_requests > 0 {
 			if requests_served >= handle.max_requests {
@@ -144,116 +196,284 @@ pub fn serve(a: app.App, listener: net.TcpListener, handle: ServerHandle, timeou
 			}
 		}
 		if !_is_stopped(&handle) {
-			match listener.accept(accept_timeout) {
-				core.Result::Ok(stream) => {
-					var s = move stream;
-					val served = _handle_connection(&app_arc, &mut s, timeout, &handle, &mut event_counter);
-					requests_served = requests_served + served;
-					val _ = s.close(timeout);
-				},
-				core.Result::Err(_) => {}
+			var progressed = false;
+			val now_ms = time.elapsed_ms(&clock);
+
+			// 1. Accept newly-available connections — gated on listener readiness
+			// (see above), draining the whole backlog when we do accept.
+			accept_guard = accept_guard + 1;
+			if accept_guard >= 64 {
+				listener_ready = true;
+				accept_guard = 0;
 			}
+			if listener_ready {
+				listener_ready = false;
+				var more = true;
+				while more {
+					match listener.accept(zero) {
+						core.Result::Ok(stream) => {
+							var s = move stream;
+							val cfd = s.raw_fd();
+							var rb: Array<Byte> = [];
+							var wb: Array<Byte> = [];
+							// readable=true: eagerly attempt the first read (the
+							// request may already be waiting); thereafter readability
+							// is driven by poll_many.
+							conns.push(_Conn(stream = move s, fd = cfd, rbuf = move rb, wbuf = move wb, woff = 0, close_after = false, last_active_ms = now_ms, readable = true));
+							progressed = true;
+						},
+						core.Result::Err(_) => { more = false; }
+					}
+				}
+			}
+
+			// 2. Service each active connection: read → parse → dispatch, then
+			// flush the produced response — all non-blocking, in ONE pass, so a
+			// request completes in a single iteration (no separate write tick).
+			var i = 0;
+			while i < conns.len {
+				var remove = false;
+
+				// 2a. Read (only when poll flagged this fd readable) → accumulate,
+				// then parse + dispatch any complete request in the buffer.
+				if conns[i].wbuf.len == 0 {
+					if conns[i].readable {
+						// DRAIN to WOULD_BLOCK. The reactor is edge-backed (confirmed by the
+						// toolchain): one read per readiness is NOT safe -- if data remains in
+						// the socket buffer (a request larger than read_scratch, or several
+						// queued segments) there is no guaranteed further wake, so a partial
+						// read would stall the connection until idle-timeout. Keep reading until
+						// WOULD_BLOCK / EOF / error to re-arm the edge. A per-pass byte cap
+						// bounds how much one busy connection does before we round-robin to the
+						// others; if the cap is hit, leave readable set so the drain resumes
+						// next pass (fair, no lost data).
+						var draining = true;
+						var bytes_this_pass = 0;
+						while draining {
+							var got = 0;
+							var rerr = false;
+							var eof = false;
+							var wblock = false;
+							match conns[i].stream.read(&mut read_scratch, zero) {
+								core.Result::Ok(n) => {
+									if n == 0 { eof = true; } else { got = n; }
+								},
+								core.Result::Err(e) => {
+									if e.kind == net.NET_ERROR_KIND_WOULD_BLOCK { wblock = true; }
+									else { rerr = true; }
+								}
+							}
+							if rerr {
+								remove = true;
+								draining = false;
+								conns[i].readable = false;
+							} else if eof {
+								remove = true;
+								draining = false;
+								conns[i].readable = false;
+							} else if wblock {
+								draining = false;
+								conns[i].readable = false;
+							} else {
+								var j = 0;
+								while j < got {
+									conns[i].rbuf.push(io.buffer_read(&mut read_scratch, j));
+									j = j + 1;
+								}
+								conns[i].last_active_ms = now_ms;
+								progressed = true;
+								bytes_this_pass = bytes_this_pass + got;
+								if bytes_this_pass >= 262144 {
+									draining = false;
+								}
+							}
+						}
+					}
+					// Parse any complete request already buffered (handles
+					// pipelined requests with no fresh socket read).
+					if !remove {
+						if conns[i].rbuf.len > 0 {
+							event_counter = event_counter + 1;
+							val eid = "evt-" + fmt.format_int(event_counter);
+							var parse_res = http.try_parse_request(&mut conns[i].rbuf);
+							match parse_res {
+								core.Result::Err(perr) => {
+									// Malformed request: send a 400 then close
+									// (only this connection — others unaffected).
+									val er = response.error_envelope(&perr, &eid);
+									var ebytes = http.serialize_response(&er, true);
+									conns[i].wbuf = move ebytes;
+									conns[i].close_after = true;
+									progressed = true;
+								},
+								core.Result::Ok(opt) => {
+									match opt {
+										Optional::Some(parsed) => {
+											var p = move parsed;
+											val conn_close = p.conn_close == true;
+											var obytes = _dispatch_to_bytes(&app_arc, move p, &eid, conn_close);
+											conns[i].wbuf = move obytes;
+											conns[i].close_after = conn_close;
+											requests_served = requests_served + 1;
+											progressed = true;
+										},
+										Optional::None => {}
+									}
+								}
+							}
+						}
+					}
+				}
+
+				// 2b. Flush pending response bytes (non-blocking) — including any
+				// just produced in 2a. Non-blocking + tail-buffered so a slow or
+				// idle reader can never monopolize the loop.
+				if !remove {
+					if conns[i].wbuf.len > conns[i].woff {
+						val remaining = conns[i].wbuf.len - conns[i].woff;
+						var wrote = 0;
+						var werr = false;
+						match conns[i].stream.write_bytes(&mut conns[i].wbuf, conns[i].woff, remaining, zero) {
+							core.Result::Ok(n) => { wrote = n; },
+							core.Result::Err(e) => {
+								if e.kind != net.NET_ERROR_KIND_WOULD_BLOCK {
+									werr = true;
+								}
+							}
+						}
+						if werr {
+							remove = true;
+						} else {
+							if wrote > 0 {
+								conns[i].woff = conns[i].woff + wrote;
+								conns[i].last_active_ms = now_ms;
+								progressed = true;
+								if conns[i].woff >= conns[i].wbuf.len {
+									conns[i].wbuf.clear();
+									conns[i].woff = 0;
+									if conns[i].close_after {
+										remove = true;
+									}
+								}
+							}
+						}
+					}
+				}
+
+				// 2c. Idle close: no response pending and silent beyond the idle
+				// timeout (covers never-sent, partial-request, and post-response
+				// idle keep-alive connections).
+				if !remove {
+					if conns[i].wbuf.len == 0 {
+						if now_ms - conns[i].last_active_ms >= idle_ms {
+							remove = true;
+						}
+					}
+				}
+
+				if remove {
+					val last = conns.len - 1;
+					conns.swap(i, last);
+					match conns.pop() {
+						Optional::Some(c) => { var cc = move c; val _ = cc.stream.close(zero); },
+						Optional::None => {}
+					}
+					// do not advance i — the swapped-in element now occupies slot i
+				} else {
+					i = i + 1;
+				}
+			}
+
+			// 3. Wait. When a full sweep made no progress, park in poll_many on
+			// the listener + every connection fd until one becomes ready (or the
+			// poll_timeout elapses for housekeeping/shutdown checks). This is the
+			// efficient, fair, fast wait:
+			//   - efficient: parks (no busy-spin, low idle CPU) and hands the
+			//     single cooperative worker to other fibers (the co-located client)
+			//     via the reactor — the same path blocking socket ops use;
+			//   - fair: an idle keep-alive connection simply isn't "ready", so it
+			//     contributes nothing and never blocks others;
+			//   - fast: poll_many returns the instant a socket has data, so the
+			//     next sweep services it with sub-millisecond latency (no sleep
+			//     floor). The advisory ready set is intentionally ignored — the
+			//     sweep re-discovers readiness via the actual non-blocking ops.
+			if !progressed {
+				poll_entries.clear();
+				poll_entries.push(io.PollEntry(fd = listener_fd, token = -1, want_read = true, want_write = false));
+				var pi = 0;
+				while pi < conns.len {
+					val want_write = conns[pi].wbuf.len > conns[pi].woff;
+					poll_entries.push(io.PollEntry(fd = conns[pi].fd, token = pi, want_read = !want_write, want_write = want_write));
+					pi = pi + 1;
+				}
+				match io.poll_many(&poll_entries, poll_timeout) {
+					core.Result::Ok(ready) => {
+						// Distribute readiness: gate the next accept on the listener
+						// being readable, and mark each connection readable so 2a
+						// only reads fds that actually have data (or a hangup/error,
+						// which the read then surfaces as EOF/err → close).
+						var ri = 0;
+						while ri < ready.len {
+							val tok = ready[ri].token;
+							if tok == -1 {
+								if ready[ri].readable {
+									listener_ready = true;
+								}
+							} else {
+								var rdy = false;
+								if ready[ri].readable { rdy = true; }
+								if ready[ri].hangup { rdy = true; }
+								if ready[ri].err { rdy = true; }
+								if rdy {
+									if tok >= 0 {
+										if tok < conns.len {
+											conns[tok].readable = true;
+										}
+									}
+								}
+							}
+							ri = ri + 1;
+						}
+					},
+					core.Result::Err(_) => {}
+				}
+			}
+		}
+	}
+
+	// Drain: flush any pending response then close every still-active
+	// connection. A response that was already dispatched (e.g. the final request
+	// when max_requests is reached, or anything in flight when shutdown() is
+	// called) must still be delivered before we close — fairness no longer
+	// matters here, so this flush may block briefly (bounded).
+	val flush_timeout = conc.Duration(millis = 2000);
+	while conns.len > 0 {
+		match conns.pop() {
+			Optional::Some(c) => {
+				var cc = move c;
+				if cc.wbuf.len > cc.woff {
+					val fl = cc.wbuf.len - cc.woff;
+					val _ = cc.stream.write_bytes(&mut cc.wbuf, cc.woff, fl, flush_timeout);
+				}
+				val _ = cc.stream.close(zero);
+			},
+			Optional::None => {}
 		}
 	}
 	return core.Result::Ok(core.void_value());
 }
 
-// Dispatch one request and write the response. Returns:
-//   0 = success, keep connection open
-//   1 = success, close connection (client sent Connection: close)
-//   2 = write error, close connection
-fn _dispatch_and_write(app_arc: &conc.Arc<app.App>, stream: &mut net.TcpStream, parsed: http.ParsedRequest, timeout: conc.Duration, event_id: &String) nothrow -> Int {
+// Dispatch one parsed request and return the serialized response bytes.
+// conn_close is read from the request by the caller (before `parsed` is moved
+// in) and threaded through so the serializer emits the right Connection header.
+fn _dispatch_to_bytes(app_arc: &conc.Arc<app.App>, parsed: http.ParsedRequest, event_id: &String, conn_close: Bool) nothrow -> Array<Byte> {
 	var p = move parsed;
-	val conn_close = p.conn_close == true;
 	var mut_req = mem.replace(&mut p.req, request.new_request("", ""));
-
 	var resp_to_write = response.json_response(500, "");
-	var have_resp = false;
-
 	var ctx = context.new_context();
 	match app.dispatch(app_arc.clone(), &mut mut_req, &mut ctx) {
-		core.Result::Ok(resp) => {
-			resp_to_write = move resp;
-			have_resp = true;
-		},
-		core.Result::Err(dispatch_err) => {
-			resp_to_write = response.error_envelope(&dispatch_err, event_id);
-			have_resp = true;
-		}
+		core.Result::Ok(resp) => { resp_to_write = move resp; },
+		core.Result::Err(dispatch_err) => { resp_to_write = response.error_envelope(&dispatch_err, event_id); }
 	}
-
-	if !have_resp {
-		return 2;
-	}
-
-	match http.write_response(stream, &resp_to_write, conn_close, timeout) {
-		core.Result::Err(_) => { return 2; },
-		core.Result::Ok(_) => {}
-	}
-	if conn_close == true {
-		return 1;
-	}
-	return 0;
-}
-
-// Per-connection loop: read requests, dispatch, write responses.
-// Returns total number of requests served on this connection.
-// On any read/parse error, discards buffer and closes (error recovery policy).
-// After the first request, uses idle_timeout for reads. If the idle timeout
-// fires on an empty buffer (no partial data), close silently — not an error.
-fn _handle_connection(app_arc: &conc.Arc<app.App>, stream: &mut net.TcpStream, timeout: conc.Duration, handle: &ServerHandle, event_counter: &mut Int) nothrow -> Int {
-	var conn_buf: Array<Byte> = [];
-	var served = 0;
-	var keep_going = true;
-	val idle_timeout = conc.Duration(millis = handle.idle_timeout_ms);
-
-	while keep_going {
-		if _is_stopped(handle) {
-			keep_going = false;
-		}
-
-		if keep_going {
-			*event_counter = *event_counter + 1;
-			val eid = "evt-" + fmt.format_int(*event_counter);
-
-			// All per-connection I/O uses idle_timeout from the server handle.
-			// The outer timeout (from rest.start / serve) controls accept/startup
-			// only and is not passed to stream reads. This cleanly separates
-			// server lifecycle timeout from per-connection I/O timeout.
-			var read_timeout = idle_timeout;
-
-			match http.read_one_request(stream, &mut conn_buf, read_timeout) {
-				core.Result::Err(read_err) => {
-					// If idle timeout fired on an empty buffer, close silently.
-					if served > 0 {
-						if conn_buf.len == 0 {
-							keep_going = false;
-						} else {
-							// Partial data arrived then error — write error response.
-							val err_resp = response.error_envelope(&read_err, &eid);
-							val _ = http.write_response(stream, &err_resp, true, timeout);
-							keep_going = false;
-						}
-					} else {
-						// First request error — always write error response.
-						val err_resp = response.error_envelope(&read_err, &eid);
-						val _ = http.write_response(stream, &err_resp, true, timeout);
-						keep_going = false;
-					}
-				},
-				core.Result::Ok(parsed) => {
-					val result = _dispatch_and_write(app_arc, stream, move parsed, timeout, &eid);
-					if result == 0 {
-						served = served + 1;
-					} else {
-						if result == 1 {
-							served = served + 1;
-						}
-						keep_going = false;
-					}
-				}
-			}
-		}
-	}
-	return served;
+	return http.serialize_response(&resp_to_write, conn_close);
 }

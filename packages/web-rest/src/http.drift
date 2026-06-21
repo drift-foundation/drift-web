@@ -18,6 +18,7 @@ export {
 	serialize_response,
 	read_request_bytes,
 	read_one_request,
+	try_parse_request,
 	write_response
 };
 
@@ -593,6 +594,49 @@ pub fn read_one_request(stream: &net.TcpStream, conn_buf: &mut Array<Byte>, time
 				conn_buf.remove_range(0, consumed);
 			}
 			return core.Result::Ok(move parsed);
+		}
+	}
+}
+
+// Non-blocking parse boundary for the event-loop server: try to extract one
+// complete request from the front of conn_buf WITHOUT doing any socket I/O.
+// This is read_one_request's completeness check + parse + trim, minus the read
+// loop, so serve() can own the multiplexing and accumulate bytes per connection.
+//   Ok(Some(parsed)) — a complete request was parsed; consumed bytes removed.
+//   Ok(None)         — need more bytes (incomplete headers or body).
+//   Err(rest_error)  — malformed (header too large / bad request line).
+pub fn try_parse_request(conn_buf: &mut Array<Byte>) nothrow -> core.Result<Optional<ParsedRequest>, errors.RestError> {
+	val header_end = _find_header_end(conn_buf);
+	if header_end == -1 {
+		// No complete header terminator yet. Guard against unbounded growth.
+		if conn_buf.len > MAX_HEADER_SIZE {
+			return core.Result::Err(errors.rest_error(400, "request-invalid", "header-too-large", "request header exceeds 8192 bytes"));
+		}
+		return core.Result::Ok(Optional<ParsedRequest>::None());
+	}
+	if header_end > MAX_HEADER_SIZE {
+		return core.Result::Err(errors.rest_error(400, "request-invalid", "header-too-large", "request header exceeds 8192 bytes"));
+	}
+	val content_length = _scan_content_length(conn_buf, header_end);
+	if content_length > 0 {
+		val body_available = conn_buf.len - header_end;
+		if body_available < content_length {
+			// Headers complete, body still arriving — wait for more bytes.
+			return core.Result::Ok(Optional<ParsedRequest>::None());
+		}
+	}
+	match _parse_request_full(conn_buf) {
+		core.Result::Err(e) => {
+			return core.Result::Err(move e);
+		},
+		core.Result::Ok(parsed) => {
+			val consumed = parsed.consumed;
+			if consumed >= conn_buf.len {
+				conn_buf.clear();
+			} else {
+				conn_buf.remove_range(0, consumed);
+			}
+			return core.Result::Ok(Optional::Some(move parsed));
 		}
 	}
 }

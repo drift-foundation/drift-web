@@ -1,0 +1,34 @@
+// Minimal web.rest server for the latency repro: GET /ping -> {"ok":1}. No DB, no app state.
+// Pair with wcbench (web.client). Reproduces the per-request latency + alternating connection
+// failures that a stock python HTTP/1.1 server does NOT exhibit under the identical client load.
+module wcserver;
+
+import std.core as core;
+import std.console as console;
+import std.cli as cli;
+import std.concurrent as conc;
+import web.rest as rest;
+
+fn main(argv: Array<String>) nothrow -> Int {
+	var p = cli.parser("wcserver", "0.1.0", "minimal web.rest server (latency repro)");
+	val _ = p.option_int("port", "p", "PORT", "listening port", true);
+	var port = 8090;
+	match p.parse(argv) {
+		core.Result::Ok(parsed) => { match parsed.get_int("port", p) { Some(v) => { port = v; }, None => {} } },
+		core.Result::Err(_) => { console.eprintln("wcserver: bad args (need --port N)"); return 2; }
+	}
+	return try _run(port) catch unexpected { console.eprintln("wcserver: fatal"); 1 };
+}
+
+fn _run(port: Int) throws -> Int {
+	var ab = rest.new_app_builder();
+	rest.bind(ab, "127.0.0.1", port);
+	var app = rest.build_app(move ab);
+	rest.add_throws_route(app, "GET", "/ping",
+		|req, ctx| captures() => { return rest.json_response(200, "{\"ok\":1}"); }).or_throw();
+	console.println("wcserver listening");
+	var running = rest.start(move app, conc.Duration(millis = 0));
+	val _ = conc.await_signal();
+	val _ = rest.shutdown(running);
+	return 0;
+}

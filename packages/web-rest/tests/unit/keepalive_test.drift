@@ -1070,7 +1070,253 @@ fn scenario_large_response_keepalive() nothrow -> Int {
 	}
 }
 
-// --- Test 7: No-pipelining contract ---
+// --- Test 7: Sequential fresh keep-alive connections do not serialize ---
+// Regression for the web.rest keep-alive accept-serialization bug: a client
+// doing sequential requests, each on a FRESH keep-alive connection that it
+// leaves open (exactly how web.client's keep-alive pool behaves, and how a
+// coordinator dispatching to participants drives the server), saw ~idle_timeout
+// of stall per request because the accept loop serviced connections inline —
+// one idle keep-alive connection blocked accept() of the next. Here we hold
+// three fresh keep-alive connections OPEN at once and require each to be served
+// promptly. With the old inline/serial loop, connection 2's response read times
+// out (the server is parked on connection 1's idle read for up to idle_timeout,
+// 5000ms, which is > the 2000ms read budget below). Per-connection fibers fix it.
+
+fn _open_keepalive_request(port: Int, timeout: conc.Duration, read_timeout: conc.Duration) nothrow -> core.Result<net.TcpStream, Int> {
+	var addr = net.socket_addr("127.0.0.1", port);
+	match net.connect(&addr, timeout) {
+		core.Result::Err(_) => { return core.Result::Err(1); },
+		core.Result::Ok(conn) => {
+			var stream = move conn;
+			var buf: Array<Byte> = [];
+			// Keep-alive request (no Connection: close): server keeps the socket
+			// open, and the client leaves it open too.
+			val req = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
+			match _write_raw(&stream, &req, timeout) {
+				core.Result::Err(_) => { val _ = stream.close(timeout); return core.Result::Err(2); },
+				core.Result::Ok(_) => {}
+			}
+			match _read_one_response(&stream, &mut buf, read_timeout) {
+				core.Result::Err(_) => { val _ = stream.close(timeout); return core.Result::Err(3); },
+				core.Result::Ok(resp) => {
+					val s_200 = "HTTP/1.1 200 OK";
+					if !_starts_with(&resp, &s_200) { val _ = stream.close(timeout); return core.Result::Err(4); }
+				}
+			}
+			return core.Result::Ok(move stream);
+		}
+	}
+}
+
+fn scenario_sequential_fresh_connections() nothrow -> Int {
+	val timeout = conc.Duration(millis = 5000);
+	// Read budget deliberately shorter than the server idle_timeout (default
+	// 5000ms) so the old serial loop's stall surfaces as a timeout failure.
+	val read_timeout = conc.Duration(millis = 2000);
+
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 701; },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+				core.Result::Err(_) => { return 702; },
+				core.Result::Ok(_) => {}
+			}
+			match server.listen_app(&app, timeout) {
+				core.Result::Err(_) => { return 703; },
+				core.Result::Ok(lst) => {
+					var listener = move lst;
+					val port = listener.local_port();
+					var handle = server.new_server_handle();
+					// Unlimited requests; stop explicitly at the end.
+					var caller_handle = server.clone_handle(&handle);
+					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
+						return _run_serve(move app, move listener, move handle, timeout);
+					});
+
+					match _open_keepalive_request(port, timeout, read_timeout) {
+						core.Result::Err(c) => { server.stop(&caller_handle); val _ = sv.join(); return 710 + c; },
+						core.Result::Ok(c1) => {
+							var s1 = move c1;
+							match _open_keepalive_request(port, timeout, read_timeout) {
+								core.Result::Err(c) => { val _ = s1.close(timeout); server.stop(&caller_handle); val _ = sv.join(); return 720 + c; },
+								core.Result::Ok(c2) => {
+									var s2 = move c2;
+									match _open_keepalive_request(port, timeout, read_timeout) {
+										core.Result::Err(c) => { val _ = s1.close(timeout); val _ = s2.close(timeout); server.stop(&caller_handle); val _ = sv.join(); return 730 + c; },
+										core.Result::Ok(c3) => {
+											var s3 = move c3;
+											val _ = s1.close(timeout);
+											val _ = s2.close(timeout);
+											val _ = s3.close(timeout);
+											server.stop(&caller_handle);
+											match sv.join() {
+												core.Result::Err(_) => { return 740; },
+												core.Result::Ok(exit_code) => {
+													if exit_code != 0 { return 741; }
+												}
+											}
+											return 0;
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// --- Test 8: A partial/silent connection does not monopolize the server ---
+// Regression for the accept-serialization trap in its sharpest form: conn A
+// connects and sends PARTIAL headers with no terminator (or nothing at all),
+// then stays silent. With a server that does a blocking read on one connection,
+// the accept loop parks on A for up to idle_timeout (5000ms), so a fresh conn B
+// stalls. The single-fiber non-blocking event loop reads A, sees no complete
+// request (WOULD_BLOCK / incomplete), and moves on — B must be served promptly,
+// well below the idle timeout (2000ms read budget < 5000ms idle).
+
+fn scenario_partial_connection_does_not_block() nothrow -> Int {
+	val timeout = conc.Duration(millis = 5000);
+	val read_timeout = conc.Duration(millis = 2000);
+
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 801; },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+				core.Result::Err(_) => { return 802; },
+				core.Result::Ok(_) => {}
+			}
+			match server.listen_app(&app, timeout) {
+				core.Result::Err(_) => { return 803; },
+				core.Result::Ok(lst) => {
+					var listener = move lst;
+					val port = listener.local_port();
+					var handle = server.new_server_handle();
+					var caller_handle = server.clone_handle(&handle);
+					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
+						return _run_serve(move app, move listener, move handle, timeout);
+					});
+
+					// Conn A: send PARTIAL headers (no CRLFCRLF terminator), stay open + silent.
+					var addr = net.socket_addr("127.0.0.1", port);
+					match net.connect(&addr, timeout) {
+						core.Result::Err(_) => { server.stop(&caller_handle); val _ = sv.join(); return 810; },
+						core.Result::Ok(ca) => {
+							var sa = move ca;
+							val partial = "GET /health HTTP/1.1\r\nHost: localhost";
+							match _write_raw(&sa, &partial, timeout) {
+								core.Result::Err(_) => { val _ = sa.close(timeout); server.stop(&caller_handle); val _ = sv.join(); return 811; },
+								core.Result::Ok(_) => {}
+							}
+							// Conn B: a complete request must be served promptly despite A.
+							match _open_keepalive_request(port, timeout, read_timeout) {
+								core.Result::Err(c) => { val _ = sa.close(timeout); server.stop(&caller_handle); val _ = sv.join(); return 820 + c; },
+								core.Result::Ok(c2) => {
+									var sb = move c2;
+									val _ = sb.close(timeout);
+									val _ = sa.close(timeout);
+									server.stop(&caller_handle);
+									match sv.join() {
+										core.Result::Err(_) => { return 840; },
+										core.Result::Ok(exit_code) => {
+											if exit_code != 0 { return 841; }
+										}
+									}
+									return 0;
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// --- Test 9: A request larger than the server read buffer is drained ---
+// Regression for the edge-triggered read contract: the server's per-readiness
+// read MUST drain the socket to WOULD_BLOCK, not read once. A single read of the
+// internal scratch buffer (4096 bytes) cannot satisfy a request whose
+// headers+body exceed that, and the reactor is edge-backed — there is no
+// guaranteed second wake for bytes already buffered in the socket. With a
+// one-read-per-readiness loop the request never completes (try_parse stays
+// incomplete) and the client times out. Here we POST a body well over 4096 bytes
+// and require a prompt 200.
+
+fn scenario_large_request_drained() nothrow -> Int {
+	val timeout = conc.Duration(millis = 5000);
+	val read_timeout = conc.Duration(millis = 2000);
+
+	var b = rest.new_app_builder();
+	rest.bind(&mut b, "127.0.0.1", 0);
+	match rest.build_app(move b) {
+		core.Result::Err(_) => { return 901; },
+		core.Result::Ok(a) => {
+			var app = move a;
+			match rest_app.add_route(&mut app, "POST", "/big", core.callback2(_health_handler)) {
+				core.Result::Err(_) => { return 902; },
+				core.Result::Ok(_) => {}
+			}
+			match server.listen_app(&app, timeout) {
+				core.Result::Err(_) => { return 903; },
+				core.Result::Ok(lst) => {
+					var listener = move lst;
+					val port = listener.local_port();
+					var handle = server.new_server_handle();
+					handle.max_requests = 1;
+					var caller_handle = server.clone_handle(&handle);
+					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
+						return _run_serve(move app, move listener, move handle, timeout);
+					});
+
+					// ~12 KB body — forces several reads of the 4096-byte scratch.
+					val body = _build_large_body() + _build_large_body() + _build_large_body();
+					val clen = body.byte_length();
+					val req = "POST /big HTTP/1.1\r\nHost: localhost\r\nContent-Length: " + fmt.format_int(clen) + "\r\nConnection: close\r\n\r\n" + body;
+
+					var addr = net.socket_addr("127.0.0.1", port);
+					match net.connect(&addr, timeout) {
+						core.Result::Err(_) => { server.stop(&caller_handle); val _ = sv.join(); return 904; },
+						core.Result::Ok(conn) => {
+							var stream = move conn;
+							var read_buf: Array<Byte> = [];
+							match _write_raw(&stream, &req, timeout) {
+								core.Result::Err(_) => { val _ = stream.close(timeout); server.stop(&caller_handle); val _ = sv.join(); return 905; },
+								core.Result::Ok(_) => {}
+							}
+							match _read_one_response(&stream, &mut read_buf, read_timeout) {
+								core.Result::Err(_) => { val _ = stream.close(timeout); server.stop(&caller_handle); val _ = sv.join(); return 906; },
+								core.Result::Ok(resp) => {
+									val s_200 = "HTTP/1.1 200 OK";
+									if !_starts_with(&resp, &s_200) { val _ = stream.close(timeout); server.stop(&caller_handle); val _ = sv.join(); return 907; }
+								}
+							}
+							val _ = stream.close(timeout);
+							server.stop(&caller_handle);
+							match sv.join() {
+								core.Result::Err(_) => { return 908; },
+								core.Result::Ok(exit_code) => {
+									if exit_code != 0 { return 909; }
+								}
+							}
+							return 0;
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// --- Test 10: No-pipelining contract ---
 // This test documents that the server processes requests sequentially on a
 // single connection. It does NOT dispatch multiple requests concurrently.
 // The test is implicit in test 2 (back-to-back): both requests written before
@@ -1091,5 +1337,11 @@ fn main() nothrow -> Int {
 	if e != 0 { return e; }
 	val f = scenario_large_response_keepalive();
 	if f != 0 { return f; }
+	val g = scenario_sequential_fresh_connections();
+	if g != 0 { return g; }
+	val h = scenario_partial_connection_does_not_block();
+	if h != 0 { return h; }
+	val k = scenario_large_request_drained();
+	if k != 0 { return k; }
 	return 0;
 }

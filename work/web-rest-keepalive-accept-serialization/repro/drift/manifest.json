@@ -1,0 +1,10 @@
+{
+  "schema_version": 2,
+  "project": { "name": "wcbench", "license": "MIT" },
+  "artifacts": [
+    { "kind": "app", "name": "wcbench", "module_namespace": "wcbench", "version": "0.1.0",
+      "description": "web.client latency bench", "entry_module": "src/bench.drift",
+      "entry_point": "wcbench::main", "modules": ["src/"],
+      "package_deps": [ { "name": "web-client", "version": "0.4" } ] }
+  ]
+}

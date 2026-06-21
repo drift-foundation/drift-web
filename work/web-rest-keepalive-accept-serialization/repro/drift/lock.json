@@ -1,0 +1,77 @@
+{
+  "schema_version": 4,
+  "artifacts": {
+    "wcbench": {
+      "resolved": {
+        "web-client": {
+          "version": "0.4.2",
+          "sha256": "107beb5d88d232f933260668334f26efa2d639c957d2a1b0bbcd5502a20856a9",
+          "author_key": "ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0=",
+          "source_content_id": "sha256:b5174bf52bf3171590254c70f0c5ea1aac24b5b13815e93f9c38432380c96d92",
+          "source_attestation_key": "ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0=",
+          "dep_type": "direct"
+        },
+        "web-rest": {
+          "version": "0.5.4",
+          "sha256": "2c2b72983370ab17e8ea921e10289fcd803d1dceeb83dd941aeb1625f1b350d9",
+          "author_key": "ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0=",
+          "source_content_id": "sha256:f7e7f7002a8658620151cbf1ac3f0f80954671abe4f2e5b736b45edd6a88bb60",
+          "source_attestation_key": "ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0=",
+          "dep_type": "direct"
+        },
+        "web-jwt": {
+          "version": "0.4.2",
+          "sha256": "3ef9ff9c38acc0d9cf7dab29c1cca52df22cc48ddde1760e6b171ced3889a6bd",
+          "author_key": "ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0=",
+          "source_content_id": "sha256:5bb8aae9b06db58210ca035c0625ace02cdc6ea1345f248e896b6320ada70c99",
+          "source_attestation_key": "ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0=",
+          "dep_type": "transitive"
+        },
+        "net-tls": {
+          "version": "0.5.2",
+          "sha256": "05d6d945a62e9e42b2676dd0035b89e134bccbe5be88d75d715194425076b0bd",
+          "author_key": "ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0=",
+          "source_content_id": "sha256:3f2fd3f603589b4369c19fc20e73020fdca92a75f972a0fc16ee82f4e3c036a7",
+          "source_attestation_key": "ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0=",
+          "dep_type": "transitive"
+        }
+      }
+    },
+    "wcserver": {
+      "resolved": {
+        "web-client": {
+          "version": "0.4.2",
+          "sha256": "107beb5d88d232f933260668334f26efa2d639c957d2a1b0bbcd5502a20856a9",
+          "author_key": "ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0=",
+          "source_content_id": "sha256:b5174bf52bf3171590254c70f0c5ea1aac24b5b13815e93f9c38432380c96d92",
+          "source_attestation_key": "ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0=",
+          "dep_type": "direct"
+        },
+        "web-rest": {
+          "version": "0.5.4",
+          "sha256": "2c2b72983370ab17e8ea921e10289fcd803d1dceeb83dd941aeb1625f1b350d9",
+          "author_key": "ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0=",
+          "source_content_id": "sha256:f7e7f7002a8658620151cbf1ac3f0f80954671abe4f2e5b736b45edd6a88bb60",
+          "source_attestation_key": "ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0=",
+          "dep_type": "direct"
+        },
+        "web-jwt": {
+          "version": "0.4.2",
+          "sha256": "3ef9ff9c38acc0d9cf7dab29c1cca52df22cc48ddde1760e6b171ced3889a6bd",
+          "author_key": "ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0=",
+          "source_content_id": "sha256:5bb8aae9b06db58210ca035c0625ace02cdc6ea1345f248e896b6320ada70c99",
+          "source_attestation_key": "ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0=",
+          "dep_type": "transitive"
+        },
+        "net-tls": {
+          "version": "0.5.2",
+          "sha256": "05d6d945a62e9e42b2676dd0035b89e134bccbe5be88d75d715194425076b0bd",
+          "author_key": "ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0=",
+          "source_content_id": "sha256:3f2fd3f603589b4369c19fc20e73020fdca92a75f972a0fc16ee82f4e3c036a7",
+          "source_attestation_key": "ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0=",
+          "dep_type": "transitive"
+        }
+      }
+    }
+  }
+}

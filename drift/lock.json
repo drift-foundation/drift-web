@@ -4,10 +4,10 @@
     "web-client": {
       "resolved": {
         "net-tls": {
-          "version": "0.5.2",
-          "sha256": "055b3baf4c691e9bc5fb00ac194c5eba6209b79b8ef0a924f216b25111e55598",
+          "version": "0.5.3",
+          "sha256": "7b6833e441e4ffbaec38ff5b5425db6f911ad5b434fa6496ab98757389b0db70",
           "author_key": "ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0=",
-          "source_content_id": "sha256:73f4714af7918e23e1a0c649288afaa92f2bf48aa91a98d9a5819640f96be5bf",
+          "source_content_id": "sha256:8e748a4125aebd137ed3dce813a0350d88eaf86b807252097e3a7e49a01d2ef4",
           "source_attestation_key": "ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0=",
           "dep_type": "direct"
         }

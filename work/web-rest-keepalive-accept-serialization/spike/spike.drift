@@ -1,0 +1,210 @@
+module spike;
+
+// Step-2 spike: prove ONE fiber can multiplex accept + a readable connection set
+// via std.net non-blocking (Duration 0) timeouts, yielding to a co-located client
+// fiber. Echo only — no HTTP semantics. Validates: WOULD_BLOCK detection,
+// Array<TcpStream> swap-remove, non-blocking read/write, co-located yielding, and
+// the core invariant (an idle keep-alive connection does not block a fresh one).
+
+import std.core as core;
+import std.io as io;
+import std.net as net;
+import std.concurrent as conc;
+import std.sync as sync;
+import std.format as fmt;
+import std.console as console;
+
+fn _zero() nothrow -> conc.Duration { return conc.Duration(millis = 0); }
+
+fn _to_buf(s: &String) nothrow -> io.Buffer {
+	val n = s.byte_length();
+	var b = io.buffer(n);
+	var i = 0;
+	while i < n {
+		io.buffer_write(&mut b, i, core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return move b;
+}
+
+// --- single-fiber echo event loop ---
+fn _echo_serve(listener: net.TcpListener, stopped: conc.Arc<sync.AtomicBool>) nothrow -> Int {
+	val zero = conc.Duration(millis = 0);
+	var streams: Array<net.TcpStream> = [];
+	var alive = true;
+	while alive {
+		val sf = stopped.get();
+		if sf.load(sync.MemoryOrder::Acquire()) {
+			alive = false;
+		}
+		if alive {
+			var progressed = false;
+
+			// 1. non-blocking accept
+			match listener.accept(zero) {
+				core.Result::Ok(s) => { streams.push(move s); progressed = true; },
+				core.Result::Err(e) => {
+					if e.kind != net.NET_ERROR_KIND_WOULD_BLOCK {
+						// real accept error — ignore for the spike
+					}
+				}
+			}
+
+			// 2. service each connection (non-blocking read → echo)
+			var i = 0;
+			while i < streams.len {
+				var remove = false;
+				var rbuf = io.buffer(1024);
+				match streams[i].read(&mut rbuf, zero) {
+					core.Result::Ok(n) => {
+						if n == 0 {
+							remove = true; // EOF
+							progressed = true;
+						} else {
+							var wbuf = io.buffer(n);
+							var j = 0;
+							while j < n {
+								io.buffer_write(&mut wbuf, j, io.buffer_read(&mut rbuf, j));
+								j = j + 1;
+							}
+							val _ = streams[i].write(&wbuf, conc.Duration(millis = 1000));
+							progressed = true;
+						}
+					},
+					core.Result::Err(e) => {
+						if e.kind == net.NET_ERROR_KIND_WOULD_BLOCK {
+							// no data right now — leave open
+						} else {
+							remove = true; // real error
+						}
+					}
+				}
+
+				if remove {
+					val last = streams.len - 1;
+					streams.swap(i, last);
+					match streams.pop() {
+						Optional::Some(s) => { var st = move s; val _ = st.close(zero); },
+						Optional::None => {}
+					}
+					// do not advance i (swapped-in element now occupies slot i)
+				} else {
+					i = i + 1;
+				}
+			}
+
+			// 3. yield / pace: on a no-progress tick, sleep so the single worker
+			// is handed to the co-located client fiber (and we don't busy-spin).
+			if !progressed {
+				val _ = conc.sleep(conc.Duration(millis = 1));
+			}
+		}
+	}
+	while streams.len > 0 {
+		match streams.pop() {
+			Optional::Some(s) => { var st = move s; val _ = st.close(zero); },
+			Optional::None => {}
+		}
+	}
+	return 0;
+}
+
+// --- client helpers (co-located, on the main fiber) ---
+fn _send(stream: &net.TcpStream, s: &String) nothrow -> Bool {
+	var b = _to_buf(s);
+	match stream.write(&b, conc.Duration(millis = 2000)) {
+		core.Result::Ok(_) => { return true; },
+		core.Result::Err(_) => { return false; }
+	}
+}
+
+fn _recv(stream: &net.TcpStream, expect_len: Int) nothrow -> String {
+	var got: Array<Byte> = [];
+	val t = conc.Duration(millis = 2000);
+	while got.len < expect_len {
+		var rbuf = io.buffer(1024);
+		match stream.read(&mut rbuf, t) {
+			core.Result::Err(_) => { return ""; },
+			core.Result::Ok(n) => {
+				if n == 0 { return ""; }
+				var j = 0;
+				while j < n {
+					got.push(io.buffer_read(&mut rbuf, j));
+					j = j + 1;
+				}
+			}
+		}
+	}
+	var ob = io.buffer(got.len);
+	var k = 0;
+	while k < got.len {
+		io.buffer_write(&mut ob, k, got[k]);
+		k = k + 1;
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&ob), got.len);
+}
+
+fn _open(port: Int) nothrow -> core.Result<net.TcpStream, Int> {
+	var addr = net.socket_addr("127.0.0.1", port);
+	match net.connect(&addr, conc.Duration(millis = 2000)) {
+		core.Result::Err(_) => { return core.Result::Err(1); },
+		core.Result::Ok(c) => { return core.Result::Ok(move c); }
+	}
+}
+
+fn main(argv: Array<String>) nothrow -> Int {
+	val zero = conc.Duration(millis = 0);
+	var addr = net.socket_addr("127.0.0.1", 0);
+	match net.listen(&addr, conc.Duration(millis = 2000)) {
+		core.Result::Err(_) => { console.println("listen failed"); return 99; },
+		core.Result::Ok(lst) => {
+			var listener = move lst;
+			val port = listener.local_port();
+			val stopped = conc.arc(sync.atomic_bool(false));
+			val stopped_srv = stopped.clone();
+			var sv = conc.spawn_cb(| | captures(move listener, move stopped_srv) => {
+				return _echo_serve(move listener, move stopped_srv);
+			});
+
+			var rc = 0;
+
+			match _open(port) {
+				core.Result::Err(_) => { rc = 10; },
+				core.Result::Ok(ca) => {
+					var a = move ca;
+					val m1 = "A1";
+					if !_send(&a, &m1) { rc = 11; }
+					else if _recv(&a, 2) != "A1" { rc = 12; }
+					else {
+						// conn B: while A is open+idle, a fresh connection must be
+						// serviced promptly (the core invariant).
+						match _open(port) {
+							core.Result::Err(_) => { rc = 20; },
+							core.Result::Ok(cb) => {
+								var bs = move cb;
+								val m2 = "B1";
+								if !_send(&bs, &m2) { rc = 21; }
+								else if _recv(&bs, 2) != "B1" { rc = 22; }
+								else {
+									// A's SECOND request on the same kept-open conn.
+									val m3 = "A2";
+									if !_send(&a, &m3) { rc = 31; }
+									else if _recv(&a, 2) != "A2" { rc = 32; }
+								}
+								val _ = bs.close(zero);
+							}
+						}
+					}
+					val _ = a.close(zero);
+				}
+			}
+
+			val sflag = stopped.get();
+			sflag.store(true, sync.MemoryOrder::Release());
+			val _ = sv.join();
+
+			if rc == 0 { console.println("SPIKE OK"); } else { console.println("SPIKE FAIL rc=" + fmt.format_int(rc)); }
+			return rc;
+		}
+	}
+}
