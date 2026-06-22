@@ -360,13 +360,35 @@ pub fn serve(a: app.App, listener: net.TcpListener, handle: ServerHandle, timeou
 					}
 				}
 
-				// 2c. Idle close: no response pending and silent beyond the idle
-				// timeout (covers never-sent, partial-request, and post-response
-				// idle keep-alive connections).
+				// 2c. Idle handling: no response pending and silent beyond the idle
+				// timeout. Two cases, distinguished by whether the client sent any
+				// request bytes that we could not yet complete:
+				//   - rbuf non-empty → the client sent a partial request and then
+				//     stalled (headers complete but the Content-Length body never
+				//     arrived, or headers themselves truncated). try_parse_request
+				//     returned Ok(None) ("need more bytes") and the bytes never came.
+				//     Emit a 400 so the client learns the request was incomplete,
+				//     then close once the response flushes — this is the request
+				//     window timing out, not a clean keep-alive idle.
+				//   - rbuf empty → a never-sent connection or a fully-drained idle
+				//     keep-alive connection. Close silently with no response, the
+				//     standard HTTP handling for an idle connection.
 				if !remove {
 					if conns[i].wbuf.len == 0 {
 						if now_ms - conns[i].last_active_ms >= idle_ms {
-							remove = true;
+							if conns[i].rbuf.len > 0 {
+								event_counter = event_counter + 1;
+								val eid = "evt-" + fmt.format_int(event_counter);
+								val terr = errors.rest_error(400, "request-invalid", "incomplete-body", "request incomplete before idle timeout");
+								val er = response.error_envelope(&terr, &eid);
+								var ebytes = http.serialize_response(&er, true);
+								conns[i].rbuf.clear();
+								conns[i].wbuf = move ebytes;
+								conns[i].close_after = true;
+								progressed = true;
+							} else {
+								remove = true;
+							}
 						}
 					}
 				}

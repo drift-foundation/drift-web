@@ -611,7 +611,7 @@ fn scenario_large_headers() nothrow -> Int {
 // across multiple malformed requests on the same lifecycle.
 //
 // Tags allowed per sub-case:
-//   1. empty (no data sent, connection held open until server times out): read-failed or empty-request
+//   1. empty (no data sent, connection held open until server times out): silent idle-close, no response
 //   2. blank request line (\r\n\r\n): malformed-http
 //   3. no path (GET\r\n\r\n): malformed-http
 //   4. Content-Length but no body: incomplete-body
@@ -620,8 +620,9 @@ fn scenario_large_headers() nothrow -> Int {
 //   7. no HTTP version (GET /health\r\n\r\n): malformed-http
 
 // Raw send+recv: connect, optionally write raw bytes, read whatever comes back.
-// If payload is empty, connects without writing and waits for the server to
-// respond (server's stream.read() times out → error envelope sent back).
+// If payload is empty, connects without writing; the server idle-closes the
+// silent connection with no response, so the read collects 0 bytes and this
+// returns Err(3).
 fn _raw_send_recv(port: Int, payload: &String, timeout: conc.Duration) nothrow -> core.Result<String, Int> {
 	var addr = net.socket_addr("127.0.0.1", port);
 	match net.connect(&addr, timeout) {
@@ -697,8 +698,6 @@ fn scenario_malformed_matrix() nothrow -> Int {
 	val srv_timeout = conc.Duration(millis = 1000);
 	val cli_timeout = conc.Duration(millis = 5000);
 	val s_400 = "HTTP/1.1 400 Bad Request";
-	val t_read_failed = "read-failed";
-	val t_empty = "empty-request";
 	val t_malformed = "malformed-http";
 	val t_incomplete = "incomplete-body";
 	val empty = "";
@@ -731,19 +730,29 @@ fn scenario_malformed_matrix() nothrow -> Int {
 						return _run_serve(move app, move listener, move handle, srv_timeout);
 					});
 
-					// Sub 1: empty — client sends nothing, keeps connection open.
-					// Server's stream.read() times out (1s) → read-failed or
-					// empty-request. Server writes error response. Client reads it.
+					// Sub 1: empty — client connects and sends nothing, holding the
+					// connection open. Proper HTTP handling for a connection that
+					// transmits zero bytes is a silent idle-close: there is no request
+					// to call "bad", so the server sends no response and closes the
+					// connection once idle_timeout (1s) elapses. The client therefore
+					// reads EOF having collected no bytes → _raw_send_recv returns
+					// Err(3). Any response to a zero-byte connection is a contract
+					// violation. (Cases that DO send bytes but fail to parse still get a
+					// 400 envelope — see subs 2-7.)
 					val p1 = "";
 					match _raw_send_recv(port, &p1, cli_timeout) {
-						core.Result::Err(_) => {
+						core.Result::Err(code) => {
+							if code != 3 {
+								server.stop(&caller_handle);
+								val _ = sv.join();
+								return 510;
+							}
+						},
+						core.Result::Ok(_) => {
+							// Server responded to a zero-byte connection — must not happen.
 							server.stop(&caller_handle);
 							val _ = sv.join();
-							return 510;
-						},
-						core.Result::Ok(r1) => {
-							val c1 = _check_malformed_response(&r1, &s_400, &t_read_failed, &t_empty);
-							if c1 != 0 { return 511; }
+							return 511;
 						}
 					}
 
