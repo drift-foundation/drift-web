@@ -19,8 +19,10 @@ is independent and provides outbound HTTP/HTTPS via `net-tls`.
 
 ## Consumer prerequisites
 
-- Drift toolchain with `driftc` (runtime ABI 6 or later)
-- Package artifacts under a shared library root (`.zdmp` + `.sig`)
+- Drift toolchain with `driftc` (driftc 0.33.58+ / runtime ABI 18 or
+  later — required to parse the v2 signed claims)
+- Package artifacts under a shared package root (`.zdmp` plus the signed
+  `.author-claim`, `.cert-claim`, and `.provenance.zst` sidecars)
 - The publisher's `.author-profile` (shipped inside the versioned
   artifact directory)
 - Trust established via `drift trust`
@@ -28,16 +30,17 @@ is independent and provides outbound HTTP/HTTPS via `net-tls`.
 ## Trust and signed package setup
 
 drift-web is consumed through Drift's signed package flow. Consumers
-need the package artifact, its signature sidecar, and the correct trust
-setup.
+need the package artifact, its signed author/cert/provenance sidecars,
+and the correct trust setup.
 
 ### What Drift verifies
 
 Drift distinguishes between two trust domains:
 
-- **Bundled stdlib**: the deployed toolchain ships `std.zdmp` and its
-  detached signature sidecar. The compiler verifies stdlib against the
-  bundled core trust store that ships with the toolchain.
+- **Bundled stdlib**: the deployed toolchain ships `std.dmp` with its
+  signed `std.author-claim` / `std.cert-claim` sidecars. The compiler
+  verifies stdlib against the bundled core trust store that ships with
+  the toolchain.
 - **User / third-party packages**: packages such as drift-web are
   verified against the consumer's trust store. Trust is established by
   importing the publisher's `.author-profile` via `drift trust`.
@@ -62,22 +65,20 @@ is the primary consumer path for establishing package trust.
 ### Package root layout
 
 ```
-<library-root>/
+<package-root>/
   web-jwt/
     <version>/
       web-jwt.zdmp
-      web-jwt.sig
-      .author-profile
+      web-jwt.author-claim
+      web-jwt.cert-claim.<key-id>.json
+      web-jwt.provenance.zst
+      web-jwt.author-profile
   web-rest/
     <version>/
-      web-rest.zdmp
-      web-rest.sig
-      .author-profile
+      web-rest.zdmp                       # + same four signed sidecars
   web-client/
     <version>/
-      web-client.zdmp
-      web-client.sig
-      .author-profile
+      web-client.zdmp                     # + same four signed sidecars
 ```
 
 The `.author-profile` is published automatically by `drift deploy`
@@ -88,11 +89,13 @@ inside each versioned artifact directory.
 For signed-package consumption, publish:
 
 - The package artifact (`.zdmp`)
-- Its detached signature sidecar (`.sig`)
+- Its signed sidecars: `.author-claim`, `.cert-claim.<key-id>.json`,
+  and `.provenance.zst`
 - The publisher's `.author-profile`
 
-All three are published automatically by `drift deploy`. Consumers
-import the `.author-profile` via `drift trust` to establish trust.
+All are published automatically by `drift deploy`. Consumers import the
+`.author-profile` via `drift trust` to establish trust, then verify the
+artifact with `drift verify-package`.
 
 ## Compilation
 
@@ -274,7 +277,7 @@ If package consumption fails, identify the phase:
 | Phase | Symptom |
 |---|---|
 | **Trust** | `drift trust` rejects the `.author-profile` (bad signature, key mismatch) |
-| **Verification** | Signature rejected, untrusted signer, missing `.sig` |
+| **Verification** | Claim signature rejected, untrusted signer, missing/`.author-claim`/`.cert-claim`, SCI mismatch |
 | **Package load** | Crash during metadata import |
 | **Checker** | Type errors referencing package types |
 | **Codegen** | LLVM errors |

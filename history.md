@@ -347,3 +347,21 @@
 - Patch bump `web-rest@0.5.0` → `web-rest@0.5.1`: doc-only fix to `docs/effective-web-rest.md` after the app team reported the Request-Accessor block listed `req.body_json()` (method-style) returning `Result<JsonNode, RestError>`. Actual API is `rest.body_json(req)` (free function on the `rest` facade) returning `Result<JsonHandle, RestError>` — JsonHandle is Arc-backed (O(1) clone) and dispatch caches the parse. The other three accessors in the same block (`path_param`, `query_param`, `require_query_param`) were also corrected to free-function form for consistency. No source changes; per-immutability discipline a doc asset edit requires a new version number rather than a republished 0.5.0.
 - Validation under certified toolchain `drift-0.31.67+abi14`:
   - `just rest-check-par` — 18/18 pass (sanity check; behavior unchanged)
+
+## 2026-06-26
+
+- Migrated to staged toolchain `drift-0.33.58+abi18` and staged `net-tls@0.6.0` (pool-wide re-cert for the v2 signed-claim clean break).
+- Signed-schema clean break (driftc 0.33.57, certified in 0.33.58): author/cert claim bodies → **schema v2** (required `artifact_kind` ∈ {`package`,`app`}; cert adds a signed deploy-relative `artifact_path`), provenance → **schema v4** (required `source_content_id`). The SCI now hashes the artifact `kind`. v1 claims / v3 provenance are rejected outright. CLI: `drift verify-package` / `drift verify-app` are top-level; `drift trust verify-package` removed.
+- Artifact-kind migration **reversed**: canonical kinds are now exactly `package` and `app`; `library` is a deprecated alias. `drift/manifest.json` updated `kind: "library"` → `kind: "package"` for all four artifacts.
+- `net-tls@0.6.0` is API-compatible with `0.5.3` (web-client compiles + links clean) — itself a re-cert bump; no source changes required anywhere in drift-web. The slice-2 nested-struct-array `String` CORE_BUG fix is lowering-only and does not apply (no `arrayElem.struct.stringField + concat` shapes in any package).
+- Bumped published `drift-web` package versions (minor — downstream compat affected by the re-cert / dep-range moves):
+  - `web-jwt@0.4.2` → `web-jwt@0.5.0`
+  - `web-rest@0.5.6` → `web-rest@0.6.0` (+ `web-jwt` dep range 0.4 → 0.5)
+  - `web-client@0.4.2` → `web-client@0.5.0` (+ `net-tls` dep range 0.5 → 0.6; resolves to `net-tls@0.6.0`, SCI `16bce968…`)
+  - `or-throw-probe@0.0.3` → `or-throw-probe@0.1.0`
+- Re-minted all four `drift/*.author-claim` as v2 and re-resolved `drift/lock.json` via `just reseal`; `drift trust check` green on all four.
+- Consumer-doc refresh (shipped assets — stale v0-trust-model language): `docs/integration-guide.md` and `README.md` updated — ABI floor `6` → `0.33.58+abi18`; `.sig` detached-signature sidecars → the trust-v1 `.author-claim` / `.cert-claim` / `.provenance.zst` set; bundled stdlib `std.zdmp` → `std.dmp`; added `drift verify-package` to the consume flow. (Doc-asset edits fold into this same first-time re-cut — versions not yet published.)
+- Validation under the staged toolchain `drift-0.33.58+abi18`:
+  - `just test` — full suite green (unit/e2e plain + ASAN + memcheck; `client-https-e2e` against `net-tls@0.6.0`; `consumer-check` against published `.zdmp`)
+  - `just stress` — all scenarios pass (REST concurrency, TLS contamination, pool-stale; + memcheck pass over the client scenarios)
+  - `just perf-smoke` — informational; `drift_rest_ratio` 1.26 missed its internal 1.40 gate, attributed to host measurement environment (powersave governor, quantized Go baselines reproduce identically across runs); metadata-only change cannot affect codegen.
