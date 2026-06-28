@@ -189,7 +189,7 @@ build ARTIFACT="": _require-env
     {{DRIFT}} build {{ARTIFACT}} --driftc "${DRIFTC}"
 
 # Re-mint drift/<artifact>.author-claim under the Foundation author key against
-# the current manifest. With no ARTIFACT, mints all four artifacts.
+# the current manifest. With no ARTIFACT, mints all three artifacts.
 #   DRIFT_LANG_ROOT (default ~/src/drift-lang); DRIFT_SIGN_KEY_FILE (default seed).
 author-claim ARTIFACT="":
     #!/usr/bin/env bash
@@ -201,7 +201,7 @@ author-claim ARTIFACT="":
     if [[ -n "{{ARTIFACT}}" ]]; then
         ARTS=("{{ARTIFACT}}")
     else
-        ARTS=(web-jwt web-rest web-client or-throw-probe)
+        ARTS=(web-jwt web-rest web-client)
     fi
     for ART in "${ARTS[@]}"; do
         echo "[author-claim] minting drift/${ART}.author-claim"

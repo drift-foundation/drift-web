@@ -23,10 +23,6 @@
     "net_tls.*": {
       "authors": ["ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0="],
       "certifiers": ["ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0="]
-    },
-    "probe.*": {
-      "authors": ["ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0="],
-      "certifiers": ["ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0="]
     }
   },
   "revoked": []

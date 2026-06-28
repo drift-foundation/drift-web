@@ -205,7 +205,6 @@ CONSUMER_TESTS = [
     ("rest_or_throw_test",            "consumer.rest_or_throw_test::main",            "tests/consumer/rest_or_throw_test.drift",            False, ["web-rest", "web-jwt"]),
     ("rest_middleware_test",          "consumer.rest_middleware_test::main",          "tests/consumer/rest_middleware_test.drift",          False, ["web-rest", "web-jwt"]),
     ("rest_ctx_test",                 "consumer.rest_ctx_test::main",                 "tests/consumer/rest_ctx_test.drift",                 False, ["web-rest", "web-jwt"]),
-    ("or_throw_probe_test",           "consumer.or_throw_probe_test::main",           "tests/consumer/or_throw_probe_test.drift",           False, ["or-throw-probe"]),
     ("client_compile_test",           "consumer.client_compile_test::main",           "tests/consumer/client_compile_test.drift",           True,  ["web-client", "net-tls"]),
 ]
 

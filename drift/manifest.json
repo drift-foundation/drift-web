@@ -65,17 +65,6 @@
     },
     {
       "kind": "package",
-      "name": "or-throw-probe",
-      "module_namespace": "probe",
-      "version": "0.1.0",
-      "description": "K28 diagnostic probe for package-boundary Throw/Result interaction",
-      "entry_module": "packages/or-throw-probe/src/lib.drift",
-      "modules": [
-        "packages/or-throw-probe/src/lib.drift"
-      ]
-    },
-    {
-      "kind": "package",
       "name": "web-client",
       "module_namespace": "web.client",
       "version": "0.5.0",
