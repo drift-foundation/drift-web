@@ -748,7 +748,7 @@ fn scenario_mixed_throws_and_nothrow_routes() nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val r1 = scenario_single_middleware_passthrough();
 	if r1 != 0 { return r1; }
 

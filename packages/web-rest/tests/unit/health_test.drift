@@ -58,7 +58,7 @@ fn scenario_health_body_exact() nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = scenario_health_status_200();
 	if a != 0 { return a; }
 	val b = scenario_health_body_valid_json();

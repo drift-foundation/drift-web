@@ -251,7 +251,7 @@ fn _client_main(port: Int, warmup_n: Int, measure_n: Int, timeout: conc.Duration
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val timeout = conc.Duration(millis = 10000);
 	val warmup_n = 50;
 	val measure_n = 5000;

@@ -210,7 +210,7 @@ fn scenario_no_temporal_claims_accepted() nothrow -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = scenario_expired_token();
 	if a != 0 { return a; }
 	val b = scenario_expired_within_skew_accepted();

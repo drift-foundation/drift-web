@@ -96,7 +96,7 @@ fn test_validation_error_contract() nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val r1 = test_new_is_empty();
 	if r1 != 0 { return r1; }
 	val r2 = test_add_single_field();

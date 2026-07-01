@@ -564,7 +564,7 @@ fn bench_baseline_health() nothrow -> core.Result<Int, Int> {
 
 // --- Main: read Go baselines, run Drift benchmarks, enforce ratio thresholds ---
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val measure_n = 5000;
 
 	// 1. Read Go baselines from environment.

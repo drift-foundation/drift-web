@@ -21,7 +21,7 @@ fn expect_tag_constants() nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = expect_tag_constants();
 	if a != 0 { return a; }
 	return 0;

@@ -182,7 +182,7 @@ fn scenario_verify_missing_typ_accepted_when_not_required() nothrow -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = scenario_padding_rejected();
 	if a != 0 { return a; }
 	val b = scenario_standard_base64_chars_rejected();

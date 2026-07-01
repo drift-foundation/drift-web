@@ -538,7 +538,7 @@ fn scenario_path_params_cleared_on_redispatch() nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// Routing basics
 	val a = scenario_static_route_match();
 	if a != 0 { return a; }

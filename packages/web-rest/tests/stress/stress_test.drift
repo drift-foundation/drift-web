@@ -1489,7 +1489,7 @@ fn scenario_keepalive_sustained() nothrow -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = scenario_many_sequential_mixed();
 	if a != 0 { return a; }
 	val b = scenario_concurrent_clients();

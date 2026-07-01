@@ -1324,7 +1324,7 @@ fn scenario_large_request_drained() nothrow -> Int {
 // processing. No additional code needed beyond documentation here.
 // See plan.md "No pipelining (MVP)" for the full contract.
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = scenario_two_requests_one_connection();
 	if a != 0 { return a; }
 	val b = scenario_back_to_back_requests();

@@ -8,7 +8,7 @@ import web.client as client;
 // Consumes web-client (+ net-tls) as published packages.
 // Proves: package load, type import, public API surface compiles.
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// Exercise the config/session/request construction path.
 	var cfg = client.new_client_config();
 	client.with_connect_timeout(&mut cfg, 5000);

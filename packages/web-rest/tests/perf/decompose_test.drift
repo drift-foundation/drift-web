@@ -498,7 +498,7 @@ fn bench_rest_keepalive() nothrow -> core.Result<Int, Int> {
 
 // --- Main ---
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val n_cpu = 50000;
 	val n_tcp = 500;
 

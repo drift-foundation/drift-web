@@ -68,7 +68,7 @@ fn _guard_reject(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Res
 	return core.Result::Err(rest.rest_error(401, "unauthorized", "guard-reject", "rejected by guard"));
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val timeout = conc.Duration(millis = 5000);
 	var b = rest.new_app_builder();
 	rest.bind(&mut b, "127.0.0.1", 0);

@@ -13,7 +13,7 @@ fn health(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Result<rest.
 	return core.Result::Ok(rest.json_response(200, "{\"ok\":true}"));
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var b = rest.new_app_builder();
 	rest.bind(&mut b, "127.0.0.1", 0);
 	match rest.build_app(move b) {

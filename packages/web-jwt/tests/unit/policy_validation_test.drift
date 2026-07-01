@@ -64,7 +64,7 @@ fn scenario_sign_options_defaults() nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = scenario_valid_default_policy();
 	if a != 0 { return a; }
 	val b = scenario_valid_custom_policy();

@@ -127,7 +127,7 @@ fn test_validate_min_length_exactly_at_min() nothrow -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// validate_int
 	val r1 = test_validate_int_ok();
 	if r1 != 0 { return r1; }

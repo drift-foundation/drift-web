@@ -65,7 +65,7 @@ fn scenario_two_level_return_fwd() nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = scenario_one_level();
 	if a != 0 { return a; }
 	val b = scenario_two_level_call_then_return();

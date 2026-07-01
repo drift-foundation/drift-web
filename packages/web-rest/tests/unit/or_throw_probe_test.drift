@@ -105,7 +105,7 @@ fn scenario_or_throw_ok() nothrow -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = scenario_query_param_or_throw_400();
 	if a != 0 { return a; }
 	val b = scenario_path_param_or_throw_404();

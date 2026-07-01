@@ -296,7 +296,7 @@ fn scenario_header_case_insensitive() nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = scenario_missing_query_param();
 	if a != 0 { return a; }
 	val b = scenario_query_param_present();

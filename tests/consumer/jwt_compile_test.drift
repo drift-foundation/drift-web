@@ -10,7 +10,7 @@ import web.jwt as jwt;
 // Consumes web-jwt as a published package.
 // Proves: package load, type import, sign/verify codegen.
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var secret: Array<Byte> = [cast<Byte>(115), cast<Byte>(101), cast<Byte>(99)];
 	val now = time.utc_unix_seconds_now();
 

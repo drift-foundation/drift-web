@@ -75,7 +75,7 @@ fn _assert_get(session: &client.Session, url: &String, label: &String) nothrow -
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val https_port = _get_port("HTTPS_TEST_PORT");
 	val ca_path = _get_env("HTTPS_CA_CERT");
 

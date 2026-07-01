@@ -269,7 +269,7 @@ fn scenario_drop_on_context_end() nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val r1 = scenario_set_get_roundtrip();
 	if r1 != 0 { return r1; }
 

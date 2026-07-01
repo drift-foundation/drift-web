@@ -693,7 +693,7 @@ fn probe3_run() nothrow -> Int {
 
 // --- Main ---
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// Probe 1: timeout sensitivity.
 	// Skipping 1ms: SIGPIPE risk (runtime uses raw write(), no MSG_NOSIGNAL).
 	// With both sides on VT fibers (epoll), this tests whether the server

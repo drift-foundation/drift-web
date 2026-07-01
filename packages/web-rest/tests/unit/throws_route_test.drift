@@ -312,7 +312,7 @@ fn _nothrow_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.
 	return core.Result::Ok(rest.json_response(200, "{\"nothrow\":true}"));
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = scenario_pub_throws_ok();
 	if a != 0 { return a; }
 	val b = scenario_pub_throws_bad_request();

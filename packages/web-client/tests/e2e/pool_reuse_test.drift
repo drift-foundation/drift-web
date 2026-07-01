@@ -254,7 +254,7 @@ fn _start_server() nothrow -> core.Result<rest.RunningServer, Int> {
 
 // --- Main ---
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// Start two servers for the different-origins test.
 	var srv1_r = _start_server();
 	var srv2_r = _start_server();

@@ -110,7 +110,7 @@ def build_context(artifact, extra):
 
 def is_test_entry(rel):
     txt = (ROOT / rel).read_text(errors="ignore")
-    return bool(re.search(r"^module\s+", txt, re.M)) and bool(re.search(r"^fn\s+main\(", txt, re.M))
+    return bool(re.search(r"^module\s+", txt, re.M)) and bool(re.search(r"^pub\s+fn\s+main\(", txt, re.M))
 
 
 def module_of(rel):
@@ -236,7 +236,7 @@ def emit_consumer(pkg_staging):
 def emit_one(rel):
     """Build + run a single test (plain) for fast dev iteration."""
     if not is_test_entry(rel):
-        sys.exit(f"error: {rel} is not an executable test entry (module + fn main)")
+        sys.exit(f"error: {rel} is not an executable test entry (module + pub fn main)")
     artifact, extra = infer_context(rel)
     srcs, pkg_flags = build_context(artifact, extra)
     name = Path(rel).stem

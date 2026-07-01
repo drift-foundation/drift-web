@@ -447,7 +447,7 @@ fn scenario_optional_query_default() nothrow -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = scenario_malformed_json_body();
 	if a != 0 { return a; }
 	val b = scenario_validation_fields_email_age();

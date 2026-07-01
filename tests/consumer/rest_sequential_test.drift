@@ -154,7 +154,7 @@ fn _assert_200(resp: &String, label: &String) nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// Client I/O uses a real timeout; server starts with millis=0 to cover
 	// the exact trigger from the 0.27.125 defect report.
 	val client_timeout = conc.Duration(millis = 5000);

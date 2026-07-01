@@ -52,7 +52,7 @@ fn _query_param_local_or_throw_handler(req: &rest.Request, ctx: &mut rest.Contex
 	return rest.json_response(200, "{\"q\":\"" + q + "\"}");
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val timeout = conc.Duration(millis = 5000);
 	var b = rest.new_app_builder();
 	rest.bind(&mut b, "127.0.0.1", 0);

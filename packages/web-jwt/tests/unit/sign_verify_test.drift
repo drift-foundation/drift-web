@@ -268,7 +268,7 @@ fn scenario_sign_no_typ_enforcement() nothrow -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = scenario_sign_verify_happy_path();
 	if a != 0 { return a; }
 	val b = scenario_wrong_secret_rejected();

@@ -76,7 +76,7 @@ fn scenario_strict_default_rejects_missing_typ() nothrow -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = scenario_realtime_now_sourcing_happy_path();
 	if a != 0 { return a; }
 	val b = scenario_strict_default_rejects_missing_typ();

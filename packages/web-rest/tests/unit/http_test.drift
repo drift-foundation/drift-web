@@ -337,7 +337,7 @@ fn scenario_oversized_header_rejected() nothrow -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = scenario_parse_get_request();
 	if a != 0 { return a; }
 	val b = scenario_parse_post_with_body();

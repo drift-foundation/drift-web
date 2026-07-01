@@ -164,7 +164,7 @@ fn scenario_port_out_of_range() nothrow -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = scenario_http_simple();
 	if a != 0 { return a; }
 	val b = scenario_https_simple();

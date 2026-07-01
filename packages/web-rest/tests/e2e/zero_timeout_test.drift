@@ -163,7 +163,7 @@ fn _assert_200(resp: &String, label: &String) nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val client_timeout = conc.Duration(millis = 5000);
 
 	var b = rest.new_app_builder();

@@ -419,7 +419,7 @@ fn scenario_lowercase_authorization_header() nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val ma = scenario_missing_authorization();
 	if ma != 0 { return ma; }
 	val ia = scenario_invalid_authorization_format();

@@ -99,7 +99,7 @@ fn _assert_tls_fail_hostname(wrong_host_port: Int, ca_path: &String) nothrow -> 
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val https_port = _get_port("HTTPS_TEST_PORT");
 	val wrong_host_port = _get_port("HTTPS_WRONG_HOST_PORT");
 	val ca_path = _get_env("HTTPS_CA_CERT");

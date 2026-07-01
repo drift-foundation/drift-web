@@ -34,7 +34,7 @@ fn _bad_throws_handler(req: &rest.Request, ctx: &mut rest.Context) -> rest.Respo
 	throw events:RestBadRequest(tag = "h-bad", message = "bad request from handler", fields_json = _no_fields());
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val timeout = conc.Duration(millis = 5000);
 	var b = rest.new_app_builder();
 	rest.bind(&mut b, "127.0.0.1", 0);

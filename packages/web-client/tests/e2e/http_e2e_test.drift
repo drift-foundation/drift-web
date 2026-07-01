@@ -166,7 +166,7 @@ fn _run_all(session: &client.Session, port: Int) nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var b = rest.new_app_builder();
 	rest.bind(&mut b, "127.0.0.1", 0);
 	match rest.build_app(move b) {

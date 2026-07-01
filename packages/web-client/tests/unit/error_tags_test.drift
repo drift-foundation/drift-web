@@ -64,7 +64,7 @@ fn scenario_config_rejects_invalid() nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = scenario_tag_values();
 	if a != 0 { return a; }
 	val b = scenario_config_defaults();

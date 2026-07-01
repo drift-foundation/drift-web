@@ -53,7 +53,7 @@ fn _get_ca_cert() nothrow -> String {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val https_port = _get_port("HTTPS_TEST_PORT");
 	val ca_path = _get_ca_cert();
 

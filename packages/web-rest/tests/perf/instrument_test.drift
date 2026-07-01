@@ -294,7 +294,7 @@ fn _run_instrumented(a: rest.App, listener: net.TcpListener, warmup_n: Int, meas
 
 // --- Main ---
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val timeout = conc.Duration(millis = 5000);
 	val warmup_n = 20;
 	val measure_n = 500;
