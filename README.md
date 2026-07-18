@@ -39,7 +39,7 @@ just test                    # full test suite
 just deploy                  # build, sign, smoke, publish
 ```
 
-Requirements: `just`, `bash`, `driftc` (0.33.58+ / ABI 18+),
+Requirements: `just`, `bash`, `driftc` (0.33.83+ / ABI 21+),
 `DRIFT_SIGN_KEY_FILE` for deploy.
 
 ## Repository layout

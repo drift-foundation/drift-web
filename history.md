@@ -365,3 +365,22 @@
   - `just test` — full suite green (unit/e2e plain + ASAN + memcheck; `client-https-e2e` against `net-tls@0.6.0`; `consumer-check` against published `.zdmp`)
   - `just stress` — all scenarios pass (REST concurrency, TLS contamination, pool-stale; + memcheck pass over the client scenarios)
   - `just perf-smoke` — informational; `drift_rest_ratio` 1.26 missed its internal 1.40 gate, attributed to host measurement environment (powersave governor, quantized Go baselines reproduce identically across runs); metadata-only change cannot affect codegen.
+
+## 2026-07-17
+
+- Migrated to staged toolchain `drift-0.33.83+abi21` (match-arm ownership enforcement; per the 2026-07-17 drift-lang staging advisory and the net-tls team's migration report) with staged `net-tls@0.6.2`.
+- Source migration was four one-line fixes, all the same shape — `return core.Result::Err(e)` from a match arm with a non-Copy `RestError` binder now requires spelling the transfer (`move e`), all in web-rest test files:
+  - `packages/web-rest/tests/unit/dispatch_test.drift` (3 sites: `_echo_id_handler`, `_multi_param_handler` ×2)
+  - `packages/web-rest/tests/stress/stress_test.drift` (1 site: `_echo_body_handler`)
+  - Zero package-source changes: the `Result::Err(e)` re-wraps in `packages/*/src/` all compiled clean (compiler-driven migration only; no speculative `move`s added, per advisory guidance). All 68 test-plan builds, stress/perf builds, the inline https-e2e compile, and all 10 consumer test files type-check clean on 0.33.83.
+- ABI floor 18 → 21 (documented floor was `0.33.58+abi18`; the build itself comes from abi19 — ABI 21 landed with 0.33.80's blocking-FFI facility, no runtime change from 0.33.83 itself) — full rebuild absorbed in this cycle.
+- Bumped published versions (patch — content change under version immutability; ABI bump requires fresh version numbers regardless):
+  - `web-jwt@0.5.1` → `web-jwt@0.5.2`
+  - `web-rest@0.6.1` → `web-rest@0.6.2` (lock resolves `web-jwt@0.5.2`)
+  - `web-client@0.5.1` → `web-client@0.5.2` (lock resolves `net-tls@0.6.2`)
+- Consumer-doc floor refresh: `README.md` and `docs/integration-guide.md` `0.33.58+/ABI 18` → `0.33.83+/ABI 21`, with a note on the match-arm ownership rule.
+- Re-minted all three `drift/*.author-claim` (new SCIs) and re-resolved `drift/lock.json` via `just reseal`; `drift trust check` green on all three.
+- Validation under the staged toolchain `drift-0.33.83+abi21`:
+  - `just test` — full suite green (unit/e2e plain + ASAN + memcheck; `client-https-e2e` against `net-tls@0.6.2`; `consumer-check` 30/30 against freshly published `.zdmp` 0.5.2/0.6.2/0.5.2)
+  - `just stress` — all scenarios pass (REST concurrency, TLS contamination, pool-stale; + memcheck pass over the client scenarios)
+  - `just perf-smoke` — informational; `drift_rest_ratio` 1.32/1.35 (two runs) missed its internal 1.40 gate, same signature as the 2026-06-26 environment-attributed miss (powersave governor on all cores, plus a long-running foreign process pinning one core at 100% — host not idle; Drift-side numbers quantized identical across runs, and above the 1.26 recorded then). `drift_raw_ratio` 0.94 and `drift_framework_ratio` 0.54 pass. Worth one re-run on a genuinely idle host before certification sign-off.

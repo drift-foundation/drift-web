@@ -49,7 +49,7 @@ fn _echo_id_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.
 			return core.Result::Ok(rest.json_response(200, body));
 		},
 		core.Result::Err(e) => {
-			return core.Result::Err(e);
+			return core.Result::Err(move e);
 		}
 	}
 }
@@ -62,10 +62,10 @@ fn _multi_param_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> c
 	val x_name = "x";
 	val y_name = "y";
 	match rest.path_param(req, &x_name) {
-		core.Result::Err(e) => { return core.Result::Err(e); },
+		core.Result::Err(e) => { return core.Result::Err(move e); },
 		core.Result::Ok(xv) => {
 			match rest.path_param(req, &y_name) {
-				core.Result::Err(e) => { return core.Result::Err(e); },
+				core.Result::Err(e) => { return core.Result::Err(move e); },
 				core.Result::Ok(yv) => {
 					val body = "{\"x\":\"" + xv + "\",\"y\":\"" + yv + "\"}";
 					return core.Result::Ok(rest.json_response(200, body));

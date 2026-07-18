@@ -19,8 +19,9 @@ is independent and provides outbound HTTP/HTTPS via `net-tls`.
 
 ## Consumer prerequisites
 
-- Drift toolchain with `driftc` (driftc 0.33.58+ / runtime ABI 18 or
-  later — required to parse the v2 signed claims)
+- Drift toolchain with `driftc` (driftc 0.33.83+ / runtime ABI 21 or
+  later — ABI 21 artifacts; 0.33.83 also enforces match-arm ownership
+  for non-Copy binders, which these sources are aligned with)
 - Package artifacts under a shared package root (`.zdmp` plus the signed
   `.author-claim`, `.cert-claim`, and `.provenance.zst` sidecars)
 - The publisher's `.author-profile` (shipped inside the versioned

@@ -241,7 +241,7 @@ fn _echo_body_handler(req: &rest.Request, c: &mut rest.Context) nothrow -> core.
 			return core.Result::Ok(rest.json_response(200, "{\"echo\":true}"));
 		},
 		core.Result::Err(e) => {
-			return core.Result::Err(e);
+			return core.Result::Err(move e);
 		}
 	}
 }
