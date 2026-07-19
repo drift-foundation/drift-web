@@ -5,6 +5,7 @@
     "sample_count": 20,
     "raw_tcp_cost": {"min": 0.86, "mean": 1.11, "median": 1.14, "p95": 1.19, "max": 1.19, "threshold": 1.37},
     "rest_cost": {"min": 0.56, "mean": 0.71, "median": 0.71, "p95": 0.76, "max": 0.76, "threshold": 0.88},
-    "framework_cost": {"min": 1.49, "mean": 1.55, "median": 1.54, "p95": 1.67, "max": 1.67, "threshold": 1.92}
+    "framework_cost": {"min": 1.49, "mean": 1.55, "median": 1.54, "p95": 1.67, "max": 1.67, "threshold": 2.11,
+      "threshold_note": "2026-07-18: raised 1.92 -> 2.11 (+10%). Accepted drift, attributed: drift-lang 0.33.58->0.33.84 unwind/match-arm correctness fixes (~7%) + drift-web 5e2c292 poll_many accept-serialization fix (~7%); typical measured cost now 1.79-1.96 on this host. Trend recorded per certified run in build-orchestrator history/perf/. Do not raise further without re-attribution."}
   }
 }
