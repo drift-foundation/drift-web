@@ -9,7 +9,9 @@ export {
 	RoutePattern,
 	parse_route_pattern,
 	match_route,
+	match_route_path,
 	extract_path_params,
+	extract_path_params_path,
 	split_path
 };
 
@@ -160,6 +162,89 @@ pub fn match_route(pattern: &RoutePattern, segments: &Array<String>) nothrow -> 
 		i = i + 1;
 	}
 	return true;
+}
+
+// --- Offset-based matching (no per-request segment allocation) ---
+//
+// A segment is a maximal run of non-'/' bytes — the same set of segments
+// split_path produces (leading/doubled/trailing slashes yield no segment).
+// Matching walks req.path in place; only extract_path_params_path
+// materializes strings, and only for the matched pattern's params.
+
+fn _next_slash(path: &String, start: Int, len: Int) nothrow -> Int {
+	var i = start;
+	while i < len {
+		if core.string_byte_at(path, i) == cast<Byte>(47) {
+			return i;
+		}
+		i = i + 1;
+	}
+	return len;
+}
+
+fn _seg_eq(path: &String, start: Int, end: Int, target: &String) nothrow -> Bool {
+	val n = end - start;
+	if n != target.byte_length() {
+		return false;
+	}
+	var i = 0;
+	while i < n {
+		if core.string_byte_at(path, start + i) != core.string_byte_at(target, i) {
+			return false;
+		}
+		i = i + 1;
+	}
+	return true;
+}
+
+// match_route over the raw path: identical result to
+// match_route(pattern, &split_path(path)) without building the segment array.
+pub fn match_route_path(pattern: &RoutePattern, path: &String) nothrow -> Bool {
+	val len = path.byte_length();
+	var cursor = 0;
+	var seg_idx = 0;
+	while cursor < len {
+		if core.string_byte_at(path, cursor) == cast<Byte>(47) {
+			cursor = cursor + 1;
+		} else {
+			val seg_end = _next_slash(path, cursor, len);
+			if seg_idx >= pattern.seg_count {
+				return false;
+			}
+			if !pattern.seg_is_param[seg_idx] {
+				if !_seg_eq(path, cursor, seg_end, &pattern.seg_values[seg_idx]) {
+					return false;
+				}
+			}
+			seg_idx = seg_idx + 1;
+			cursor = seg_end;
+		}
+	}
+	return seg_idx == pattern.seg_count;
+}
+
+// extract_path_params over the raw path: materializes only param segments.
+// Call only after match_route_path(pattern, path) returned true.
+pub fn extract_path_params_path(pattern: &RoutePattern, path: &String, req: &mut request.Request) nothrow -> Void {
+	val len = path.byte_length();
+	var cursor = 0;
+	var seg_idx = 0;
+	while cursor < len {
+		if core.string_byte_at(path, cursor) == cast<Byte>(47) {
+			cursor = cursor + 1;
+		} else {
+			val seg_end = _next_slash(path, cursor, len);
+			if seg_idx >= pattern.seg_count {
+				return core.void_value();
+			}
+			if pattern.seg_is_param[seg_idx] {
+				request.add_path_param(req, _dup_string(&pattern.seg_param_names[seg_idx]), _substring(path, cursor, seg_end));
+			}
+			seg_idx = seg_idx + 1;
+			cursor = seg_end;
+		}
+	}
+	return core.void_value();
 }
 
 // Populate request path param arrays from matched segments.

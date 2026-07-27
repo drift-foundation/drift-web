@@ -2,6 +2,7 @@ module web.rest.app;
 
 import std.core as core;
 import std.io as io;
+import std.mem as mem;
 import std.concurrent as conc;
 import web.rest.errors as errors;
 import web.rest.events as events;
@@ -341,17 +342,16 @@ fn _dispatch_throws(app: &App, idx: Int, req: &request.Request, ctx: &mut contex
 pub fn dispatch(app_arc: conc.Arc<App>, req: &mut request.Request, ctx: &mut context.Context) nothrow -> core.Result<response.Response, errors.RestError> {
 	val app = app_arc.get();
 
-	// 1. Split request path into segments
-	val segments = router.split_path(&req.path);
-
-	// 2. Find best matching route (method + path; highest static_count wins)
+	// 1+2. Find best matching route (method + path; highest static_count wins).
+	// Matching walks req.path in place (match_route_path) — no per-request
+	// segment array; only the matched pattern's params materialize below.
 	var best_idx = -1;
 	var best_static = -1;
 	var ri = 0;
 	while ri < app.route_methods.len {
 		if app.route_methods[ri] == req.method {
 			val pat = &app.route_patterns[ri];
-			if router.match_route(pat, &segments) {
+			if router.match_route_path(pat, &req.path) {
 				val sc = pat.static_count;
 				if sc > best_static {
 					best_static = sc;
@@ -370,7 +370,10 @@ pub fn dispatch(app_arc: conc.Arc<App>, req: &mut request.Request, ctx: &mut con
 	// 4. Clear stale path params, then extract from matched route
 	request.clear_path_params(req);
 	val best_pat = &app.route_patterns[best_idx];
-	router.extract_path_params(best_pat, &segments, req);
+	// Swap the path out so extraction can borrow it while mutating req.
+	var path_tmp = mem.replace(&mut req.path, "");
+	router.extract_path_params_path(best_pat, &path_tmp, req);
+	req.path = move path_tmp;
 
 	// 4b. Cache body JSON parse result
 	request.cache_body_json(req);

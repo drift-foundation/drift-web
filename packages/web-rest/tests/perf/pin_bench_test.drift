@@ -1,0 +1,181 @@
+module web.rest.tests.perf.pin_bench_test;
+
+import std.core as core;
+import std.io as io;
+import std.time as time;
+import std.format as fmt;
+import lang.thread as thread;
+import web.rest.http as http;
+import web.rest.router as router;
+import web.rest.response as response;
+
+// Temporary diagnostic microbench: pins which framework hot-path area moved
+// between toolchains (certified vs staged). Not part of any gate. Delete after
+// the 0.33.88 framework_cost investigation closes.
+//
+// Blocks:
+//   parse      — http.parse_request over a realistic request (query + headers)
+//   serialize  — http.serialize_response of the /health JSON response
+//   route      — router.split_path + match_route for /health
+//   sba_scan   — core.string_byte_at indexed scan (the taxed primitive)
+//   byte_scan  — identical scan over Array<Byte> (control; no String involved)
+
+fn _to_bytes(s: &String) nothrow -> Array<Byte> {
+	var out: Array<Byte> = [];
+	var i = 0;
+	val n = s.byte_length();
+	while i < n {
+		out.push(core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return move out;
+}
+
+fn _report(name: String, iters: Int, elapsed_ms: Int, acc: Int) nothrow -> Void {
+	thread.console_writeln("[pin] name=" + name
+		+ " iters=" + fmt.format_int(iters)
+		+ " elapsed_ms=" + fmt.format_int(elapsed_ms)
+		+ " acc=" + fmt.format_int(acc));
+}
+
+pub fn main() nothrow -> Int {
+	val req_str = "GET /health?verbose=1 HTTP/1.1\r\nHost: localhost\r\nAccept: application/json\r\n\r\n";
+	val raw = _to_bytes(&req_str);
+
+	// --- parse ---
+	val n_parse = 300000;
+	var acc = 0;
+	var start = time.now_monotonic();
+	var i = 0;
+	while i < n_parse {
+		match http.parse_request(&raw) {
+			core.Result::Err(_) => { acc = acc - 1; },
+			core.Result::Ok(r) => { acc = acc + r.path.byte_length(); }
+		}
+		i = i + 1;
+	}
+	_report("parse", n_parse, time.elapsed_ms(&start), acc);
+
+	// --- serialize ---
+	val n_ser = 500000;
+	val resp = response.json_response(200, "{\"ok\":true}");
+	acc = 0;
+	start = time.now_monotonic();
+	i = 0;
+	while i < n_ser {
+		val out = http.serialize_response(&resp, false);
+		acc = acc + out.len;
+		i = i + 1;
+	}
+	_report("serialize", n_ser, time.elapsed_ms(&start), acc);
+
+	// --- route ---
+	val n_route = 1000000;
+	val health_path = "/health";
+	var pat_ok = false;
+	match router.parse_route_pattern(&health_path) {
+		core.Result::Err(_) => {},
+		core.Result::Ok(p) => {
+			val pat = move p;
+			pat_ok = true;
+			acc = 0;
+			start = time.now_monotonic();
+			i = 0;
+			while i < n_route {
+				val segs = router.split_path(&health_path);
+				if router.match_route(&pat, &segs) {
+					acc = acc + segs.len;
+				}
+				i = i + 1;
+			}
+			_report("route", n_route, time.elapsed_ms(&start), acc);
+
+			acc = 0;
+			start = time.now_monotonic();
+			i = 0;
+			while i < n_route {
+				if router.match_route_path(&pat, &health_path) {
+					acc = acc + 1;
+				}
+				i = i + 1;
+			}
+			_report("route_path", n_route, time.elapsed_ms(&start), acc);
+		}
+	}
+	if !pat_ok {
+		thread.console_writeln("[pin] ERROR route pattern parse failed");
+		return 1;
+	}
+
+	// --- sba_scan ---
+	val n_scan = 200000;
+	val s_len = req_str.byte_length();
+	acc = 0;
+	start = time.now_monotonic();
+	i = 0;
+	while i < n_scan {
+		var j = 0;
+		while j < s_len {
+			acc = acc + cast<Int>(core.string_byte_at(req_str, j));
+			j = j + 1;
+		}
+		i = i + 1;
+	}
+	_report("sba_scan", n_scan, time.elapsed_ms(&start), acc);
+
+	// --- materialize: one 7-byte String construct + drop per iter ---
+	val n_mat = 2000000;
+	acc = 0;
+	start = time.now_monotonic();
+	i = 0;
+	while i < n_mat {
+		var b = io.buffer(7);
+		var k = 0;
+		while k < 7 {
+			io.buffer_write(&mut b, k, raw[4 + k]);
+			k = k + 1;
+		}
+		val s = core.string_from_utf8_bytes(io.buffer_ptr(&b), 7);
+		acc = acc + s.byte_length();
+		i = i + 1;
+	}
+	_report("materialize", n_mat, time.elapsed_ms(&start), acc);
+
+	// --- str_eq: String equality per iter (route-match shape) ---
+	val n_eq = 2000000;
+	var lb = io.buffer(7);
+	var lk = 0;
+	while lk < 7 {
+		io.buffer_write(&mut lb, lk, raw[4 + lk]);
+		lk = lk + 1;
+	}
+	val lhs = core.string_from_utf8_bytes(io.buffer_ptr(&lb), 7);
+	val rhs = "/health";
+	acc = 0;
+	start = time.now_monotonic();
+	i = 0;
+	while i < n_eq {
+		if lhs == rhs {
+			acc = acc + 1;
+		}
+		i = i + 1;
+	}
+	_report("str_eq", n_eq, time.elapsed_ms(&start), acc);
+
+	// --- byte_scan (control) ---
+	acc = 0;
+	start = time.now_monotonic();
+	i = 0;
+	while i < n_scan {
+		var j = 0;
+		while j < raw.len {
+			acc = acc + cast<Int>(raw[j]);
+			j = j + 1;
+		}
+		i = i + 1;
+	}
+	_report("byte_scan", n_scan, time.elapsed_ms(&start), acc);
+
+	thread.console_writeln("[pin] DONE");
+	return 0;
+}

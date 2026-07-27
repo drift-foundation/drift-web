@@ -1,0 +1,163 @@
+module web.rest.tests.unit.router_path_match_test;
+
+import std.core as core;
+import lang.thread as thread;
+import std.format as fmt;
+import web.rest.router as router;
+import web.rest.request as request;
+
+// Parity tests: offset-based match_route_path / extract_path_params_path
+// must agree with the segment-based match_route(split_path(...)) /
+// extract_path_params on every path shape, including slash edge cases.
+
+fn _pattern(raw: &String) nothrow -> core.Result<router.RoutePattern, Int> {
+	match router.parse_route_pattern(raw) {
+		core.Result::Err(_) => { return core.Result::Err(1); },
+		core.Result::Ok(p) => { return core.Result::Ok(move p); }
+	}
+}
+
+// Returns 0 when both matchers agree AND equal `expect` (0=false, 1=true).
+fn _check_match(pattern_raw: String, path: String, expect: Int) nothrow -> Int {
+	match _pattern(&pattern_raw) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(p) => {
+			val pat = move p;
+			val segs = router.split_path(&path);
+			var got_old = 0;
+			if router.match_route(&pat, &segs) {
+				got_old = 1;
+			}
+			var got_new = 0;
+			if router.match_route_path(&pat, &path) {
+				got_new = 1;
+			}
+			if got_old != got_new {
+				thread.console_writeln("matcher disagreement: pattern=" + pattern_raw + " path=" + path);
+				return 2;
+			}
+			if got_new != expect {
+				thread.console_writeln("unexpected match result: pattern=" + pattern_raw + " path=" + path + " got=" + fmt.format_int(got_new));
+				return 3;
+			}
+			return 0;
+		}
+	}
+}
+
+fn scenario_static_and_edges() nothrow -> Int {
+	var rc = _check_match("/health", "/health", 1);
+	if rc != 0 { return 100 + rc; }
+	rc = _check_match("/health", "/healthz", 0);
+	if rc != 0 { return 110 + rc; }
+	rc = _check_match("/health", "/health/", 1);
+	if rc != 0 { return 120 + rc; }
+	rc = _check_match("/health", "//health", 1);
+	if rc != 0 { return 130 + rc; }
+	rc = _check_match("/health", "/HEALTH", 0);
+	if rc != 0 { return 140 + rc; }
+	rc = _check_match("/a/b/c", "/a/b/c", 1);
+	if rc != 0 { return 150 + rc; }
+	rc = _check_match("/a/b/c", "/a/b", 0);
+	if rc != 0 { return 160 + rc; }
+	rc = _check_match("/a/b", "/a/b/c", 0);
+	if rc != 0 { return 170 + rc; }
+	rc = _check_match("/a/b/c", "/a//b///c", 1);
+	if rc != 0 { return 180 + rc; }
+	rc = _check_match("/health", "", 0);
+	if rc != 0 { return 190 + rc; }
+	rc = _check_match("/health", "/", 0);
+	if rc != 0 { return 195 + rc; }
+	return 0;
+}
+
+fn scenario_params() nothrow -> Int {
+	var rc = _check_match("/users/{id}", "/users/42", 1);
+	if rc != 0 { return 200 + rc; }
+	rc = _check_match("/users/{id}", "/users", 0);
+	if rc != 0 { return 210 + rc; }
+	rc = _check_match("/users/{id}", "/users/42/posts", 0);
+	if rc != 0 { return 220 + rc; }
+	rc = _check_match("/users/{id}/posts/{pid}", "/users/42/posts/7", 1);
+	if rc != 0 { return 230 + rc; }
+	rc = _check_match("/users/{id}/posts", "/users/42/settings", 0);
+	if rc != 0 { return 240 + rc; }
+	rc = _check_match("/users/{id}", "/users/42/", 1);
+	if rc != 0 { return 250 + rc; }
+	return 0;
+}
+
+// Compare extract_path_params vs extract_path_params_path on the same match.
+fn _check_extract(pattern_raw: String, path: String, name: String, want: String) nothrow -> Int {
+	match _pattern(&pattern_raw) {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(p) => {
+			val pat = move p;
+			val segs = router.split_path(&path);
+
+			var req_old = request.new_request("GET", "/x");
+			router.extract_path_params(&pat, &segs, &mut req_old);
+			var req_new = request.new_request("GET", "/x");
+			router.extract_path_params_path(&pat, &path, &mut req_new);
+
+			if req_old.path_param_keys.len != req_new.path_param_keys.len {
+				thread.console_writeln("extract count disagreement: pattern=" + pattern_raw + " path=" + path);
+				return 2;
+			}
+
+			var got_old = "";
+			match request.path_param(&req_old, &name) {
+				core.Result::Err(_) => { return 3; },
+				core.Result::Ok(v) => { got_old = v; }
+			}
+			var got_new = "";
+			match request.path_param(&req_new, &name) {
+				core.Result::Err(_) => { return 4; },
+				core.Result::Ok(v) => { got_new = v; }
+			}
+			if got_old != got_new {
+				thread.console_writeln("extract disagreement: " + got_old + " vs " + got_new);
+				return 5;
+			}
+			if got_new != want {
+				thread.console_writeln("extract wrong value: got=" + got_new + " want=" + want);
+				return 6;
+			}
+			return 0;
+		}
+	}
+}
+
+fn scenario_extract() nothrow -> Int {
+	var rc = _check_extract("/users/{id}", "/users/42", "id", "42");
+	if rc != 0 { return 300 + rc; }
+	rc = _check_extract("/users/{id}/posts/{pid}", "/users/42/posts/7", "pid", "7");
+	if rc != 0 { return 310 + rc; }
+	rc = _check_extract("/users/{id}/posts/{pid}", "/users/42/posts/7", "id", "42");
+	if rc != 0 { return 320 + rc; }
+	rc = _check_extract("/files/{name}", "//files//deep-name.txt", "name", "deep-name.txt");
+	if rc != 0 { return 330 + rc; }
+	rc = _check_extract("/users/{id}", "/users/42/", "id", "42");
+	if rc != 0 { return 340 + rc; }
+	return 0;
+}
+
+pub fn main() nothrow -> Int {
+	var rc = scenario_static_and_edges();
+	if rc != 0 {
+		thread.console_writeln("scenario_static_and_edges FAILED rc=" + fmt.format_int(rc));
+		return rc;
+	}
+	rc = scenario_params();
+	if rc != 0 {
+		thread.console_writeln("scenario_params FAILED rc=" + fmt.format_int(rc));
+		return rc;
+	}
+	rc = scenario_extract();
+	if rc != 0 {
+		thread.console_writeln("scenario_extract FAILED rc=" + fmt.format_int(rc));
+		return rc;
+	}
+	thread.console_writeln("router_path_match_test PASS");
+	return 0;
+}

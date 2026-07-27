@@ -1,11 +1,11 @@
 {
   "8bb9310c2b63494db25197f9406fc9bc": {
     "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
-    "sampled_at": "2026-03-21",
+    "sampled_at": "2026-07-26",
     "sample_count": 20,
-    "raw_tcp_cost": {"min": 0.86, "mean": 1.11, "median": 1.14, "p95": 1.19, "max": 1.19, "threshold": 1.37},
-    "rest_cost": {"min": 0.56, "mean": 0.71, "median": 0.71, "p95": 0.76, "max": 0.76, "threshold": 0.88},
-    "framework_cost": {"min": 1.49, "mean": 1.55, "median": 1.54, "p95": 1.67, "max": 1.67, "threshold": 2.11,
-      "threshold_note": "2026-07-18: raised 1.92 -> 2.11 (+10%). Accepted drift, attributed: drift-lang 0.33.58->0.33.84 unwind/match-arm correctness fixes (~7%) + drift-web 5e2c292 poll_many accept-serialization fix (~7%); typical measured cost now 1.79-1.96 on this host. Trend recorded per certified run in build-orchestrator history/perf/. Do not raise further without re-attribution."}
+    "raw_tcp_cost": {"min": 0.94, "mean": 1.02, "median": 1.00, "p95": 1.06, "max": 1.06, "threshold": 1.22},
+    "rest_cost": {"min": 0.65, "mean": 0.68, "median": 0.68, "p95": 0.73, "max": 0.73, "threshold": 0.84},
+    "framework_cost": {"min": 1.61, "mean": 1.63, "median": 1.61, "p95": 1.69, "max": 1.69, "threshold": 1.95,
+      "threshold_note": "2026-07-26: re-sampled and TIGHTENED 2.11 -> 1.95 (max 1.69 x 1.15). Basis: drift-lang 0.33.89 string-hotpath recovery (6921f01a — per-release getenv removed; also explains the old orchestrator-vs-local measurement inflation) + drift-web 0.6.3 hot-path realignment (offset routing, header-dup removal, byte-level query parse). Supersedes the 2026-07-18 2.11 raise and its 2026-03-21 sample. Attribution record: work/string-lifecycle-cost-0.33.88/FINDINGS.md. Do not raise without re-attribution."}
   }
 }

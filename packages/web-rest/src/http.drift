@@ -32,17 +32,6 @@ const MAX_HEADER_SIZE: Int = 8192;
 
 // --- Helpers ---
 
-fn _dup_string(s: &String) nothrow -> String {
-	val n = s.byte_length();
-	var b = io.buffer(n);
-	var i = 0;
-	while i < n {
-		io.buffer_write(&mut b, i, core.string_byte_at(s, i));
-		i = i + 1;
-	}
-	return core.string_from_utf8_bytes(io.buffer_ptr(&b), n);
-}
-
 fn _bytes_to_string(raw: &Array<Byte>, start: Int, end: Int) nothrow -> String {
 	val n = end - start;
 	if n <= 0 {
@@ -173,57 +162,29 @@ fn _find_byte_range(raw: &Array<Byte>, start: Int, end: Int, target: Byte) nothr
 	return -1;
 }
 
-// Find byte in string. Returns index or -1.
-fn _find_char(s: &String, target: Byte) nothrow -> Int {
-	var i = 0;
-	val n = s.byte_length();
-	while i < n {
-		if core.string_byte_at(s, i) == target {
-			return i;
-		}
-		i = i + 1;
-	}
-	return -1;
-}
-
-fn _substring(s: &String, start: Int, end: Int) nothrow -> String {
-	val n = end - start;
-	if n <= 0 {
-		return "";
-	}
-	var b = io.buffer(n);
-	var i = 0;
-	while i < n {
-		io.buffer_write(&mut b, i, core.string_byte_at(s, start + i));
-		i = i + 1;
-	}
-	return core.string_from_utf8_bytes(io.buffer_ptr(&b), n);
-}
-
 // Parse "key1=val1&key2=val2" into query params on Request.
-fn _parse_query_string(qs: &String, req: &mut request.Request) nothrow -> Void {
-	val len = qs.byte_length();
-	var seg_start = 0;
-	var i = 0;
-	while i <= len {
+// Parse query bytes [qstart, qend) into key=value pairs. Same field
+// semantics as the retired string-based parser: '&'-separated, empty
+// segments skipped, first '=' splits, missing '=' means empty value.
+fn _parse_query_bytes(raw: &Array<Byte>, qstart: Int, qend: Int, req: &mut request.Request) nothrow -> Void {
+	var seg_start = qstart;
+	var i = qstart;
+	while i <= qend {
 		var at_delim = false;
-		if i == len {
+		if i == qend {
 			at_delim = true;
 		} else {
-			if core.string_byte_at(qs, i) == cast<Byte>(38) {
+			if raw[i] == cast<Byte>(38) {
 				at_delim = true;
 			}
 		}
 		if at_delim {
 			if i > seg_start {
-				val seg = _substring(qs, seg_start, i);
-				val eq = _find_char(&seg, cast<Byte>(61));
+				val eq = _find_byte_range(raw, seg_start, i, cast<Byte>(61));
 				if eq == -1 {
-					request.add_query_param(req, _dup_string(&seg), "");
+					request.add_query_param(req, _bytes_to_string(raw, seg_start, i), "");
 				} else {
-					val key = _substring(&seg, 0, eq);
-					val value = _substring(&seg, eq + 1, seg.byte_length());
-					request.add_query_param(req, key, value);
+					request.add_query_param(req, _bytes_to_string(raw, seg_start, eq), _bytes_to_string(raw, eq + 1, i));
 				}
 			}
 			seg_start = i + 1;
@@ -268,19 +229,18 @@ fn _parse_request_full(raw: &Array<Byte>) nothrow -> core.Result<ParsedRequest, 
 	// Split request target on '?' into path and query string
 	val qmark = _find_byte_range(raw, sp1 + 1, sp2, cast<Byte>(63));
 	var path = "";
-	var query_str = "";
 	if qmark == -1 {
 		path = _bytes_to_string(raw, sp1 + 1, sp2);
 	} else {
 		path = _bytes_to_string(raw, sp1 + 1, qmark);
-		query_str = _bytes_to_string(raw, qmark + 1, sp2);
 	}
 
 	var req = request.new_request(method, path);
 
-	// Parse query string into key=value pairs
-	if query_str.byte_length() > 0 {
-		_parse_query_string(&query_str, &mut req);
+	// Parse query key=value pairs straight from the raw bytes — only the
+	// stored keys/values materialize (no query-string or segment intermediates).
+	if qmark != -1 {
+		_parse_query_bytes(raw, qmark + 1, sp2, &mut req);
 	}
 
 	var hdr_pos = first_line_end + 2;
@@ -302,7 +262,7 @@ fn _parse_request_full(raw: &Array<Byte>) nothrow -> core.Result<ParsedRequest, 
 						val hdr_name = _bytes_to_string(raw, hdr_pos, colon);
 						val value_start = _skip_ows(raw, colon + 1, line_end);
 						val hdr_value = _bytes_to_string(raw, value_start, line_end);
-						request.add_header(&mut req, hdr_name, _dup_string(&hdr_value));
+						request.add_header(&mut req, hdr_name, hdr_value);
 
 						val cl_key = "content-length";
 						if _ascii_eq_lower(raw, hdr_pos, colon, &cl_key) {
