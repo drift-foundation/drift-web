@@ -43,7 +43,7 @@ fn _bench_pooled(session: &client.Session, port: Int, n: Int) nothrow -> Int {
 		}
 		i = i + 1;
 	}
-	val elapsed = time.elapsed_ms(&start);
+	val elapsed = time.elapsed_ms(start);
 	if failures > 0 {
 		console.println("  pooled: " + fmt.format_int(failures) + " failures in " + fmt.format_int(n) + " requests");
 	}
@@ -65,7 +65,7 @@ fn _bench_unpooled(cfg: &client.ClientConfig, port: Int, n: Int) nothrow -> Int 
 		}
 		i = i + 1;
 	}
-	val elapsed = time.elapsed_ms(&start);
+	val elapsed = time.elapsed_ms(start);
 	if failures > 0 {
 		console.println("  unpooled: " + fmt.format_int(failures) + " failures in " + fmt.format_int(n) + " requests");
 	}
@@ -74,12 +74,12 @@ fn _bench_unpooled(cfg: &client.ClientConfig, port: Int, n: Int) nothrow -> Int 
 
 pub fn main() nothrow -> Int {
 	var b = rest.new_app_builder();
-	rest.bind(&mut b, "127.0.0.1", 0);
+	rest.bind(b, "127.0.0.1", 0);
 	match rest.build_app(move b) {
 		core.Result::Err(_) => { return 1; },
 		core.Result::Ok(a) => {
 			var app = move a;
-			match rest.add_route(&mut app, "GET", "/health", _health_handler) {
+			match rest.add_route(app, "GET", "/health", _health_handler) {
 				core.Result::Err(_) => { return 2; },
 				core.Result::Ok(_) => {}
 			}
@@ -87,7 +87,7 @@ pub fn main() nothrow -> Int {
 				core.Result::Err(_) => { return 3; },
 				core.Result::Ok(srv) => {
 					var running = move srv;
-					val port = rest.server_port(&running);
+					val port = rest.server_port(running);
 
 					val n = 1000;
 
@@ -95,15 +95,15 @@ pub fn main() nothrow -> Int {
 					var cfg_pooled = client.new_client_config();
 					var session = client.new_session(move cfg_pooled);
 					val warmup_url = "http://127.0.0.1:" + fmt.format_int(port) + "/health";
-					match client.get(&session, warmup_url) {
+					match client.get(session, warmup_url) {
 						core.Result::Ok(_) => {},
 						core.Result::Err(_) => {}
 					}
-					val pooled_ms = _bench_pooled(&session, port, n);
+					val pooled_ms = _bench_pooled(session, port, n);
 
 					// Unpooled (web.client send_once — Connection: close).
 					var cfg_unpooled = client.new_client_config();
-					val unpooled_ms = _bench_unpooled(&cfg_unpooled, port, n);
+					val unpooled_ms = _bench_unpooled(cfg_unpooled, port, n);
 
 					// Report.
 					console.println("pool_perf_test: " + fmt.format_int(n) + " requests");
@@ -113,7 +113,7 @@ pub fn main() nothrow -> Int {
 						console.println("  ratio:    " + fmt.format_int(unpooled_ms / pooled_ms) + "x");
 					}
 
-					_stop(&mut running);
+					_stop(running);
 					return 0;
 				}
 			}

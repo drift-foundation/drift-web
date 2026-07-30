@@ -47,12 +47,12 @@ fn _internal_handler(req: &rest.Request, ctx: &mut rest.Context) -> rest.Respons
 
 fn _build_app() nothrow -> rest.App {
 	var b = rest.new_app_builder();
-	rest.bind(&mut b, "127.0.0.1", 8080);
+	rest.bind(b, "127.0.0.1", 8080);
 	match rest.build_app(move b) {
 		core.Result::Ok(a) => { return move a; },
 		core.Result::Err(_) => {
 			var b2 = rest.new_app_builder();
-			rest.bind(&mut b2, "127.0.0.1", 8080);
+			rest.bind(b2, "127.0.0.1", 8080);
 			match rest.build_app(move b2) {
 				core.Result::Ok(a2) => { return move a2; },
 				core.Result::Err(_) => { return _unreachable(); }
@@ -63,7 +63,7 @@ fn _build_app() nothrow -> rest.App {
 
 fn _unreachable() nothrow -> rest.App {
 	var b = rest.new_app_builder();
-	rest.bind(&mut b, "127.0.0.1", 8080);
+	rest.bind(b, "127.0.0.1", 8080);
 	match rest.build_app(move b) {
 		core.Result::Ok(a) => { return move a; },
 		core.Result::Err(_) => { return _unreachable(); }
@@ -75,14 +75,14 @@ fn _unreachable() nothrow -> rest.App {
 // 100: throws route, handler returns normally → 200
 fn scenario_pub_throws_ok() nothrow -> Int {
 	var app = _build_app();
-	match rest.add_throws_route(&mut app, "GET", "/ok", core.callback_throw2(_ok_handler)) {
+	match rest.add_throws_route(app, "GET", "/ok", core.callback_throw2(_ok_handler)) {
 		core.Result::Err(_) => { return 101; },
 		core.Result::Ok(_) => {}
 	}
 	var req = rest.new_request("GET", "/ok");
 	var ctx = rest.new_context();
 	val app_arc = conc.arc(move app);
-	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+	match rest.dispatch(app_arc.clone(), req, ctx) {
 		core.Result::Err(_) => { return 102; },
 		core.Result::Ok(resp) => {
 			if resp.status != 200 { return 103; }
@@ -95,14 +95,14 @@ fn scenario_pub_throws_ok() nothrow -> Int {
 // 200: throws route, handler throws RestBadRequest → 400
 fn scenario_pub_throws_bad_request() nothrow -> Int {
 	var app = _build_app();
-	match rest.add_throws_route(&mut app, "POST", "/bad", core.callback_throw2(_bad_request_handler)) {
+	match rest.add_throws_route(app, "POST", "/bad", core.callback_throw2(_bad_request_handler)) {
 		core.Result::Err(_) => { return 201; },
 		core.Result::Ok(_) => {}
 	}
 	var req = rest.new_request("POST", "/bad");
 	var ctx = rest.new_context();
 	val app_arc = conc.arc(move app);
-	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+	match rest.dispatch(app_arc.clone(), req, ctx) {
 		core.Result::Ok(_) => { return 202; },
 		core.Result::Err(e) => {
 			if e.status != 400 { return 203; }
@@ -116,14 +116,14 @@ fn scenario_pub_throws_bad_request() nothrow -> Int {
 // 300: throws route, handler throws RestUnauthorized → 401
 fn scenario_pub_throws_unauthorized() nothrow -> Int {
 	var app = _build_app();
-	match rest.add_throws_route(&mut app, "GET", "/unauth", core.callback_throw2(_unauthorized_handler)) {
+	match rest.add_throws_route(app, "GET", "/unauth", core.callback_throw2(_unauthorized_handler)) {
 		core.Result::Err(_) => { return 301; },
 		core.Result::Ok(_) => {}
 	}
 	var req = rest.new_request("GET", "/unauth");
 	var ctx = rest.new_context();
 	val app_arc = conc.arc(move app);
-	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+	match rest.dispatch(app_arc.clone(), req, ctx) {
 		core.Result::Ok(_) => { return 302; },
 		core.Result::Err(e) => {
 			if e.status != 401 { return 303; }
@@ -137,14 +137,14 @@ fn scenario_pub_throws_unauthorized() nothrow -> Int {
 // 400: throws route, handler throws RestForbidden → 403
 fn scenario_pub_throws_forbidden() nothrow -> Int {
 	var app = _build_app();
-	match rest.add_throws_route(&mut app, "GET", "/forbid", core.callback_throw2(_forbidden_handler)) {
+	match rest.add_throws_route(app, "GET", "/forbid", core.callback_throw2(_forbidden_handler)) {
 		core.Result::Err(_) => { return 401; },
 		core.Result::Ok(_) => {}
 	}
 	var req = rest.new_request("GET", "/forbid");
 	var ctx = rest.new_context();
 	val app_arc = conc.arc(move app);
-	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+	match rest.dispatch(app_arc.clone(), req, ctx) {
 		core.Result::Ok(_) => { return 402; },
 		core.Result::Err(e) => {
 			if e.status != 403 { return 403; }
@@ -158,14 +158,14 @@ fn scenario_pub_throws_forbidden() nothrow -> Int {
 // 500: throws route, handler throws RestNotFound → 404
 fn scenario_pub_throws_not_found() nothrow -> Int {
 	var app = _build_app();
-	match rest.add_throws_route(&mut app, "GET", "/missing", core.callback_throw2(_not_found_handler)) {
+	match rest.add_throws_route(app, "GET", "/missing", core.callback_throw2(_not_found_handler)) {
 		core.Result::Err(_) => { return 501; },
 		core.Result::Ok(_) => {}
 	}
 	var req = rest.new_request("GET", "/missing");
 	var ctx = rest.new_context();
 	val app_arc = conc.arc(move app);
-	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+	match rest.dispatch(app_arc.clone(), req, ctx) {
 		core.Result::Ok(_) => { return 502; },
 		core.Result::Err(e) => {
 			if e.status != 404 { return 503; }
@@ -179,14 +179,14 @@ fn scenario_pub_throws_not_found() nothrow -> Int {
 // 600: throws route, handler throws RestConflict → 409
 fn scenario_pub_throws_conflict() nothrow -> Int {
 	var app = _build_app();
-	match rest.add_throws_route(&mut app, "PUT", "/conflict", core.callback_throw2(_conflict_handler)) {
+	match rest.add_throws_route(app, "PUT", "/conflict", core.callback_throw2(_conflict_handler)) {
 		core.Result::Err(_) => { return 601; },
 		core.Result::Ok(_) => {}
 	}
 	var req = rest.new_request("PUT", "/conflict");
 	var ctx = rest.new_context();
 	val app_arc = conc.arc(move app);
-	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+	match rest.dispatch(app_arc.clone(), req, ctx) {
 		core.Result::Ok(_) => { return 602; },
 		core.Result::Err(e) => {
 			if e.status != 409 { return 603; }
@@ -200,14 +200,14 @@ fn scenario_pub_throws_conflict() nothrow -> Int {
 // 700: throws route, handler throws RestInternal → 500
 fn scenario_pub_throws_internal() nothrow -> Int {
 	var app = _build_app();
-	match rest.add_throws_route(&mut app, "GET", "/err", core.callback_throw2(_internal_handler)) {
+	match rest.add_throws_route(app, "GET", "/err", core.callback_throw2(_internal_handler)) {
 		core.Result::Err(_) => { return 701; },
 		core.Result::Ok(_) => {}
 	}
 	var req = rest.new_request("GET", "/err");
 	var ctx = rest.new_context();
 	val app_arc = conc.arc(move app);
-	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+	match rest.dispatch(app_arc.clone(), req, ctx) {
 		core.Result::Ok(_) => { return 702; },
 		core.Result::Err(e) => {
 			if e.status != 500 { return 703; }
@@ -221,10 +221,10 @@ fn scenario_pub_throws_internal() nothrow -> Int {
 // 800: group throws route via public API → 200
 fn scenario_pub_group_throws_ok() nothrow -> Int {
 	var app = _build_app();
-	match rest.add_route_group(&mut app, "/api") {
+	match rest.add_route_group(app, "/api") {
 		core.Result::Err(_) => { return 801; },
 		core.Result::Ok(rg) => {
-			match rest.add_route_group_throws_route(&mut app, &rg, "GET", "/ok", core.callback_throw2(_ok_handler)) {
+			match rest.add_route_group_throws_route(app, rg, "GET", "/ok", core.callback_throw2(_ok_handler)) {
 				core.Result::Err(_) => { return 802; },
 				core.Result::Ok(_) => {}
 			}
@@ -233,7 +233,7 @@ fn scenario_pub_group_throws_ok() nothrow -> Int {
 	var req = rest.new_request("GET", "/api/ok");
 	var ctx = rest.new_context();
 	val app_arc = conc.arc(move app);
-	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+	match rest.dispatch(app_arc.clone(), req, ctx) {
 		core.Result::Err(_) => { return 803; },
 		core.Result::Ok(resp) => {
 			if resp.status != 200 { return 804; }
@@ -246,10 +246,10 @@ fn scenario_pub_group_throws_ok() nothrow -> Int {
 // 900: group throws route, handler throws → framework catches
 fn scenario_pub_group_throws_exception() nothrow -> Int {
 	var app = _build_app();
-	match rest.add_route_group(&mut app, "/v1") {
+	match rest.add_route_group(app, "/v1") {
 		core.Result::Err(_) => { return 901; },
 		core.Result::Ok(rg) => {
-			match rest.add_route_group_throws_route(&mut app, &rg, "POST", "/fail", core.callback_throw2(_bad_request_handler)) {
+			match rest.add_route_group_throws_route(app, rg, "POST", "/fail", core.callback_throw2(_bad_request_handler)) {
 				core.Result::Err(_) => { return 902; },
 				core.Result::Ok(_) => {}
 			}
@@ -258,7 +258,7 @@ fn scenario_pub_group_throws_exception() nothrow -> Int {
 	var req = rest.new_request("POST", "/v1/fail");
 	var ctx = rest.new_context();
 	val app_arc = conc.arc(move app);
-	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+	match rest.dispatch(app_arc.clone(), req, ctx) {
 		core.Result::Ok(_) => { return 903; },
 		core.Result::Err(e) => {
 			if e.status != 400 { return 904; }
@@ -274,12 +274,12 @@ fn scenario_pub_mixed_routes() nothrow -> Int {
 	var app = _build_app();
 
 	// nothrow route
-	match rest.add_route(&mut app, "GET", "/nothrow", core.callback2(_nothrow_handler)) {
+	match rest.add_route(app, "GET", "/nothrow", core.callback2(_nothrow_handler)) {
 		core.Result::Err(_) => { return 1001; },
 		core.Result::Ok(_) => {}
 	}
 	// throws route
-	match rest.add_throws_route(&mut app, "GET", "/throws", core.callback_throw2(_ok_handler)) {
+	match rest.add_throws_route(app, "GET", "/throws", core.callback_throw2(_ok_handler)) {
 		core.Result::Err(_) => { return 1002; },
 		core.Result::Ok(_) => {}
 	}
@@ -288,7 +288,7 @@ fn scenario_pub_mixed_routes() nothrow -> Int {
 	var req1 = rest.new_request("GET", "/nothrow");
 	var ctx1 = rest.new_context();
 	val app_arc = conc.arc(move app);
-	match rest.dispatch(app_arc.clone(), &mut req1, &mut ctx1) {
+	match rest.dispatch(app_arc.clone(), req1, ctx1) {
 		core.Result::Err(_) => { return 1003; },
 		core.Result::Ok(resp) => {
 			if resp.status != 200 { return 1004; }
@@ -298,7 +298,7 @@ fn scenario_pub_mixed_routes() nothrow -> Int {
 	// dispatch throws route
 	var req2 = rest.new_request("GET", "/throws");
 	var ctx2 = rest.new_context();
-	match rest.dispatch(app_arc.clone(), &mut req2, &mut ctx2) {
+	match rest.dispatch(app_arc.clone(), req2, ctx2) {
 		core.Result::Err(_) => { return 1005; },
 		core.Result::Ok(resp) => {
 			if resp.status != 200 { return 1006; }

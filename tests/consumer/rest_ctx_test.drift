@@ -39,7 +39,7 @@ fn _handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<r
 pub fn main() nothrow -> Int {
 	val timeout = conc.Duration(millis = 5000);
 	var b = rest.new_app_builder();
-	rest.bind(&mut b, "127.0.0.1", 0);
+	rest.bind(b, "127.0.0.1", 0);
 	match rest.build_app(move b) {
 		core.Result::Err(_) => { return 1; },
 		core.Result::Ok(a) => {
@@ -49,7 +49,7 @@ pub fn main() nothrow -> Int {
 			//   1. ctx_set<OwnedHandle> — stash an owning struct holding a String
 			//   2. next.call — handler runs, reads it via ctx_get
 			//   3. ctx_take<OwnedHandle> — retake ownership, drop deterministically
-			rest.add_middleware(&mut app, |req: &rest.Request, ctx: &mut rest.Context, next| => {
+			rest.add_middleware(app, |req: &rest.Request, ctx: &mut rest.Context, next| => {
 				rest.ctx_set<type OwnedHandle>(ctx, OwnedHandle(name = "test-resource", count = 7));
 				val result = next.call(req, ctx);
 				match rest.ctx_take<type OwnedHandle>(ctx) {
@@ -65,7 +65,7 @@ pub fn main() nothrow -> Int {
 				return move result;
 			});
 
-			match rest.add_route(&mut app, "GET", "/echo", core.callback2(_handler)) {
+			match rest.add_route(app, "GET", "/echo", core.callback2(_handler)) {
 				core.Result::Err(_) => { return 2; },
 				core.Result::Ok(_) => {}
 			}
@@ -74,12 +74,12 @@ pub fn main() nothrow -> Int {
 				core.Result::Err(_) => { return 3; },
 				core.Result::Ok(rs) => {
 					var running = move rs;
-					val port = rest.server_port(&running);
+					val port = rest.server_port(running);
 
-					val rc = _send_and_check_body(&running, port, "GET", "/echo", 200, "{\"name\":\"test-resource\"}", timeout);
-					if rc != 0 { val _ = rest.shutdown(&mut running); return 100 + rc; }
+					val rc = _send_and_check_body(running, port, "GET", "/echo", 200, "{\"name\":\"test-resource\"}", timeout);
+					if rc != 0 { val _ = rest.shutdown(running); return 100 + rc; }
 
-					match rest.shutdown(&mut running) {
+					match rest.shutdown(running) {
 						core.Result::Err(_) => { return 99; },
 						core.Result::Ok(_) => {
 							console.println("consumer rest-ctx: passed");
@@ -97,7 +97,7 @@ fn _send_and_check_body(running: &rest.RunningServer, port: Int, method: String,
 	var raw_req = method + " " + path + " HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
 
 	var addr = net.socket_addr("127.0.0.1", port);
-	match net.connect(&addr, timeout) {
+	match net.connect(addr, timeout) {
 		core.Result::Err(_) => { return 1; },
 		core.Result::Ok(conn) => {
 			var stream = move conn;
@@ -105,10 +105,10 @@ fn _send_and_check_body(running: &rest.RunningServer, port: Int, method: String,
 			var wbuf = io.buffer(bytes);
 			var i = 0;
 			while i < bytes {
-				io.buffer_write(&mut wbuf, i, core.string_byte_at(&raw_req, i));
+				io.buffer_write(&mut wbuf, i, core.string_byte_at(raw_req, i));
 				i = i + 1;
 			}
-			match stream.write(&wbuf, timeout) {
+			match stream.write(wbuf, timeout) {
 				core.Result::Err(_) => {
 					val _ = stream.close(timeout);
 					return 2;
@@ -119,7 +119,7 @@ fn _send_and_check_body(running: &rest.RunningServer, port: Int, method: String,
 			var done = false;
 			while !done {
 				var rbuf = io.buffer(4096);
-				match stream.read(&mut rbuf, timeout) {
+				match stream.read(rbuf, timeout) {
 					core.Result::Err(_) => { done = true; },
 					core.Result::Ok(n) => {
 						if n == 0 { done = true; }
@@ -152,7 +152,7 @@ fn _send_and_check_body(running: &rest.RunningServer, port: Int, method: String,
 				var s = 0;
 				while s < sub_len {
 					val rb = resp[k + s];
-					val sb = core.string_byte_at(&expected_body_substr, s);
+					val sb = core.string_byte_at(expected_body_substr, s);
 					if rb != sb { matched = false; s = sub_len; }
 					else { s = s + 1; }
 				}

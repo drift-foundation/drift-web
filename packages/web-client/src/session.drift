@@ -64,7 +64,7 @@ fn _has_connection_header(req: &request.ClientRequest) nothrow -> Bool {
 	val target = "connection";
 	var i = 0;
 	while i < req.header_keys.len {
-		if _ascii_eq_ci(&req.header_keys[i], &target) {
+		if _ascii_eq_ci(req.header_keys[i], target) {
 			return true;
 		}
 		i = i + 1;
@@ -96,30 +96,30 @@ fn _is_idempotent(method: &String) nothrow -> Bool {
 
 pub fn session_send(session: &Session, req: request.ClientRequest) nothrow -> core.Result<resp.ClientResponse, errors.ClientError> {
 	var parsed = url.ParsedUrl(scheme = "", host = "", port = 0, path = "");
-	match url.parse_url(&req.url) {
+	match url.parse_url(req.url) {
 		core.Result::Ok(p) => { parsed = move p; },
 		core.Result::Err(e) => { return core.Result::Err(move e); }
 	}
 	val is_secure = parsed.scheme == "https";
 	val si = session.inner.get();
-	val key = pool.pool_key(&parsed.scheme, &parsed.host, parsed.port);
+	val key = pool.pool_key(parsed.scheme, parsed.host, parsed.port);
 
 	var mut_req = move req;
-	val cookie_header = _read_cookies(&si.jar, &parsed.host, &parsed.path, is_secure);
+	val cookie_header = _read_cookies(si.jar, parsed.host, parsed.path, is_secure);
 	if cookie_header.byte_length() > 0 {
-		request.set_header(&mut mut_req, "Cookie", cookie_header);
+		request.set_header(mut_req, "Cookie", cookie_header);
 	}
 	// Set Connection: keep-alive only if caller hasn't set a Connection header.
-	if not _has_connection_header(&mut_req) {
-		request.set_header(&mut mut_req, "Connection", "keep-alive");
+	if not _has_connection_header(mut_req) {
+		request.set_header(mut_req, "Connection", "keep-alive");
 	}
 
-	val method_is_idempotent = _is_idempotent(&mut_req.method);
+	val method_is_idempotent = _is_idempotent(mut_req.method);
 
 	if is_secure == true {
-		return _session_send_tls(si, &parsed, &mut_req, &key, method_is_idempotent);
+		return _session_send_tls(si, parsed, mut_req, key, method_is_idempotent);
 	}
-	return _session_send_tcp(si, &parsed, &mut_req, &key, method_is_idempotent);
+	return _session_send_tcp(si, parsed, mut_req, key, method_is_idempotent);
 }
 
 // --- TCP path ---
@@ -160,7 +160,7 @@ fn _try_pooled_tcp(si: &SessionInner, parsed: &url.ParsedUrl, req: &request.Clie
 		}
 	}
 	// Borrow dropped — now we can borrow stream and move arr.
-	match transport.send_on_tcp(&arr[0].stream, move rbuf, &si.config, parsed, req) {
+	match transport.send_on_tcp(arr[0].stream, move rbuf, si.config, parsed, req) {
 		core.Result::Ok(result) => {
 			return _finish_tcp_entry(si, key, move result, move arr, parsed);
 		},
@@ -170,7 +170,7 @@ fn _try_pooled_tcp(si: &SessionInner, parsed: &url.ParsedUrl, req: &request.Clie
 			//       OR empty read (server FIN'd after we wrote but before responding).
 			// Any other error (partial response, parse error) is not safe to retry.
 			if idempotent == true {
-				if _is_stale_error(&e) {
+				if _is_stale_error(e) {
 					return _new_tcp_send(si, parsed, req, key);
 				}
 			}
@@ -182,8 +182,8 @@ fn _try_pooled_tcp(si: &SessionInner, parsed: &url.ParsedUrl, req: &request.Clie
 
 fn _finish_tcp_entry(si: &SessionInner, key: &String, result: transport.PooledSendResult, entries: Array<pool.TcpPoolEntry>, parsed: &url.ParsedUrl) nothrow -> core.Result<resp.ClientResponse, errors.ClientError> {
 	var r = move result;
-	val response = mem.replace(&mut r.response, _empty_response());
-	val remainder = mem.replace(&mut r.remainder, _empty_bytes());
+	val response = mem.replace(r.response, _empty_response());
+	val remainder = mem.replace(r.remainder, _empty_bytes());
 	if r.reusable == true {
 		// Rebuild entry with updated read_buf. Entry still owns the stream.
 		var arr = move entries;
@@ -193,21 +193,21 @@ fn _finish_tcp_entry(si: &SessionInner, key: &String, result: transport.PooledSe
 		// we put the whole array back.
 		var guard = si.tcp_pool.lock();
 		val p = guard.get_mut();
-		val old = mem.replace(&mut p.entries, move arr);
+		val old = mem.replace(p.entries, move arr);
 		p.key = *key;
 	}
 	// If not reusable, entries dropped -> stream closed by destructor.
-	_write_cookies(&si.jar, &response, parsed);
+	_write_cookies(si.jar, response, parsed);
 	return core.Result::Ok(move response);
 }
 
 fn _new_tcp_send(si: &SessionInner, parsed: &url.ParsedUrl, req: &request.ClientRequest, key: &String) nothrow -> core.Result<resp.ClientResponse, errors.ClientError> {
-	match transport.connect_tcp(&si.config, parsed) {
+	match transport.connect_tcp(si.config, parsed) {
 		core.Result::Err(e) => { return core.Result::Err(move e); },
 		core.Result::Ok(tcp) => {
 			var stream = move tcp;
 			var rbuf: Array<Byte> = [];
-			match transport.send_on_tcp(&stream, move rbuf, &si.config, parsed, req) {
+			match transport.send_on_tcp(stream, move rbuf, si.config, parsed, req) {
 				core.Result::Ok(result) => {
 					return _finish_tcp_new(si, key, move result, move stream, parsed);
 				},
@@ -225,8 +225,8 @@ fn _new_tcp_send(si: &SessionInner, parsed: &url.ParsedUrl, req: &request.Client
 fn _finish_tcp_new(si: &SessionInner, key: &String, result: transport.PooledSendResult, stream: net.TcpStream, parsed: &url.ParsedUrl) nothrow -> core.Result<resp.ClientResponse, errors.ClientError> {
 	var r = move result;
 	var s = move stream;
-	val response = mem.replace(&mut r.response, _empty_response());
-	val remainder = mem.replace(&mut r.remainder, _empty_bytes());
+	val response = mem.replace(r.response, _empty_response());
+	val remainder = mem.replace(r.remainder, _empty_bytes());
 	if r.reusable == true {
 		val new_entry = pool.TcpPoolEntry(stream = move s, read_buf = move remainder);
 		var guard = si.tcp_pool.lock();
@@ -234,7 +234,7 @@ fn _finish_tcp_new(si: &SessionInner, key: &String, result: transport.PooledSend
 	} else {
 		val _ = s.close(conc.Duration(millis = 1000));
 	}
-	_write_cookies(&si.jar, &response, parsed);
+	_write_cookies(si.jar, response, parsed);
 	return core.Result::Ok(move response);
 }
 
@@ -272,13 +272,13 @@ fn _try_pooled_tls(si: &SessionInner, parsed: &url.ParsedUrl, req: &request.Clie
 			i = i + 1;
 		}
 	}
-	match transport.send_on_tls(&mut arr[0].stream, move rbuf, &si.config, parsed, req) {
+	match transport.send_on_tls(arr[0].stream, move rbuf, si.config, parsed, req) {
 		core.Result::Ok(result) => {
 			return _finish_tls_entry(si, key, move result, move arr, parsed);
 		},
 		core.Result::Err(e) => {
 			if idempotent == true {
-				if _is_stale_error(&e) {
+				if _is_stale_error(e) {
 					return _new_tls_send(si, parsed, req, key);
 				}
 			}
@@ -290,30 +290,30 @@ fn _try_pooled_tls(si: &SessionInner, parsed: &url.ParsedUrl, req: &request.Clie
 
 fn _finish_tls_entry(si: &SessionInner, key: &String, result: transport.PooledSendResult, entries: Array<pool.TlsPoolEntry>, parsed: &url.ParsedUrl) nothrow -> core.Result<resp.ClientResponse, errors.ClientError> {
 	var r = move result;
-	val response = mem.replace(&mut r.response, _empty_response());
-	val remainder = mem.replace(&mut r.remainder, _empty_bytes());
+	val response = mem.replace(r.response, _empty_response());
+	val remainder = mem.replace(r.remainder, _empty_bytes());
 	if r.reusable == true {
 		var arr = move entries;
 		arr[0].read_buf = move remainder;
 		var guard = si.tls_pool.lock();
 		val p = guard.get_mut();
-		val old = mem.replace(&mut p.entries, move arr);
+		val old = mem.replace(p.entries, move arr);
 		p.key = *key;
 	}
-	_write_cookies(&si.jar, &response, parsed);
+	_write_cookies(si.jar, response, parsed);
 	return core.Result::Ok(move response);
 }
 
 fn _new_tls_send(si: &SessionInner, parsed: &url.ParsedUrl, req: &request.ClientRequest, key: &String) nothrow -> core.Result<resp.ClientResponse, errors.ClientError> {
-	match transport.connect_tcp(&si.config, parsed) {
+	match transport.connect_tcp(si.config, parsed) {
 		core.Result::Err(e) => { return core.Result::Err(move e); },
 		core.Result::Ok(tcp) => {
-			match transport.connect_tls(&si.config, parsed, move tcp) {
+			match transport.connect_tls(si.config, parsed, move tcp) {
 				core.Result::Err(e) => { return core.Result::Err(move e); },
 				core.Result::Ok(tls) => {
 					var tls_var = move tls;
 					var rbuf: Array<Byte> = [];
-					match transport.send_on_tls(&mut tls_var, move rbuf, &si.config, parsed, req) {
+					match transport.send_on_tls(tls_var, move rbuf, si.config, parsed, req) {
 						core.Result::Ok(result) => {
 							return _finish_tls_new(si, key, move result, move tls_var, parsed);
 						},
@@ -334,8 +334,8 @@ fn _new_tls_send(si: &SessionInner, parsed: &url.ParsedUrl, req: &request.Client
 fn _finish_tls_new(si: &SessionInner, key: &String, result: transport.PooledSendResult, tls_conn: tls_stream.TlsStream, parsed: &url.ParsedUrl) nothrow -> core.Result<resp.ClientResponse, errors.ClientError> {
 	var r = move result;
 	var t = move tls_conn;
-	val response = mem.replace(&mut r.response, _empty_response());
-	val remainder = mem.replace(&mut r.remainder, _empty_bytes());
+	val response = mem.replace(r.response, _empty_response());
+	val remainder = mem.replace(r.remainder, _empty_bytes());
 	if r.reusable == true {
 		val new_entry = pool.TlsPoolEntry(stream = move t, read_buf = move remainder);
 		var guard = si.tls_pool.lock();
@@ -343,7 +343,7 @@ fn _finish_tls_new(si: &SessionInner, key: &String, result: transport.PooledSend
 	} else {
 		val _ = tls_stream.tls_close(move t);
 	}
-	_write_cookies(&si.jar, &response, parsed);
+	_write_cookies(si.jar, response, parsed);
 	return core.Result::Ok(move response);
 }
 
@@ -351,7 +351,7 @@ fn _finish_tls_new(si: &SessionInner, key: &String, result: transport.PooledSend
 
 fn _read_cookies(jar_mtx: &conc.Mutex<cookie.CookieJar>, host: &String, path: &String, is_secure: Bool) nothrow -> String {
 	var guard = jar_mtx.lock();
-	return cookie.cookies_for_request(guard.get_mut(), &*host, &*path, is_secure);
+	return cookie.cookies_for_request(guard.get_mut(), *host, *path, is_secure);
 }
 
 fn _write_cookies(jar_mtx: &conc.Mutex<cookie.CookieJar>, response: &resp.ClientResponse, parsed: &url.ParsedUrl) nothrow -> Void {
@@ -364,8 +364,8 @@ fn _store_cookies_from_response(jar: &mut cookie.CookieJar, response: &resp.Clie
 	val set_cookie_name = "set-cookie";
 	var i = 0;
 	while i < response.header_keys.len {
-		if _ascii_eq_ci(&response.header_keys[i], &set_cookie_name) {
-			match cookie.parse_set_cookie(&response.header_values[i], &parsed.host, &parsed.path, is_secure) {
+		if _ascii_eq_ci(response.header_keys[i], set_cookie_name) {
+			match cookie.parse_set_cookie(response.header_values[i], parsed.host, parsed.path, is_secure) {
 				Optional::Some(c) => { cookie.store_cookie(jar, move c); },
 				Optional::None() => {}
 			}
@@ -396,13 +396,13 @@ pub fn session_get(session: &Session, target_url: String) nothrow -> core.Result
 
 pub fn session_post(session: &Session, target_url: String, body: Array<Byte>) nothrow -> core.Result<resp.ClientResponse, errors.ClientError> {
 	var req = request.new_request("POST", target_url);
-	request.set_body(&mut req, move body);
+	request.set_body(req, move body);
 	return session_send(session, move req);
 }
 
 pub fn session_put(session: &Session, target_url: String, body: Array<Byte>) nothrow -> core.Result<resp.ClientResponse, errors.ClientError> {
 	var req = request.new_request("PUT", target_url);
-	request.set_body(&mut req, move body);
+	request.set_body(req, move body);
 	return session_send(session, move req);
 }
 

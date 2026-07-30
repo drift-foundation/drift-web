@@ -40,7 +40,7 @@ fn _safe_ts(value: Int) nothrow -> Int {
 pub fn validate_temporal_claims(payload_node: &json.JsonNode, now_unix: Int, policy: &model.JwtVerifyPolicy) nothrow -> core.Result<Void, errors.JwtError> {
 	val now = _safe_ts(now_unix);
 	val exp_key = "exp";
-	match _check_numeric_claim(payload_node, &exp_key) {
+	match _check_numeric_claim(payload_node, exp_key) {
 		core.Result::Err(e) => { return core.Result::Err(e); },
 		core.Result::Ok(opt) => {
 			match opt {
@@ -55,7 +55,7 @@ pub fn validate_temporal_claims(payload_node: &json.JsonNode, now_unix: Int, pol
 		}
 	}
 	val nbf_key = "nbf";
-	match _check_numeric_claim(payload_node, &nbf_key) {
+	match _check_numeric_claim(payload_node, nbf_key) {
 		core.Result::Err(e) => { return core.Result::Err(e); },
 		core.Result::Ok(opt) => {
 			match opt {
@@ -70,7 +70,7 @@ pub fn validate_temporal_claims(payload_node: &json.JsonNode, now_unix: Int, pol
 		}
 	}
 	val iat_key = "iat";
-	match _check_numeric_claim(payload_node, &iat_key) {
+	match _check_numeric_claim(payload_node, iat_key) {
 		core.Result::Err(e) => { return core.Result::Err(e); },
 		core.Result::Ok(opt) => {
 			match opt {

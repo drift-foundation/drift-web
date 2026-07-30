@@ -18,7 +18,7 @@ fn _health_handler(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Res
 
 pub fn main() nothrow -> Int {
 	var b = rest.new_app_builder();
-	rest.bind(&mut b, "127.0.0.1", 0);
+	rest.bind(b, "127.0.0.1", 0);
 
 	match rest.build_app(move b) {
 		core.Result::Err(_) => {
@@ -27,7 +27,7 @@ pub fn main() nothrow -> Int {
 		},
 		core.Result::Ok(a) => {
 			var app = move a;
-			match rest.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+			match rest.add_route(app, "GET", "/health", core.callback2(_health_handler)) {
 				core.Result::Err(_) => {
 					console.println("FAIL: add_route");
 					return 2;
@@ -42,13 +42,13 @@ pub fn main() nothrow -> Int {
 				},
 				core.Result::Ok(rs) => {
 					var running = move rs;
-					val port = rest.server_port(&running);
+					val port = rest.server_port(running);
 					if port <= 0 {
 						console.println("FAIL: bad port");
 						return 4;
 					}
 
-					match rest.shutdown(&mut running) {
+					match rest.shutdown(running) {
 						core.Result::Err(e) => {
 							console.println("FAIL: shutdown: " + e.message);
 							return 5;

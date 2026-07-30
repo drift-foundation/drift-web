@@ -2,7 +2,7 @@
 
 Audience: application developers integrating `web.rest`.
 
-Status: refreshed for `web.rest` 0.4. Code examples use the real public API (free functions on `rest`, e.g. `rest.add_middleware(&mut app, mw)`).
+Status: refreshed for `web.rest` 0.4. Code examples use the real public API (free functions on `rest`, e.g. `rest.add_middleware(app, mw)`).
 
 ## Design Intent
 
@@ -27,10 +27,10 @@ import std.core as core;
 import std.concurrent as conc;
 import web.rest as rest;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val timeout = conc.Duration(millis = 5000);
 	var b = rest.new_app_builder();
-	rest.bind(&mut b, "0.0.0.0", 8080);
+	rest.bind(b, "0.0.0.0", 8080);
 	match rest.build_app(move b) {
 		core.Result::Err(_) => { return 1; },
 		core.Result::Ok(a) => {
@@ -41,7 +41,7 @@ fn main() nothrow -> Int {
 				core.Result::Ok(running) => {
 					var rs = move running;
 					// app's main loop / wait-for-signal goes here.
-					match rest.shutdown(&mut rs) {
+					match rest.shutdown(rs) {
 						core.Result::Err(_) => { return 3; },
 						core.Result::Ok(_) => { return 0; }
 					}
@@ -53,7 +53,7 @@ fn main() nothrow -> Int {
 ```
 
 Notes:
-- `rest.bind(&mut builder, host, port)` is required at least once before `build_app`.
+- `rest.bind(builder, host, port)` is required at least once before `build_app`.
 - Multiple binds are allowed.
 - `rest.start(move app, timeout)` consumes the App by value, spawns the serve loop on a VT fiber, and returns `RunningServer`. App registration (routes, middleware, guards) must be complete before `start`.
 
@@ -78,30 +78,30 @@ fn _me(req: &rest.Request, ctx: &mut rest.Context) -> rest.Response {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val timeout = conc.Duration(millis = 5000);
 	var b = rest.new_app_builder();
-	rest.bind(&mut b, "0.0.0.0", 8080);
+	rest.bind(b, "0.0.0.0", 8080);
 	match rest.build_app(move b) {
 		core.Result::Err(_) => { return 1; },
 		core.Result::Ok(a) => {
 			var app = move a;
 
 			// Wrapping middleware that runs on every request (audit, tracing, etc.).
-			// rest.add_middleware(&mut app, request_id_mw());
+			// rest.add_middleware(app, request_id_mw());
 
 			// Health route — no JWT required.
-			match rest.add_throws_route(&mut app, "GET", "/health", core.callback_throw2(_health)) {
+			match rest.add_throws_route(app, "GET", "/health", core.callback_throw2(_health)) {
 				core.Result::Err(_) => { return 2; },
 				core.Result::Ok(_) => {}
 			}
 
 			// /v1 group with JWT guard.
-			match rest.add_route_group(&mut app, "/v1") {
+			match rest.add_route_group(app, "/v1") {
 				core.Result::Err(_) => { return 3; },
 				core.Result::Ok(rg) => {
-					// rest.add_route_group_guard(&mut app, &rg, jwt_hs256_guard(shared_secret()));
-					match rest.add_route_group_throws_route(&mut app, &rg, "GET", "/me", core.callback_throw2(_me)) {
+					// rest.add_route_group_guard(app, rg, jwt_hs256_guard(shared_secret()));
+					match rest.add_route_group_throws_route(app, rg, "GET", "/me", core.callback_throw2(_me)) {
 						core.Result::Err(_) => { return 4; },
 						core.Result::Ok(_) => {}
 					}
@@ -113,7 +113,7 @@ fn main() nothrow -> Int {
 				core.Result::Ok(rs) => {
 					var running = move rs;
 					// (production code blocks here until a shutdown signal)
-					match rest.shutdown(&mut running) {
+					match rest.shutdown(running) {
 						core.Result::Err(_) => { return 6; },
 						core.Result::Ok(_) => { return 0; }
 					}
@@ -136,16 +136,16 @@ fn _me_result(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result
 	}
 }
 
-// match rest.add_route(&mut app, "GET", "/me", core.callback2(_me_result)) { ... }
+// match rest.add_route(app, "GET", "/me", core.callback2(_me_result)) { ... }
 ```
 
 Both styles compose with middleware identically — the framework converts typed-throw responses to `Result::Err` (via `_dispatch_throws`) before the next-fn returns inside an onion layer.
 
 ## Request Accessors
 
-- `rest.path_param(req, &name) -> core.Result<String, rest.RestError>`
-- `rest.query_param(req, &name) -> Optional<String>`
-- `rest.require_query_param(req, &name) -> core.Result<String, rest.RestError>` (adds field info on missing)
+- `rest.path_param(req, name) -> core.Result<String, rest.RestError>`
+- `rest.query_param(req, name) -> Optional<String>`
+- `rest.require_query_param(req, name) -> core.Result<String, rest.RestError>` (adds field info on missing)
 - `rest.body_json(req) -> core.Result<json.JsonHandle, rest.RestError>` (returns a JsonHandle — Arc-backed, O(1) clone; dispatch caches the parse, so multiple calls in the same request are free)
 
 ## Error Envelope (Pinned)

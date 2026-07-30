@@ -12,7 +12,7 @@ import std.concurrent as conc;
 // Handler uses .or_throw() on a missing query param → errors:RestError(status=400)
 // is thrown and caught by _dispatch_throws as RestError(400, "request-invalid", ...).
 fn _handler_or_throw(req: &rest.Request, ctx: &mut rest.Context) throws -> rest.Response {
-	val value = rest.require_query_param(req, &"missing_param").or_throw();
+	val value = rest.require_query_param(req, "missing_param").or_throw();
 	return rest.json_response(200, "{\"got\":\"" + value + "\"}");
 }
 
@@ -20,19 +20,19 @@ fn _handler_or_throw(req: &rest.Request, ctx: &mut rest.Context) throws -> rest.
 // thrown and caught by _dispatch_throws as RestError(404, "not-found", ...).
 // (path_param returns 404/not-found for missing params per request.drift:188.)
 fn _handler_path_or_throw(req: &rest.Request, ctx: &mut rest.Context) throws -> rest.Response {
-	val id = rest.path_param(req, &"no_such_param").or_throw();
+	val id = rest.path_param(req, "no_such_param").or_throw();
 	return rest.json_response(200, "{\"id\":\"" + id + "\"}");
 }
 
 // Handler where .or_throw() succeeds (param present) → normal 200.
 fn _handler_or_throw_ok(req: &rest.Request, ctx: &mut rest.Context) throws -> rest.Response {
-	val value = rest.require_query_param(req, &"name").or_throw();
+	val value = rest.require_query_param(req, "name").or_throw();
 	return rest.json_response(200, "{\"name\":\"" + value + "\"}");
 }
 
 fn _build_app() nothrow -> rest.App {
 	var b = rest.new_app_builder();
-	rest.bind(&mut b, "127.0.0.1", 8080);
+	rest.bind(b, "127.0.0.1", 8080);
 	match rest.build_app(move b) {
 		core.Result::Ok(a) => { return move a; },
 		core.Result::Err(_) => { return _build_app(); }
@@ -42,14 +42,14 @@ fn _build_app() nothrow -> rest.App {
 // 100: .or_throw() on missing query param → 400
 fn scenario_query_param_or_throw_400() nothrow -> Int {
 	var app = _build_app();
-	match rest.add_throws_route(&mut app, "GET", "/probe", core.callback_throw2(_handler_or_throw)) {
+	match rest.add_throws_route(app, "GET", "/probe", core.callback_throw2(_handler_or_throw)) {
 		core.Result::Err(_) => { return 101; },
 		core.Result::Ok(_) => {}
 	}
 	var req = rest.new_request("GET", "/probe");
 	var ctx = rest.new_context();
 	val app_arc = conc.arc(move app);
-	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+	match rest.dispatch(app_arc.clone(), req, ctx) {
 		core.Result::Ok(_) => { return 102; },
 		core.Result::Err(e) => {
 			if e.status != 400 { return 103; }
@@ -67,14 +67,14 @@ fn scenario_query_param_or_throw_400() nothrow -> Int {
 // 200: .or_throw() on missing path param → 404 (path_param contract)
 fn scenario_path_param_or_throw_404() nothrow -> Int {
 	var app = _build_app();
-	match rest.add_throws_route(&mut app, "GET", "/item", core.callback_throw2(_handler_path_or_throw)) {
+	match rest.add_throws_route(app, "GET", "/item", core.callback_throw2(_handler_path_or_throw)) {
 		core.Result::Err(_) => { return 201; },
 		core.Result::Ok(_) => {}
 	}
 	var req = rest.new_request("GET", "/item");
 	var ctx = rest.new_context();
 	val app_arc = conc.arc(move app);
-	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+	match rest.dispatch(app_arc.clone(), req, ctx) {
 		core.Result::Ok(_) => { return 202; },
 		core.Result::Err(e) => {
 			if e.status != 404 { return 203; }
@@ -87,15 +87,15 @@ fn scenario_path_param_or_throw_404() nothrow -> Int {
 // 300: .or_throw() succeeds (param present) → 200
 fn scenario_or_throw_ok() nothrow -> Int {
 	var app = _build_app();
-	match rest.add_throws_route(&mut app, "GET", "/ok", core.callback_throw2(_handler_or_throw_ok)) {
+	match rest.add_throws_route(app, "GET", "/ok", core.callback_throw2(_handler_or_throw_ok)) {
 		core.Result::Err(_) => { return 301; },
 		core.Result::Ok(_) => {}
 	}
 	var req = rest.new_request("GET", "/ok");
-	rest.add_query_param(&mut req, "name", "alice");
+	rest.add_query_param(req, "name", "alice");
 	var ctx = rest.new_context();
 	val app_arc = conc.arc(move app);
-	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+	match rest.dispatch(app_arc.clone(), req, ctx) {
 		core.Result::Err(_) => { return 302; },
 		core.Result::Ok(resp) => {
 			if resp.status != 200 { return 303; }

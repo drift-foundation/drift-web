@@ -7,7 +7,7 @@ import web.rest as rest;
 
 fn test_new_is_empty() nothrow -> Int {
 	val ve = rest.new_validation_errors();
-	if rest.has_validation_errors(&ve) == true { return 1001; }
+	if rest.has_validation_errors(ve) == true { return 1001; }
 	return 0;
 }
 
@@ -15,8 +15,8 @@ fn test_new_is_empty() nothrow -> Int {
 
 fn test_add_single_field() nothrow -> Int {
 	var ve = rest.new_validation_errors();
-	rest.add_validation_error(&mut ve, "email", "missing-field");
-	if rest.has_validation_errors(&ve) != true { return 1101; }
+	rest.add_validation_error(ve, "email", "missing-field");
+	if rest.has_validation_errors(ve) != true { return 1101; }
 	val err = rest.validation_error(move ve);
 	if err.fields_json != "{\"email\":\"missing-field\"}" { return 1102; }
 	return 0;
@@ -29,10 +29,10 @@ fn test_merge_from_validator() nothrow -> Int {
 	match rest.validate_int("page", "abc") {
 		core.Result::Ok(_) => { return 1201; },
 		core.Result::Err(e) => {
-			rest.merge_validation_error(&mut ve, move e);
+			rest.merge_validation_error(ve, move e);
 		}
 	}
-	if rest.has_validation_errors(&ve) != true { return 1202; }
+	if rest.has_validation_errors(ve) != true { return 1202; }
 	val err = rest.validation_error(move ve);
 	if err.fields_json != "{\"page\":\"invalid-integer\"}" { return 1203; }
 	return 0;
@@ -43,13 +43,13 @@ fn test_merge_multiple_errors() nothrow -> Int {
 	match rest.validate_int("page", "abc") {
 		core.Result::Ok(_) => { return 1301; },
 		core.Result::Err(e) => {
-			rest.merge_validation_error(&mut ve, move e);
+			rest.merge_validation_error(ve, move e);
 		}
 	}
 	match rest.validate_non_empty("name", "") {
 		core.Result::Ok(_) => { return 1302; },
 		core.Result::Err(e) => {
-			rest.merge_validation_error(&mut ve, move e);
+			rest.merge_validation_error(ve, move e);
 		}
 	}
 	val err = rest.validation_error(move ve);
@@ -61,8 +61,8 @@ fn test_merge_multiple_errors() nothrow -> Int {
 
 fn test_last_write_wins_add() nothrow -> Int {
 	var ve = rest.new_validation_errors();
-	rest.add_validation_error(&mut ve, "email", "missing-field");
-	rest.add_validation_error(&mut ve, "email", "invalid-format");
+	rest.add_validation_error(ve, "email", "missing-field");
+	rest.add_validation_error(ve, "email", "invalid-format");
 	val err = rest.validation_error(move ve);
 	if err.fields_json != "{\"email\":\"invalid-format\"}" { return 1401; }
 	return 0;
@@ -70,11 +70,11 @@ fn test_last_write_wins_add() nothrow -> Int {
 
 fn test_last_write_wins_merge() nothrow -> Int {
 	var ve = rest.new_validation_errors();
-	rest.add_validation_error(&mut ve, "page", "required");
+	rest.add_validation_error(ve, "page", "required");
 	match rest.validate_int("page", "abc") {
 		core.Result::Ok(_) => { return 1501; },
 		core.Result::Err(e) => {
-			rest.merge_validation_error(&mut ve, move e);
+			rest.merge_validation_error(ve, move e);
 		}
 	}
 	val err = rest.validation_error(move ve);
@@ -86,8 +86,8 @@ fn test_last_write_wins_merge() nothrow -> Int {
 
 fn test_validation_error_contract() nothrow -> Int {
 	var ve = rest.new_validation_errors();
-	rest.add_validation_error(&mut ve, "email", "missing-field");
-	rest.add_validation_error(&mut ve, "age", "invalid-type");
+	rest.add_validation_error(ve, "email", "missing-field");
+	rest.add_validation_error(ve, "age", "invalid-type");
 	val err = rest.validation_error(move ve);
 	if err.status != 400 { return 1601; }
 	if err.event != "request-invalid" { return 1602; }

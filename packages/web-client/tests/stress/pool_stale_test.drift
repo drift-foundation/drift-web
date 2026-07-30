@@ -57,7 +57,7 @@ fn _assert_get(session: &client.Session, url: &String, label: &String) nothrow -
 				console.println("FAIL: " + *label + " status " + fmt.format_int(resp.status));
 				return 2;
 			}
-			match client.response_body_string(&resp) {
+			match client.response_body_string(resp) {
 				core.Result::Err(_) => {
 					console.println("FAIL: " + *label + " body read");
 					return 3;
@@ -89,7 +89,7 @@ pub fn main() nothrow -> Int {
 	}
 
 	var cfg = client.new_client_config();
-	client.with_tls_trust_store(&mut cfg, client.TrustStore::PemFile(path = ca_path));
+	client.with_tls_trust_store(cfg, client.TrustStore::PemFile(path = ca_path));
 	var session = client.new_session(move cfg);
 
 	val base_url = "https://127.0.0.1:" + fmt.format_int(https_port);
@@ -104,18 +104,18 @@ pub fn main() nothrow -> Int {
 
 		// Step 1: normal request (pool reuse or fresh)
 		val label1 = "cycle " + cycle_str + " step 1 (normal)";
-		val r1 = _assert_get(&session, &health_url, &label1);
+		val r1 = _assert_get(session, health_url, label1);
 		if r1 != 0 { return base + 1; }
 
 		// Step 2: server responds then silently drops the socket
 		val label2 = "cycle " + cycle_str + " step 2 (drop)";
-		val r2 = _assert_get(&session, &drop_url, &label2);
+		val r2 = _assert_get(session, drop_url, label2);
 		if r2 != 0 { return base + 2; }
 
 		// Step 3: stale-recovery assertion — client must detect dead socket
 		// and reconnect. This is the core of the test.
 		val label3 = "cycle " + cycle_str + " step 3 (stale-recovery)";
-		val r3 = _assert_get(&session, &health_url, &label3);
+		val r3 = _assert_get(session, health_url, label3);
 		if r3 != 0 {
 			console.println("FAIL: stale-connection recovery failed on cycle " + cycle_str);
 			return base + 3;

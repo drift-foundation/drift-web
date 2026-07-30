@@ -13,7 +13,7 @@ export {
 
 fn _field_error(field: String, tag: String, message: String) nothrow -> errors.RestError {
 	var err = errors.rest_error(400, "request-invalid", tag, message);
-	errors.add_field(&mut err, field, tag);
+	errors.add_field(err, field, tag);
 	return move err;
 }
 

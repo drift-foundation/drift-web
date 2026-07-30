@@ -71,7 +71,7 @@ tools/drift_test_parallel_runner.sh run-one \
 
 ### Test file anatomy
 
-Every test file is a standalone executable with a `module` declaration and `fn main() nothrow -> Int`:
+Every test file is a standalone executable with a `module` declaration and `pub fn main() nothrow -> Int`:
 
 ```drift
 module your.package.tests.unit.feature_test;
@@ -91,7 +91,7 @@ fn scenario_error_case() nothrow -> Int {
     return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     val a = scenario_happy_path();
     if a != 0 { return a; }
     val b = scenario_error_case();
@@ -112,7 +112,7 @@ fn main() nothrow -> Int {
 
 The shared test runner lives at `tools/drift_test_parallel_runner.sh`. It handles:
 
-- **`run-all`**: Discovers all `.drift` files under `--test-root` that have a `module` declaration and `fn main(`, compiles them in parallel, runs them serially.
+- **`run-all`**: Discovers all `.drift` files under `--test-root` that have a `module` declaration and `pub fn main(`, compiles them in parallel, runs them serially.
 - **`run-one`**: Compiles and runs a single `--test-file`.
 - **`compile`/`compile-one`**: Compile-only (no execution). Useful for syntax/type checking.
 

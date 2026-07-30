@@ -18,7 +18,7 @@ pub fn main() nothrow -> Int {
 	val header = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}";
 	val payload = "{\"sub\":\"test-user\",\"iat\":" + fmt.format_int(now) + "}";
 	val opts = jwt.new_sign_options();
-	match jwt.sign_hs256(&header, &payload, &secret, &opts) {
+	match jwt.sign_hs256(header, payload, secret, opts) {
 		core.Result::Err(_) => { return 1; },
 		core.Result::Ok(token) => {
 			// Verify the token.
@@ -27,7 +27,7 @@ pub fn main() nothrow -> Int {
 			match jwt.build_verify_policy(move pb) {
 				core.Result::Err(_) => { return 2; },
 				core.Result::Ok(policy) => {
-					match jwt.verify_hs256(&token, &secret, now, &policy) {
+					match jwt.verify_hs256(token, secret, now, policy) {
 						core.Result::Err(_) => { return 3; },
 						core.Result::Ok(_) => {}
 					}

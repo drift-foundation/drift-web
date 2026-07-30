@@ -80,7 +80,7 @@ pub fn main() nothrow -> Int {
 	val timeout = conc.Duration(millis = 5000);
 
 	var b = rest.new_app_builder();
-	rest.bind(&mut b, "127.0.0.1", 0);
+	rest.bind(b, "127.0.0.1", 0);
 
 	match rest.build_app(move b) {
 		core.Result::Err(_) => {
@@ -89,7 +89,7 @@ pub fn main() nothrow -> Int {
 		},
 		core.Result::Ok(a) => {
 			var app = move a;
-			match rest.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+			match rest.add_route(app, "GET", "/health", core.callback2(_health_handler)) {
 				core.Result::Err(_) => {
 					console.println("FAIL: add_route");
 					return 2;
@@ -104,31 +104,31 @@ pub fn main() nothrow -> Int {
 				},
 				core.Result::Ok(rs) => {
 					var running = move rs;
-					val port = rest.server_port(&running);
+					val port = rest.server_port(running);
 
 					// Send one real HTTP request.
 					val raw_req = "GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
 					var addr = net.socket_addr("127.0.0.1", port);
-					match net.connect(&addr, timeout) {
+					match net.connect(addr, timeout) {
 						core.Result::Err(_) => {
 							console.println("FAIL: connect");
-							val _ = rest.shutdown(&mut running);
+							val _ = rest.shutdown(running);
 							return 4;
 						},
 						core.Result::Ok(conn) => {
 							var stream = move conn;
-							val req_bytes = _to_bytes(&raw_req);
+							val req_bytes = _to_bytes(raw_req);
 							var wbuf = io.buffer(req_bytes.len);
 							var i = 0;
 							while i < req_bytes.len {
 								io.buffer_write(&mut wbuf, i, req_bytes[i]);
 								i = i + 1;
 							}
-							match stream.write(&wbuf, timeout) {
+							match stream.write(wbuf, timeout) {
 								core.Result::Err(_) => {
 									console.println("FAIL: write");
 									val _ = stream.close(timeout);
-									val _ = rest.shutdown(&mut running);
+									val _ = rest.shutdown(running);
 									return 5;
 								},
 								core.Result::Ok(_) => {}
@@ -139,7 +139,7 @@ pub fn main() nothrow -> Int {
 							var done = false;
 							while !done {
 								var rbuf = io.buffer(4096);
-								match stream.read(&mut rbuf, timeout) {
+								match stream.read(rbuf, timeout) {
 									core.Result::Err(_) => { done = true; },
 									core.Result::Ok(n) => {
 										if n == 0 { done = true; }
@@ -155,26 +155,26 @@ pub fn main() nothrow -> Int {
 							}
 							val _ = stream.close(timeout);
 
-							val resp_str = _bytes_to_string(&collected);
+							val resp_str = _bytes_to_string(collected);
 
 							// Verify response.
 							val s_200 = "HTTP/1.1 200 OK";
-							if !_starts_with(&resp_str, &s_200) {
+							if !_starts_with(resp_str, s_200) {
 								console.println("FAIL: expected 200, got: " + resp_str);
-								val _ = rest.shutdown(&mut running);
+								val _ = rest.shutdown(running);
 								return 6;
 							}
 							val m_health = "{\"ok\":true}";
-							if !_contains(&resp_str, &m_health) {
+							if !_contains(resp_str, m_health) {
 								console.println("FAIL: missing health body");
-								val _ = rest.shutdown(&mut running);
+								val _ = rest.shutdown(running);
 								return 7;
 							}
 						}
 					}
 
 					// Clean shutdown.
-					match rest.shutdown(&mut running) {
+					match rest.shutdown(running) {
 						core.Result::Err(e) => {
 							console.println("FAIL: shutdown: " + e.message);
 							return 8;

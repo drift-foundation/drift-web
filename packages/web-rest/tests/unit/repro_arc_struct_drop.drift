@@ -43,7 +43,7 @@ fn _consume(handle: Handle) nothrow -> Int {
 // --- PASS: struct dropped without .get() on Arc field — no leak ---
 fn scenario_no_leak_no_get() nothrow -> Int {
 	var h = _new_handle();
-	var caller = _clone_handle(&h);
+	var caller = _clone_handle(h);
 	var sv = conc.spawn_cb(| | captures(move h) => {
 		return _consume(move h);
 	});
@@ -87,7 +87,7 @@ fn scenario_no_leak_bare_arc() nothrow -> Int {
 // --- BUG: Arc-in-struct, caller calls .get() on struct field — LEAKS ---
 fn scenario_leak_struct_get() nothrow -> Int {
 	var h = _new_handle();
-	var caller = _clone_handle(&h);
+	var caller = _clone_handle(h);
 	var sv = conc.spawn_cb(| | captures(move h) => {
 		return _wait_on(move h);
 	});

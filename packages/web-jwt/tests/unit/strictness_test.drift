@@ -32,7 +32,7 @@ fn scenario_padding_rejected() nothrow -> Int {
 	val padded_token = "eyJhbGciOiJIUzI1NiJ9=.eyJzdWIiOiJ1MSJ9.AAAA";
 	var secret = _test_secret();
 	val policy = _default_policy();
-	match jwt.verify_hs256(&padded_token, &secret, 0, &policy) {
+	match jwt.verify_hs256(padded_token, secret, 0, policy) {
 		core.Result::Ok(_) => { return 101; },
 		core.Result::Err(e) => {
 			if e.tag != "jwt-invalid-segment" { return 102; }
@@ -47,14 +47,14 @@ fn scenario_standard_base64_chars_rejected() nothrow -> Int {
 	val bad_plus = "eyJhbGci+iJIUzI1NiJ9.eyJzdWIiOiJ1MSJ9.AAAA";
 	var secret = _test_secret();
 	val policy = _default_policy();
-	match jwt.verify_hs256(&bad_plus, &secret, 0, &policy) {
+	match jwt.verify_hs256(bad_plus, secret, 0, policy) {
 		core.Result::Ok(_) => { return 201; },
 		core.Result::Err(e) => {
 			if e.tag != "jwt-invalid-segment" { return 202; }
 		}
 	}
 	val bad_slash = "eyJhbGci/iJIUzI1NiJ9.eyJzdWIiOiJ1MSJ9.AAAA";
-	match jwt.verify_hs256(&bad_slash, &secret, 0, &policy) {
+	match jwt.verify_hs256(bad_slash, secret, 0, policy) {
 		core.Result::Ok(_) => { return 203; },
 		core.Result::Err(e) => {
 			if e.tag != "jwt-invalid-segment" { return 204; }
@@ -68,7 +68,7 @@ fn scenario_empty_segment_rejected() nothrow -> Int {
 	val empty_header = ".eyJzdWIiOiJ1MSJ9.AAAA";
 	var secret = _test_secret();
 	val policy = _default_policy();
-	match jwt.verify_hs256(&empty_header, &secret, 0, &policy) {
+	match jwt.verify_hs256(empty_header, secret, 0, policy) {
 		core.Result::Ok(_) => { return 301; },
 		core.Result::Err(_) => { return 0; }
 	}
@@ -83,7 +83,7 @@ fn scenario_verify_typ_mismatch_rejected() nothrow -> Int {
 	var opts = jwt.new_sign_options();
 	opts.enforce_typ_jwt = false;
 	var token = "";
-	match jwt.sign_hs256(&header, &payload, &secret, &opts) {
+	match jwt.sign_hs256(header, payload, secret, opts) {
 		core.Result::Ok(v) => { token = move v; },
 		core.Result::Err(_) => { return 401; }
 	}
@@ -95,7 +95,7 @@ fn scenario_verify_typ_mismatch_rejected() nothrow -> Int {
 		core.Result::Ok(v) => { policy = v; },
 		core.Result::Err(_) => { return 402; }
 	}
-	match jwt.verify_hs256(&token, &secret, 0, &policy) {
+	match jwt.verify_hs256(token, secret, 0, policy) {
 		core.Result::Ok(_) => { return 403; },
 		core.Result::Err(e) => {
 			if e.tag != "jwt-header-typ-mismatch" { return 404; }
@@ -112,7 +112,7 @@ fn scenario_verify_typ_ignored_when_disabled() nothrow -> Int {
 	var opts = jwt.new_sign_options();
 	opts.enforce_typ_jwt = false;
 	var token = "";
-	match jwt.sign_hs256(&header, &payload, &secret, &opts) {
+	match jwt.sign_hs256(header, payload, secret, opts) {
 		core.Result::Ok(v) => { token = move v; },
 		core.Result::Err(_) => { return 501; }
 	}
@@ -123,7 +123,7 @@ fn scenario_verify_typ_ignored_when_disabled() nothrow -> Int {
 		core.Result::Ok(v) => { policy = v; },
 		core.Result::Err(_) => { return 502; }
 	}
-	match jwt.verify_hs256(&token, &secret, 0, &policy) {
+	match jwt.verify_hs256(token, secret, 0, policy) {
 		core.Result::Ok(_) => { return 0; },
 		core.Result::Err(_) => { return 503; }
 	}
@@ -137,7 +137,7 @@ fn scenario_verify_missing_typ_rejected_when_required() nothrow -> Int {
 	var opts = jwt.new_sign_options();
 	opts.enforce_typ_jwt = false;
 	var token = "";
-	match jwt.sign_hs256(&header, &payload, &secret, &opts) {
+	match jwt.sign_hs256(header, payload, secret, opts) {
 		core.Result::Ok(v) => { token = move v; },
 		core.Result::Err(_) => { return 601; }
 	}
@@ -148,7 +148,7 @@ fn scenario_verify_missing_typ_rejected_when_required() nothrow -> Int {
 		core.Result::Ok(v) => { policy = v; },
 		core.Result::Err(_) => { return 602; }
 	}
-	match jwt.verify_hs256(&token, &secret, 0, &policy) {
+	match jwt.verify_hs256(token, secret, 0, policy) {
 		core.Result::Ok(_) => { return 603; },
 		core.Result::Err(e) => {
 			if e.tag != "jwt-header-typ-mismatch" { return 604; }
@@ -165,7 +165,7 @@ fn scenario_verify_missing_typ_accepted_when_not_required() nothrow -> Int {
 	var opts = jwt.new_sign_options();
 	opts.enforce_typ_jwt = false;
 	var token = "";
-	match jwt.sign_hs256(&header, &payload, &secret, &opts) {
+	match jwt.sign_hs256(header, payload, secret, opts) {
 		core.Result::Ok(v) => { token = move v; },
 		core.Result::Err(_) => { return 701; }
 	}
@@ -176,7 +176,7 @@ fn scenario_verify_missing_typ_accepted_when_not_required() nothrow -> Int {
 		core.Result::Ok(v) => { policy = v; },
 		core.Result::Err(_) => { return 702; }
 	}
-	match jwt.verify_hs256(&token, &secret, 0, &policy) {
+	match jwt.verify_hs256(token, secret, 0, policy) {
 		core.Result::Ok(_) => { return 0; },
 		core.Result::Err(_) => { return 703; }
 	}

@@ -84,7 +84,7 @@ fn _empty_bytes() nothrow -> Array<Byte> {
 pub fn send(cfg: &ClientConfig, req: request.ClientRequest) nothrow -> core.Result<resp.ClientResponse, errors.ClientError> {
 	// 1. Parse URL.
 	var parsed = url.ParsedUrl(scheme = "", host = "", port = 0, path = "");
-	match url.parse_url(&req.url) {
+	match url.parse_url(req.url) {
 		core.Result::Ok(p) => { parsed = move p; },
 		core.Result::Err(e) => {
 			return core.Result::Err(move e);
@@ -94,15 +94,15 @@ pub fn send(cfg: &ClientConfig, req: request.ClientRequest) nothrow -> core.Resu
 	// 2. TCP connect.
 	val connect_timeout = conc.Duration(millis = cfg.connect_timeout_ms);
 	var addr = net.socket_addr(parsed.host, parsed.port);
-	match net.connect(&addr, connect_timeout) {
+	match net.connect(addr, connect_timeout) {
 		core.Result::Err(_) => {
 			return core.Result::Err(errors.client_error(errors.TAG_CONNECT_FAILED, "TCP connect failed"));
 		},
 		core.Result::Ok(s) => {
 			if parsed.scheme == "https" {
-				return _send_https(move s, cfg, &parsed, &req);
+				return _send_https(move s, cfg, parsed, req);
 			}
-			return _send_http(move s, cfg, &parsed, &req);
+			return _send_http(move s, cfg, parsed, req);
 		}
 	}
 }
@@ -113,7 +113,7 @@ fn _send_http(var stream: net.TcpStream, cfg: &ClientConfig, parsed: &url.Parsed
 	val io_timeout = conc.Duration(millis = cfg.io_timeout_ms);
 	val wire = http.serialize_request(parsed, req);
 
-	match _write_all_tcp(&stream, &wire, io_timeout) {
+	match _write_all_tcp(stream, wire, io_timeout) {
 		core.Result::Err(e) => {
 			val _ = stream.close(io_timeout);
 			return core.Result::Err(move e);
@@ -121,7 +121,7 @@ fn _send_http(var stream: net.TcpStream, cfg: &ClientConfig, parsed: &url.Parsed
 		core.Result::Ok(_) => {}
 	}
 
-	var result = _read_response_tcp(&stream, io_timeout, cfg.max_response_body_bytes);
+	var result = _read_response_tcp(stream, io_timeout, cfg.max_response_body_bytes);
 	val _ = stream.close(io_timeout);
 	return move result;
 }
@@ -143,7 +143,7 @@ fn _send_https(var tcp: net.TcpStream, cfg: &ClientConfig, parsed: &url.ParsedUr
 		},
 		core.Result::Ok(tls_cfg) => {
 			// TLS handshake.
-			match tls_handshake.connect_tls(move tcp, &tls_cfg) {
+			match tls_handshake.connect_tls(move tcp, tls_cfg) {
 				core.Result::Err(e) => {
 					return core.Result::Err(errors.client_error(errors.TAG_TLS_FAILED, "TLS handshake failed: " + e.message));
 				},
@@ -161,7 +161,7 @@ fn _send_on_tls(var tls: tls_stream.TlsStream, cfg: &ClientConfig, parsed: &url.
 	val wire = http.serialize_request(parsed, req);
 
 	// Write request via TLS.
-	match _write_all_tls(&mut tls, &wire) {
+	match _write_all_tls(tls, wire) {
 		core.Result::Err(e) => {
 			val _ = tls_stream.tls_close(move tls);
 			return core.Result::Err(move e);
@@ -170,7 +170,7 @@ fn _send_on_tls(var tls: tls_stream.TlsStream, cfg: &ClientConfig, parsed: &url.
 	}
 
 	// Read response via TLS.
-	var result = _read_response_tls(&mut tls, cfg.max_response_body_bytes);
+	var result = _read_response_tls(tls, cfg.max_response_body_bytes);
 
 	// Close TLS.
 	val _ = tls_stream.tls_close(move tls);
@@ -190,7 +190,7 @@ fn _write_all_tcp(stream: &net.TcpStream, data: &Array<Byte>, timeout: conc.Dura
 			io.buffer_write(&mut buf, i, data[written + i]);
 			i = i + 1;
 		}
-		match stream.write(&buf, timeout) {
+		match stream.write(buf, timeout) {
 			core.Result::Err(_) => {
 				return core.Result::Err(errors.client_error(errors.TAG_SEND_FAILED, "failed to write request"));
 			},
@@ -214,7 +214,7 @@ fn _read_response_tcp(stream: &net.TcpStream, timeout: conc.Duration, max_body: 
 			return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "response headers too large"));
 		}
 		var buf = io.buffer(4096);
-		match stream.read(&mut buf, timeout) {
+		match stream.read(buf, timeout) {
 			core.Result::Err(_) => {
 				return core.Result::Err(errors.client_error(errors.TAG_READ_FAILED, "failed to read response"));
 			},
@@ -230,7 +230,7 @@ fn _read_response_tcp(stream: &net.TcpStream, timeout: conc.Duration, max_body: 
 						collected.push(io.buffer_read(&mut buf, j));
 						j = j + 1;
 					}
-					if http.find_header_end_bytes(&collected) >= 0 {
+					if http.find_header_end_bytes(collected) >= 0 {
 						header_done = true;
 					}
 				}
@@ -238,7 +238,7 @@ fn _read_response_tcp(stream: &net.TcpStream, timeout: conc.Duration, max_body: 
 		}
 	}
 
-	return _parse_and_read_body(&collected, stream, timeout, max_body);
+	return _parse_and_read_body(collected, stream, timeout, max_body);
 }
 
 fn _parse_and_read_body(collected: &Array<Byte>, stream: &net.TcpStream, timeout: conc.Duration, max_body: Int) nothrow -> core.Result<resp.ClientResponse, errors.ClientError> {
@@ -249,7 +249,7 @@ fn _parse_and_read_body(collected: &Array<Byte>, stream: &net.TcpStream, timeout
 		buf_data.push(collected[ci]);
 		ci = ci + 1;
 	}
-	return _finish_response(&mut buf_data, stream, timeout, max_body);
+	return _finish_response(buf_data, stream, timeout, max_body);
 }
 
 fn _finish_response(collected: &mut Array<Byte>, stream: &net.TcpStream, timeout: conc.Duration, max_body: Int) nothrow -> core.Result<resp.ClientResponse, errors.ClientError> {
@@ -266,8 +266,8 @@ fn _finish_response(collected: &mut Array<Byte>, stream: &net.TcpStream, timeout
 			content_length = p.content_length;
 			chunked = p.chunked;
 			var mut_p = move p;
-			hdr_keys = mem.replace(&mut mut_p.header_keys, _empty_strings());
-			hdr_values = mem.replace(&mut mut_p.header_values, _empty_strings());
+			hdr_keys = mem.replace(mut_p.header_keys, _empty_strings());
+			hdr_values = mem.replace(mut_p.header_values, _empty_strings());
 		},
 		core.Result::Err(e) => {
 			return core.Result::Err(move e);
@@ -286,7 +286,7 @@ fn _finish_response(collected: &mut Array<Byte>, stream: &net.TcpStream, timeout
 		var body_need = content_length - body_have;
 		while body_need > 0 {
 			var buf = io.buffer(4096);
-			match stream.read(&mut buf, timeout) {
+			match stream.read(buf, timeout) {
 				core.Result::Err(_) => {
 					return core.Result::Err(errors.client_error(errors.TAG_READ_FAILED, "incomplete response body"));
 				},
@@ -316,7 +316,7 @@ fn _finish_response(collected: &mut Array<Byte>, stream: &net.TcpStream, timeout
 			return core.Result::Err(errors.client_error(errors.TAG_BODY_TOO_LARGE, "response body exceeds size limit"));
 		}
 		var buf = io.buffer(4096);
-		match stream.read(&mut buf, timeout) {
+		match stream.read(buf, timeout) {
 			core.Result::Err(_) => {
 				return core.Result::Err(errors.client_error(errors.TAG_READ_FAILED, "read error during close-delimited body"));
 			},
@@ -344,7 +344,7 @@ fn _read_chunked_tcp(initial: &Array<Byte>, body_start: Int, stream: &net.TcpStr
 	var attempts = 0;
 	var done = false;
 	while not done {
-		match http.decode_chunked_body(&raw, 0, max_body) {
+		match http.decode_chunked_body(raw, 0, max_body) {
 			core.Result::Ok(body) => {
 				return core.Result::Ok(resp.ClientResponse(
 					status = status, header_keys = move keys, header_values = move values, body = move body
@@ -355,7 +355,7 @@ fn _read_chunked_tcp(initial: &Array<Byte>, body_start: Int, stream: &net.TcpStr
 					return core.Result::Err(move e);
 				}
 				var buf = io.buffer(4096);
-				match stream.read(&mut buf, timeout) {
+				match stream.read(buf, timeout) {
 					core.Result::Err(_) => {
 						return core.Result::Err(errors.client_error(errors.TAG_READ_FAILED, "failed to read chunked body"));
 					},
@@ -396,7 +396,7 @@ fn _write_all_tls(tls: &mut tls_stream.TlsStream, data: &Array<Byte>) nothrow ->
 			chunk.push(data[written + i]);
 			i = i + 1;
 		}
-		match tls_stream.tls_write(tls, &chunk) {
+		match tls_stream.tls_write(tls, chunk) {
 			core.Result::Err(e) => {
 				return core.Result::Err(errors.client_error(errors.TAG_SEND_FAILED, "TLS write failed: " + e.message));
 			},
@@ -421,7 +421,7 @@ fn _read_response_tls(tls: &mut tls_stream.TlsStream, max_body: Int) nothrow -> 
 			return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "response headers too large"));
 		}
 		var read_buf: Array<Byte> = [];
-		match tls_stream.tls_read(tls, &mut read_buf, 4096) {
+		match tls_stream.tls_read(tls, read_buf, 4096) {
 			core.Result::Err(e) => {
 				if e.tag == tls_errors.TAG_STREAM_CLOSED {
 					if collected.len == 0 {
@@ -444,7 +444,7 @@ fn _read_response_tls(tls: &mut tls_stream.TlsStream, max_body: Int) nothrow -> 
 						collected.push(read_buf[j]);
 						j = j + 1;
 					}
-					if http.find_header_end_bytes(&collected) >= 0 {
+					if http.find_header_end_bytes(collected) >= 0 {
 						header_done = true;
 					}
 				}
@@ -459,15 +459,15 @@ fn _read_response_tls(tls: &mut tls_stream.TlsStream, max_body: Int) nothrow -> 
 	var body_start = 0;
 	var content_length = -1;
 	var chunked = false;
-	match http.parse_response_headers(&collected) {
+	match http.parse_response_headers(collected) {
 		core.Result::Ok(p) => {
 			status = p.status;
 			body_start = p.body_start;
 			content_length = p.content_length;
 			chunked = p.chunked;
 			var mut_p = move p;
-			hdr_keys = mem.replace(&mut mut_p.header_keys, _empty_strings());
-			hdr_values = mem.replace(&mut mut_p.header_values, _empty_strings());
+			hdr_keys = mem.replace(mut_p.header_keys, _empty_strings());
+			hdr_values = mem.replace(mut_p.header_values, _empty_strings());
 		},
 		core.Result::Err(e) => {
 			return core.Result::Err(move e);
@@ -476,7 +476,7 @@ fn _read_response_tls(tls: &mut tls_stream.TlsStream, max_body: Int) nothrow -> 
 
 	// Read body.
 	if chunked {
-		return _read_chunked_tls(&collected, body_start, tls, max_body, status, move hdr_keys, move hdr_values);
+		return _read_chunked_tls(collected, body_start, tls, max_body, status, move hdr_keys, move hdr_values);
 	}
 
 	if content_length >= 0 {
@@ -487,7 +487,7 @@ fn _read_response_tls(tls: &mut tls_stream.TlsStream, max_body: Int) nothrow -> 
 		var body_need = content_length - body_have;
 		while body_need > 0 {
 			var read_buf: Array<Byte> = [];
-			match tls_stream.tls_read(tls, &mut read_buf, 4096) {
+			match tls_stream.tls_read(tls, read_buf, 4096) {
 				core.Result::Err(_) => {
 					return core.Result::Err(errors.client_error(errors.TAG_READ_FAILED, "incomplete response body over TLS"));
 				},
@@ -501,7 +501,7 @@ fn _read_response_tls(tls: &mut tls_stream.TlsStream, max_body: Int) nothrow -> 
 				}
 			}
 		}
-		var body = _extract_bytes(&collected, body_start, body_start + content_length);
+		var body = _extract_bytes(collected, body_start, body_start + content_length);
 		return core.Result::Ok(resp.ClientResponse(
 			status = status, header_keys = move hdr_keys, header_values = move hdr_values, body = move body
 		));
@@ -514,7 +514,7 @@ fn _read_response_tls(tls: &mut tls_stream.TlsStream, max_body: Int) nothrow -> 
 			return core.Result::Err(errors.client_error(errors.TAG_BODY_TOO_LARGE, "response body exceeds size limit"));
 		}
 		var read_buf: Array<Byte> = [];
-		match tls_stream.tls_read(tls, &mut read_buf, 4096) {
+		match tls_stream.tls_read(tls, read_buf, 4096) {
 			core.Result::Err(e) => {
 				if e.tag == tls_errors.TAG_STREAM_CLOSED {
 					reading = false;
@@ -530,7 +530,7 @@ fn _read_response_tls(tls: &mut tls_stream.TlsStream, max_body: Int) nothrow -> 
 			}
 		}
 	}
-	var body = _extract_bytes(&collected, body_start, collected.len);
+	var body = _extract_bytes(collected, body_start, collected.len);
 	return core.Result::Ok(resp.ClientResponse(
 		status = status, header_keys = move hdr_keys, header_values = move hdr_values, body = move body
 	));
@@ -543,7 +543,7 @@ fn _read_chunked_tls(initial: &Array<Byte>, body_start: Int, tls: &mut tls_strea
 	var attempts = 0;
 	var done = false;
 	while not done {
-		match http.decode_chunked_body(&raw, 0, max_body) {
+		match http.decode_chunked_body(raw, 0, max_body) {
 			core.Result::Ok(body) => {
 				return core.Result::Ok(resp.ClientResponse(
 					status = status, header_keys = move keys, header_values = move values, body = move body
@@ -554,7 +554,7 @@ fn _read_chunked_tls(initial: &Array<Byte>, body_start: Int, tls: &mut tls_strea
 					return core.Result::Err(move e);
 				}
 				var read_buf: Array<Byte> = [];
-				match tls_stream.tls_read(tls, &mut read_buf, 4096) {
+				match tls_stream.tls_read(tls, read_buf, 4096) {
 					core.Result::Err(_) => {
 						return core.Result::Err(errors.client_error(errors.TAG_READ_FAILED, "failed to read chunked body over TLS"));
 					},
@@ -597,7 +597,7 @@ pub struct PooledSendResult {
 pub fn connect_tcp(cfg: &ClientConfig, parsed: &url.ParsedUrl) nothrow -> core.Result<net.TcpStream, errors.ClientError> {
 	val connect_timeout = conc.Duration(millis = cfg.connect_timeout_ms);
 	var addr = net.socket_addr(parsed.host, parsed.port);
-	match net.connect(&addr, connect_timeout) {
+	match net.connect(addr, connect_timeout) {
 		core.Result::Err(_) => {
 			return core.Result::Err(errors.client_error(errors.TAG_CONNECT_FAILED, "TCP connect failed"));
 		},
@@ -622,7 +622,7 @@ pub fn connect_tls(cfg: &ClientConfig, parsed: &url.ParsedUrl, tcp: net.TcpStrea
 			return core.Result::Err(errors.client_error(errors.TAG_TLS_FAILED, "TLS config error: " + e.message));
 		},
 		core.Result::Ok(tls_cfg) => {
-			match tls_handshake.connect_tls(move tcp, &tls_cfg) {
+			match tls_handshake.connect_tls(move tcp, tls_cfg) {
 				core.Result::Err(e) => {
 					return core.Result::Err(errors.client_error(errors.TAG_TLS_FAILED, "TLS handshake failed: " + e.message));
 				},
@@ -641,7 +641,7 @@ pub fn send_on_tcp(stream: &net.TcpStream, initial_bytes: Array<Byte>, cfg: &Cli
 	val wire = http.serialize_request(parsed, req);
 
 	// Write request.
-	match _write_all_tcp(stream, &wire, io_timeout) {
+	match _write_all_tcp(stream, wire, io_timeout) {
 		core.Result::Err(e) => {
 			return core.Result::Err(move e);
 		},
@@ -656,7 +656,7 @@ pub fn send_on_tls(tls: &mut tls_stream.TlsStream, initial_bytes: Array<Byte>, c
 	val wire = http.serialize_request(parsed, req);
 
 	// Write request.
-	match _write_all_tls(tls, &wire) {
+	match _write_all_tls(tls, wire) {
 		core.Result::Err(e) => {
 			return core.Result::Err(move e);
 		},
@@ -675,7 +675,7 @@ fn _read_pooled_response_tcp(stream: &net.TcpStream, initial_bytes: Array<Byte>,
 
 	// Read until we have complete headers.
 	var header_done = false;
-	if http.find_header_end_bytes(&collected) >= 0 {
+	if http.find_header_end_bytes(collected) >= 0 {
 		header_done = true;
 	}
 	while not header_done {
@@ -683,7 +683,7 @@ fn _read_pooled_response_tcp(stream: &net.TcpStream, initial_bytes: Array<Byte>,
 			return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "response headers too large"));
 		}
 		var buf = io.buffer(4096);
-		match stream.read(&mut buf, timeout) {
+		match stream.read(buf, timeout) {
 			core.Result::Err(_) => {
 				return core.Result::Err(errors.client_error(errors.TAG_READ_FAILED, "failed to read response"));
 			},
@@ -699,7 +699,7 @@ fn _read_pooled_response_tcp(stream: &net.TcpStream, initial_bytes: Array<Byte>,
 						collected.push(io.buffer_read(&mut buf, j));
 						j = j + 1;
 					}
-					if http.find_header_end_bytes(&collected) >= 0 {
+					if http.find_header_end_bytes(collected) >= 0 {
 						header_done = true;
 					}
 				}
@@ -715,7 +715,7 @@ fn _read_pooled_response_tcp(stream: &net.TcpStream, initial_bytes: Array<Byte>,
 	var content_length = -1;
 	var chunked = false;
 	var conn_close = false;
-	match http.parse_response_headers(&collected) {
+	match http.parse_response_headers(collected) {
 		core.Result::Ok(p) => {
 			status = p.status;
 			body_start = p.body_start;
@@ -723,8 +723,8 @@ fn _read_pooled_response_tcp(stream: &net.TcpStream, initial_bytes: Array<Byte>,
 			chunked = p.chunked;
 			conn_close = p.conn_close;
 			var mut_p = move p;
-			hdr_keys = mem.replace(&mut mut_p.header_keys, _empty_strings());
-			hdr_values = mem.replace(&mut mut_p.header_values, _empty_strings());
+			hdr_keys = mem.replace(mut_p.header_keys, _empty_strings());
+			hdr_values = mem.replace(mut_p.header_values, _empty_strings());
 		},
 		core.Result::Err(e) => {
 			return core.Result::Err(move e);
@@ -733,7 +733,7 @@ fn _read_pooled_response_tcp(stream: &net.TcpStream, initial_bytes: Array<Byte>,
 
 	// Chunked or read-until-close: not reusable.
 	if chunked == true {
-		return _read_chunked_tcp_pooled(&collected, body_start, stream, timeout, max_body, status, move hdr_keys, move hdr_values);
+		return _read_chunked_tcp_pooled(collected, body_start, stream, timeout, max_body, status, move hdr_keys, move hdr_values);
 	}
 
 	if content_length >= 0 {
@@ -744,7 +744,7 @@ fn _read_pooled_response_tcp(stream: &net.TcpStream, initial_bytes: Array<Byte>,
 		var body_need = content_length - body_have;
 		while body_need > 0 {
 			var buf = io.buffer(4096);
-			match stream.read(&mut buf, timeout) {
+			match stream.read(buf, timeout) {
 				core.Result::Err(_) => {
 					return core.Result::Err(errors.client_error(errors.TAG_READ_FAILED, "incomplete response body"));
 				},
@@ -762,9 +762,9 @@ fn _read_pooled_response_tcp(stream: &net.TcpStream, initial_bytes: Array<Byte>,
 			}
 		}
 		val body_end = body_start + content_length;
-		var body = _extract_bytes(&collected, body_start, body_end);
+		var body = _extract_bytes(collected, body_start, body_end);
 		// Extract remainder bytes for caller.
-		var remainder = _extract_bytes(&collected, body_end, collected.len);
+		var remainder = _extract_bytes(collected, body_end, collected.len);
 		var reusable = true;
 		if conn_close == true {
 			reusable = false;
@@ -782,7 +782,7 @@ fn _read_pooled_response_tcp(stream: &net.TcpStream, initial_bytes: Array<Byte>,
 			return core.Result::Err(errors.client_error(errors.TAG_BODY_TOO_LARGE, "response body exceeds size limit"));
 		}
 		var buf = io.buffer(4096);
-		match stream.read(&mut buf, timeout) {
+		match stream.read(buf, timeout) {
 			core.Result::Err(_) => {
 				return core.Result::Err(errors.client_error(errors.TAG_READ_FAILED, "read error during close-delimited body"));
 			},
@@ -797,7 +797,7 @@ fn _read_pooled_response_tcp(stream: &net.TcpStream, initial_bytes: Array<Byte>,
 			}
 		}
 	}
-	var body = _extract_bytes(&collected, body_start, collected.len);
+	var body = _extract_bytes(collected, body_start, collected.len);
 	val response = resp.ClientResponse(
 		status = status, header_keys = move hdr_keys, header_values = move hdr_values, body = move body
 	);
@@ -812,7 +812,7 @@ fn _read_pooled_response_tls(tls: &mut tls_stream.TlsStream, initial_bytes: Arra
 
 	// Read until we have complete headers.
 	var header_done = false;
-	if http.find_header_end_bytes(&collected) >= 0 {
+	if http.find_header_end_bytes(collected) >= 0 {
 		header_done = true;
 	}
 	while not header_done {
@@ -820,7 +820,7 @@ fn _read_pooled_response_tls(tls: &mut tls_stream.TlsStream, initial_bytes: Arra
 			return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "response headers too large"));
 		}
 		var tls_read_buf: Array<Byte> = [];
-		match tls_stream.tls_read(tls, &mut tls_read_buf, 4096) {
+		match tls_stream.tls_read(tls, tls_read_buf, 4096) {
 			core.Result::Err(e) => {
 				if e.tag == tls_errors.TAG_STREAM_CLOSED {
 					if collected.len == 0 {
@@ -843,7 +843,7 @@ fn _read_pooled_response_tls(tls: &mut tls_stream.TlsStream, initial_bytes: Arra
 						collected.push(tls_read_buf[j]);
 						j = j + 1;
 					}
-					if http.find_header_end_bytes(&collected) >= 0 {
+					if http.find_header_end_bytes(collected) >= 0 {
 						header_done = true;
 					}
 				}
@@ -859,7 +859,7 @@ fn _read_pooled_response_tls(tls: &mut tls_stream.TlsStream, initial_bytes: Arra
 	var content_length = -1;
 	var chunked = false;
 	var conn_close = false;
-	match http.parse_response_headers(&collected) {
+	match http.parse_response_headers(collected) {
 		core.Result::Ok(p) => {
 			status = p.status;
 			body_start = p.body_start;
@@ -867,8 +867,8 @@ fn _read_pooled_response_tls(tls: &mut tls_stream.TlsStream, initial_bytes: Arra
 			chunked = p.chunked;
 			conn_close = p.conn_close;
 			var mut_p = move p;
-			hdr_keys = mem.replace(&mut mut_p.header_keys, _empty_strings());
-			hdr_values = mem.replace(&mut mut_p.header_values, _empty_strings());
+			hdr_keys = mem.replace(mut_p.header_keys, _empty_strings());
+			hdr_values = mem.replace(mut_p.header_values, _empty_strings());
 		},
 		core.Result::Err(e) => {
 			return core.Result::Err(move e);
@@ -876,7 +876,7 @@ fn _read_pooled_response_tls(tls: &mut tls_stream.TlsStream, initial_bytes: Arra
 	}
 
 	if chunked == true {
-		return _read_chunked_tls_pooled(&collected, body_start, tls, max_body, status, move hdr_keys, move hdr_values);
+		return _read_chunked_tls_pooled(collected, body_start, tls, max_body, status, move hdr_keys, move hdr_values);
 	}
 
 	if content_length >= 0 {
@@ -887,7 +887,7 @@ fn _read_pooled_response_tls(tls: &mut tls_stream.TlsStream, initial_bytes: Arra
 		var body_need = content_length - body_have;
 		while body_need > 0 {
 			var tls_read_buf: Array<Byte> = [];
-			match tls_stream.tls_read(tls, &mut tls_read_buf, 4096) {
+			match tls_stream.tls_read(tls, tls_read_buf, 4096) {
 				core.Result::Err(_) => {
 					return core.Result::Err(errors.client_error(errors.TAG_READ_FAILED, "incomplete response body over TLS"));
 				},
@@ -902,8 +902,8 @@ fn _read_pooled_response_tls(tls: &mut tls_stream.TlsStream, initial_bytes: Arra
 			}
 		}
 		val body_end = body_start + content_length;
-		var body = _extract_bytes(&collected, body_start, body_end);
-		var remainder = _extract_bytes(&collected, body_end, collected.len);
+		var body = _extract_bytes(collected, body_start, body_end);
+		var remainder = _extract_bytes(collected, body_end, collected.len);
 		var reusable = true;
 		if conn_close == true {
 			reusable = false;
@@ -921,7 +921,7 @@ fn _read_pooled_response_tls(tls: &mut tls_stream.TlsStream, initial_bytes: Arra
 			return core.Result::Err(errors.client_error(errors.TAG_BODY_TOO_LARGE, "response body exceeds size limit"));
 		}
 		var tls_read_buf: Array<Byte> = [];
-		match tls_stream.tls_read(tls, &mut tls_read_buf, 4096) {
+		match tls_stream.tls_read(tls, tls_read_buf, 4096) {
 			core.Result::Err(e) => {
 				if e.tag == tls_errors.TAG_STREAM_CLOSED {
 					reading = false;
@@ -937,7 +937,7 @@ fn _read_pooled_response_tls(tls: &mut tls_stream.TlsStream, initial_bytes: Arra
 			}
 		}
 	}
-	var body = _extract_bytes(&collected, body_start, collected.len);
+	var body = _extract_bytes(collected, body_start, collected.len);
 	val response = resp.ClientResponse(
 		status = status, header_keys = move hdr_keys, header_values = move hdr_values, body = move body
 	);

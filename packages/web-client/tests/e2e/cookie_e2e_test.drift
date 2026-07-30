@@ -17,16 +17,16 @@ import web.client as client;
 // Sets a session cookie: sid=abc123; Path=/
 fn _set_cookie_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
 	var resp = rest.json_response(200, "{\"set\":true}");
-	rest.with_response_header(&mut resp, "Set-Cookie", "sid=abc123; Path=/");
+	rest.with_response_header(resp, "Set-Cookie", "sid=abc123; Path=/");
 	return core.Result::Ok(move resp);
 }
 
 // Expects Cookie header containing "sid=abc123". Returns 200 if present, 400 if missing.
 fn _require_cookie_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
 	val cookie_name = "cookie";
-	match rest.header(req, &cookie_name) {
+	match rest.header(req, cookie_name) {
 		Optional::Some(v) => {
-			if _contains(&v, "sid=abc123") {
+			if _contains(v, "sid=abc123") {
 				return core.Result::Ok(rest.json_response(200, "{\"ok\":true}"));
 			}
 			// Cookie header present but wrong value.
@@ -41,7 +41,7 @@ fn _require_cookie_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -
 // Returns 200 if NO cookie header is present. Returns 400 if cookies were sent.
 fn _reject_cookie_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
 	val cookie_name = "cookie";
-	match rest.header(req, &cookie_name) {
+	match rest.header(req, cookie_name) {
 		Optional::Some(_) => {
 			return core.Result::Ok(rest.json_response(400, "{\"err\":\"unexpected-cookie\"}"));
 		},
@@ -54,23 +54,23 @@ fn _reject_cookie_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow ->
 // Sets a Secure cookie: sec=s1; Secure; Path=/
 fn _set_secure_cookie_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
 	var resp = rest.json_response(200, "{\"set\":true}");
-	rest.with_response_header(&mut resp, "Set-Cookie", "sec=s1; Secure; Path=/");
+	rest.with_response_header(resp, "Set-Cookie", "sec=s1; Secure; Path=/");
 	return core.Result::Ok(move resp);
 }
 
 // Sets a path-scoped cookie: pref=dark; Path=/settings
 fn _set_path_cookie_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
 	var resp = rest.json_response(200, "{\"set\":true}");
-	rest.with_response_header(&mut resp, "Set-Cookie", "pref=dark; Path=/settings");
+	rest.with_response_header(resp, "Set-Cookie", "pref=dark; Path=/settings");
 	return core.Result::Ok(move resp);
 }
 
 // Expects Cookie header containing "pref=dark".
 fn _require_path_cookie_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
 	val cookie_name = "cookie";
-	match rest.header(req, &cookie_name) {
+	match rest.header(req, cookie_name) {
 		Optional::Some(v) => {
-			if _contains(&v, "pref=dark") {
+			if _contains(v, "pref=dark") {
 				return core.Result::Ok(rest.json_response(200, "{\"ok\":true}"));
 			}
 			return core.Result::Ok(rest.json_response(400, "{\"err\":\"wrong-cookie\"}"));
@@ -84,23 +84,23 @@ fn _require_path_cookie_handler(req: &rest.Request, ctx: &mut rest.Context) noth
 // Sets a cookie then immediately deletes it: tok=x; Max-Age=0; Path=/
 fn _set_and_delete_cookie_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
 	var resp = rest.json_response(200, "{\"set\":true}");
-	rest.with_response_header(&mut resp, "Set-Cookie", "tok=x; Max-Age=0; Path=/");
+	rest.with_response_header(resp, "Set-Cookie", "tok=x; Max-Age=0; Path=/");
 	return core.Result::Ok(move resp);
 }
 
 // Sets an overwrite cookie: sid=updated; Path=/
 fn _overwrite_cookie_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
 	var resp = rest.json_response(200, "{\"set\":true}");
-	rest.with_response_header(&mut resp, "Set-Cookie", "sid=updated; Path=/");
+	rest.with_response_header(resp, "Set-Cookie", "sid=updated; Path=/");
 	return core.Result::Ok(move resp);
 }
 
 // Expects Cookie header containing "sid=updated".
 fn _require_updated_cookie_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
 	val cookie_name = "cookie";
-	match rest.header(req, &cookie_name) {
+	match rest.header(req, cookie_name) {
 		Optional::Some(v) => {
-			if _contains(&v, "sid=updated") {
+			if _contains(v, "sid=updated") {
 				return core.Result::Ok(rest.json_response(200, "{\"ok\":true}"));
 			}
 			return core.Result::Ok(rest.json_response(400, "{\"err\":\"wrong-cookie\"}"));
@@ -303,23 +303,23 @@ fn scenario_max_age_delete(session: &client.Session, port: Int) nothrow -> Int {
 // parse_set_cookie should reject this — domain doesn't match request host.
 fn _set_cross_domain_cookie_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
 	var resp = rest.json_response(200, "{\"set\":true}");
-	rest.with_response_header(&mut resp, "Set-Cookie", "stolen=yes; Domain=evil.com; Path=/");
+	rest.with_response_header(resp, "Set-Cookie", "stolen=yes; Domain=evil.com; Path=/");
 	return core.Result::Ok(move resp);
 }
 
 // Sets a host-only cookie (no Domain attribute). Should only match exact host.
 fn _set_host_only_cookie_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
 	var resp = rest.json_response(200, "{\"set\":true}");
-	rest.with_response_header(&mut resp, "Set-Cookie", "hcook=h1; Path=/");
+	rest.with_response_header(resp, "Set-Cookie", "hcook=h1; Path=/");
 	return core.Result::Ok(move resp);
 }
 
 // Expects Cookie header containing "hcook=h1".
 fn _require_host_cookie_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
 	val cookie_name = "cookie";
-	match rest.header(req, &cookie_name) {
+	match rest.header(req, cookie_name) {
 		Optional::Some(v) => {
-			if _contains(&v, "hcook=h1") {
+			if _contains(v, "hcook=h1") {
 				return core.Result::Ok(rest.json_response(200, "{\"ok\":true}"));
 			}
 			return core.Result::Ok(rest.json_response(400, "{\"err\":\"wrong-cookie\"}"));
@@ -333,7 +333,7 @@ fn _require_host_cookie_handler(req: &rest.Request, ctx: &mut rest.Context) noth
 // Deletes sid cookie: sid=; Max-Age=0; Path=/
 fn _delete_sid_cookie_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
 	var resp = rest.json_response(200, "{\"deleted\":true}");
-	rest.with_response_header(&mut resp, "Set-Cookie", "sid=; Max-Age=0; Path=/");
+	rest.with_response_header(resp, "Set-Cookie", "sid=; Max-Age=0; Path=/");
 	return core.Result::Ok(move resp);
 }
 
@@ -397,97 +397,97 @@ fn scenario_host_only_scoping(session: &client.Session, port: Int) nothrow -> In
 
 pub fn main() nothrow -> Int {
 	var b = rest.new_app_builder();
-	rest.bind(&mut b, "127.0.0.1", 0);
+	rest.bind(b, "127.0.0.1", 0);
 	match rest.build_app(move b) {
 		core.Result::Err(_) => { return 1; },
 		core.Result::Ok(a) => {
 			var app = move a;
 
 			// Register all handlers.
-			match rest.add_route(&mut app, "GET", "/set-cookie", _set_cookie_handler) {
+			match rest.add_route(app, "GET", "/set-cookie", _set_cookie_handler) {
 				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
-			match rest.add_route(&mut app, "GET", "/require-cookie", _require_cookie_handler) {
+			match rest.add_route(app, "GET", "/require-cookie", _require_cookie_handler) {
 				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
-			match rest.add_route(&mut app, "GET", "/reject-cookie", _reject_cookie_handler) {
+			match rest.add_route(app, "GET", "/reject-cookie", _reject_cookie_handler) {
 				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
-			match rest.add_route(&mut app, "GET", "/set-secure-cookie", _set_secure_cookie_handler) {
+			match rest.add_route(app, "GET", "/set-secure-cookie", _set_secure_cookie_handler) {
 				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
-			match rest.add_route(&mut app, "GET", "/set-path-cookie", _set_path_cookie_handler) {
+			match rest.add_route(app, "GET", "/set-path-cookie", _set_path_cookie_handler) {
 				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
-			match rest.add_route(&mut app, "GET", "/settings/check", _require_path_cookie_handler) {
+			match rest.add_route(app, "GET", "/settings/check", _require_path_cookie_handler) {
 				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
-			match rest.add_route(&mut app, "GET", "/overwrite-cookie", _overwrite_cookie_handler) {
+			match rest.add_route(app, "GET", "/overwrite-cookie", _overwrite_cookie_handler) {
 				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
-			match rest.add_route(&mut app, "GET", "/require-updated-cookie", _require_updated_cookie_handler) {
+			match rest.add_route(app, "GET", "/require-updated-cookie", _require_updated_cookie_handler) {
 				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
-			match rest.add_route(&mut app, "GET", "/delete-cookie", _delete_sid_cookie_handler) {
+			match rest.add_route(app, "GET", "/delete-cookie", _delete_sid_cookie_handler) {
 				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
-			match rest.add_route(&mut app, "GET", "/set-and-delete-cookie", _set_and_delete_cookie_handler) {
+			match rest.add_route(app, "GET", "/set-and-delete-cookie", _set_and_delete_cookie_handler) {
 				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
-			match rest.add_route(&mut app, "GET", "/set-cross-domain-cookie", _set_cross_domain_cookie_handler) {
+			match rest.add_route(app, "GET", "/set-cross-domain-cookie", _set_cross_domain_cookie_handler) {
 				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
-			match rest.add_route(&mut app, "GET", "/set-host-only-cookie", _set_host_only_cookie_handler) {
+			match rest.add_route(app, "GET", "/set-host-only-cookie", _set_host_only_cookie_handler) {
 				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
-			match rest.add_route(&mut app, "GET", "/require-host-cookie", _require_host_cookie_handler) {
+			match rest.add_route(app, "GET", "/require-host-cookie", _require_host_cookie_handler) {
 				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
 
 			match rest.start(move app, conc.Duration(millis = 5000)) {
 				core.Result::Err(_) => { return 3; },
 				core.Result::Ok(srv) => {
 					var running = move srv;
-					val port = rest.server_port(&running);
+					val port = rest.server_port(running);
 
 					// Each scenario gets a fresh session to isolate cookie state.
 					// Scenario 2 (no initial cookies) must run first with a clean session.
 					var cfg2 = client.new_client_config();
 					val s2 = client.new_session(move cfg2);
-					val r2 = scenario_no_initial_cookies(&s2, port);
-					if r2 != 0 { console.println("FAIL: no_initial_cookies " + fmt.format_int(r2)); _stop(&mut running); return r2; }
+					val r2 = scenario_no_initial_cookies(s2, port);
+					if r2 != 0 { console.println("FAIL: no_initial_cookies " + fmt.format_int(r2)); _stop(running); return r2; }
 
 					// Scenario 1: cookie roundtrip.
 					var cfg1 = client.new_client_config();
 					val s1 = client.new_session(move cfg1);
-					val r1 = scenario_cookie_roundtrip(&s1, port);
-					if r1 != 0 { console.println("FAIL: cookie_roundtrip " + fmt.format_int(r1)); _stop(&mut running); return r1; }
+					val r1 = scenario_cookie_roundtrip(s1, port);
+					if r1 != 0 { console.println("FAIL: cookie_roundtrip " + fmt.format_int(r1)); _stop(running); return r1; }
 
 					// Scenario 3: Secure cookie over HTTP.
 					var cfg3 = client.new_client_config();
 					val s3 = client.new_session(move cfg3);
-					val r3 = scenario_secure_cookie_over_http(&s3, port);
-					if r3 != 0 { console.println("FAIL: secure_cookie_over_http " + fmt.format_int(r3)); _stop(&mut running); return r3; }
+					val r3 = scenario_secure_cookie_over_http(s3, port);
+					if r3 != 0 { console.println("FAIL: secure_cookie_over_http " + fmt.format_int(r3)); _stop(running); return r3; }
 
 					// Scenario 4: path scoping.
 					var cfg4 = client.new_client_config();
 					val s4 = client.new_session(move cfg4);
-					val r4 = scenario_path_scoping(&s4, port);
-					if r4 != 0 { console.println("FAIL: path_scoping " + fmt.format_int(r4)); _stop(&mut running); return r4; }
+					val r4 = scenario_path_scoping(s4, port);
+					if r4 != 0 { console.println("FAIL: path_scoping " + fmt.format_int(r4)); _stop(running); return r4; }
 
 					// Scenario 5: cookie overwrite.
 					var cfg5 = client.new_client_config();
 					val s5 = client.new_session(move cfg5);
-					val r5 = scenario_cookie_overwrite(&s5, port);
-					if r5 != 0 { console.println("FAIL: cookie_overwrite " + fmt.format_int(r5)); _stop(&mut running); return r5; }
+					val r5 = scenario_cookie_overwrite(s5, port);
+					if r5 != 0 { console.println("FAIL: cookie_overwrite " + fmt.format_int(r5)); _stop(running); return r5; }
 
 					// Scenario 6: Max-Age=0 deletion.
 					var cfg6 = client.new_client_config();
 					val s6 = client.new_session(move cfg6);
-					val r6 = scenario_max_age_delete(&s6, port);
-					if r6 != 0 { console.println("FAIL: max_age_delete " + fmt.format_int(r6)); _stop(&mut running); return r6; }
+					val r6 = scenario_max_age_delete(s6, port);
+					if r6 != 0 { console.println("FAIL: max_age_delete " + fmt.format_int(r6)); _stop(running); return r6; }
 
 					// Scenario 7: cross-domain cookie rejection.
 					var cfg7 = client.new_client_config();
 					val s7 = client.new_session(move cfg7);
-					val r7 = scenario_cross_domain_rejected(&s7, port);
-					if r7 != 0 { console.println("FAIL: cross_domain_rejected " + fmt.format_int(r7)); _stop(&mut running); return r7; }
+					val r7 = scenario_cross_domain_rejected(s7, port);
+					if r7 != 0 { console.println("FAIL: cross_domain_rejected " + fmt.format_int(r7)); _stop(running); return r7; }
 
 					// Scenario 8: host-only cookie scoping.
 					var cfg8 = client.new_client_config();
 					val s8 = client.new_session(move cfg8);
-					val r8 = scenario_host_only_scoping(&s8, port);
-					if r8 != 0 { console.println("FAIL: host_only_scoping " + fmt.format_int(r8)); _stop(&mut running); return r8; }
+					val r8 = scenario_host_only_scoping(s8, port);
+					if r8 != 0 { console.println("FAIL: host_only_scoping " + fmt.format_int(r8)); _stop(running); return r8; }
 
 					console.println("cookie e2e: all passed");
-					_stop(&mut running);
+					_stop(running);
 					return 0;
 				}
 			}

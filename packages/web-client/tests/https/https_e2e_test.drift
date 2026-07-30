@@ -39,7 +39,7 @@ fn scenario_https_get(session: &client.Session, port: Int) nothrow -> Int {
 		},
 		core.Result::Ok(resp) => {
 			if resp.status != 200 { return 102; }
-			match client.response_body_string(&resp) {
+			match client.response_body_string(resp) {
 				core.Result::Err(_) => { return 103; },
 				core.Result::Ok(body) => {
 					val expected = "{\"ok\": true}";
@@ -57,7 +57,7 @@ fn scenario_https_json(session: &client.Session, port: Int) nothrow -> Int {
 	match client.get(session, url) {
 		core.Result::Err(_) => { return 201; },
 		core.Result::Ok(resp) => {
-			match client.response_body_json(&resp) {
+			match client.response_body_json(resp) {
 				core.Result::Err(_) => { return 202; },
 				core.Result::Ok(_) => { return 0; }
 			}
@@ -68,10 +68,10 @@ fn scenario_https_json(session: &client.Session, port: Int) nothrow -> Int {
 // Hostname mismatch.
 fn scenario_hostname_mismatch(wrong_host_port: Int, ca_path: &String) nothrow -> Int {
 	var cfg = client.new_client_config();
-	client.with_tls_trust_store(&mut cfg, client.TrustStore::PemFile(path = *ca_path));
+	client.with_tls_trust_store(cfg, client.TrustStore::PemFile(path = *ca_path));
 	var session = client.new_session(move cfg);
 	val url = "https://127.0.0.1:" + fmt.format_int(wrong_host_port) + "/health";
-	match client.get(&session, url) {
+	match client.get(session, url) {
 		core.Result::Ok(_) => { return 301; },
 		core.Result::Err(e) => {
 			if e.tag != client.TAG_TLS_FAILED { return 302; }
@@ -92,7 +92,7 @@ fn scenario_https_pool_reuse(session: &client.Session, port: Int) nothrow -> Int
 			},
 			core.Result::Ok(resp) => {
 				if resp.status != 200 { return 502; }
-				match client.response_body_string(&resp) {
+				match client.response_body_string(resp) {
 					core.Result::Err(_) => { return 503; },
 					core.Result::Ok(body) => {
 						val expected = "{\"ok\": true}";
@@ -109,10 +109,10 @@ fn scenario_https_pool_reuse(session: &client.Session, port: Int) nothrow -> Int
 // Wrong trust store.
 fn scenario_wrong_trust(port: Int) nothrow -> Int {
 	var cfg = client.new_client_config();
-	client.with_tls_trust_store(&mut cfg, client.TrustStore::PemFile(path = "/nonexistent/ca.crt"));
+	client.with_tls_trust_store(cfg, client.TrustStore::PemFile(path = "/nonexistent/ca.crt"));
 	var session = client.new_session(move cfg);
 	val url = "https://127.0.0.1:" + fmt.format_int(port) + "/health";
-	match client.get(&session, url) {
+	match client.get(session, url) {
 		core.Result::Ok(_) => { return 401; },
 		core.Result::Err(e) => {
 			if e.tag != client.TAG_TLS_FAILED { return 402; }
@@ -137,16 +137,16 @@ pub fn main() nothrow -> Int {
 
 	// Create session with test CA trust.
 	var cfg = client.new_client_config();
-	client.with_tls_trust_store(&mut cfg, client.TrustStore::PemFile(path = ca_path));
+	client.with_tls_trust_store(cfg, client.TrustStore::PemFile(path = ca_path));
 	var session = client.new_session(move cfg);
 
-	val a = scenario_https_get(&session, https_port);
+	val a = scenario_https_get(session, https_port);
 	if a != 0 { return a; }
 
-	val b = scenario_https_json(&session, https_port);
+	val b = scenario_https_json(session, https_port);
 	if b != 0 { return b; }
 
-	val e = scenario_https_pool_reuse(&session, https_port);
+	val e = scenario_https_pool_reuse(session, https_port);
 	if e != 0 { return e; }
 
 	// Negative-path scenarios run last: scenario_wrong_trust loads a
@@ -154,7 +154,7 @@ pub fn main() nothrow -> Int {
 	// per-thread error queue (net-tls does not call ERR_clear_error).
 	// Running these after pool reuse avoids queue poisoning.
 	if wrong_host_port >= 0 {
-		val c = scenario_hostname_mismatch(wrong_host_port, &ca_path);
+		val c = scenario_hostname_mismatch(wrong_host_port, ca_path);
 		if c != 0 { return c; }
 	}
 

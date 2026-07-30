@@ -78,7 +78,7 @@ fn _server_loop(listener: net.TcpListener, max_requests: Int, timeout: conc.Dura
 							// Read until we see \r\n\r\n.
 							// For this benchmark, request is always small (<256 bytes).
 							// We read once and scan — no looping needed.
-							match stream.read(&mut rbuf, timeout) {
+							match stream.read(rbuf, timeout) {
 								core.Result::Err(_) => {
 									conn_alive = false;
 								},
@@ -105,7 +105,7 @@ fn _server_loop(listener: net.TcpListener, max_requests: Int, timeout: conc.Dura
 										}
 										if found {
 											// Write fixed response (reuse pre-filled wbuf).
-											match stream.write(&wbuf, timeout) {
+											match stream.write(wbuf, timeout) {
 												core.Result::Err(_) => {
 													conn_alive = false;
 												},
@@ -166,7 +166,7 @@ fn _run_client(port: Int, warmup_n: Int, measure_n: Int, timeout: conc.Duration)
 	val resp_len = 63;
 
 	var addr = net.socket_addr("127.0.0.1", port);
-	match net.connect(&addr, timeout) {
+	match net.connect(addr, timeout) {
 		core.Result::Err(_) => { return core.Result::Err(1); },
 		core.Result::Ok(conn) => {
 			var stream = move conn;
@@ -174,7 +174,7 @@ fn _run_client(port: Int, warmup_n: Int, measure_n: Int, timeout: conc.Duration)
 			// Warmup
 			var i = 0;
 			while i < warmup_n {
-				match stream.write(&wbuf, timeout) {
+				match stream.write(wbuf, timeout) {
 					core.Result::Err(_) => {
 						val _ = stream.close(timeout);
 						return core.Result::Err(10);
@@ -184,7 +184,7 @@ fn _run_client(port: Int, warmup_n: Int, measure_n: Int, timeout: conc.Duration)
 				// Read response — may come in multiple reads.
 				var got = 0;
 				while got < resp_len {
-					match stream.read(&mut rbuf, timeout) {
+					match stream.read(rbuf, timeout) {
 						core.Result::Err(_) => {
 							val _ = stream.close(timeout);
 							return core.Result::Err(11);
@@ -205,7 +205,7 @@ fn _run_client(port: Int, warmup_n: Int, measure_n: Int, timeout: conc.Duration)
 			val start = time.now_monotonic();
 			var mi = 0;
 			while mi < measure_n {
-				match stream.write(&wbuf, timeout) {
+				match stream.write(wbuf, timeout) {
 					core.Result::Err(_) => {
 						val _ = stream.close(timeout);
 						return core.Result::Err(20);
@@ -214,7 +214,7 @@ fn _run_client(port: Int, warmup_n: Int, measure_n: Int, timeout: conc.Duration)
 				}
 				var got = 0;
 				while got < resp_len {
-					match stream.read(&mut rbuf, timeout) {
+					match stream.read(rbuf, timeout) {
 						core.Result::Err(_) => {
 							val _ = stream.close(timeout);
 							return core.Result::Err(21);
@@ -230,7 +230,7 @@ fn _run_client(port: Int, warmup_n: Int, measure_n: Int, timeout: conc.Duration)
 				}
 				mi = mi + 1;
 			}
-			val elapsed = time.elapsed_ms(&start);
+			val elapsed = time.elapsed_ms(start);
 
 			val _ = stream.close(timeout);
 			return core.Result::Ok(elapsed);
@@ -258,7 +258,7 @@ pub fn main() nothrow -> Int {
 	val total_n = warmup_n + measure_n;
 
 	var addr = net.socket_addr("127.0.0.1", 0);
-	match net.listen(&addr, timeout) {
+	match net.listen(addr, timeout) {
 		core.Result::Err(_) => { return 1; },
 		core.Result::Ok(lst) => {
 			var listener = move lst;

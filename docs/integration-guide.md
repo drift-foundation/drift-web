@@ -19,9 +19,14 @@ is independent and provides outbound HTTP/HTTPS via `net-tls`.
 
 ## Consumer prerequisites
 
-- Drift toolchain with `driftc` (driftc 0.33.83+ / runtime ABI 21 or
-  later — ABI 21 artifacts; 0.33.83 also enforces match-arm ownership
-  for non-Copy binders, which these sources are aligned with)
+- Drift toolchain with `driftc` (driftc 0.33.91+ / runtime ABI 22 —
+  ABI 22 artifacts. ABI 22 changed the `String` representation, so
+  ABI 21 objects and packages cannot be linked against these artifacts
+  and must be rebuilt; compatibility applies only between pre-rule and
+  post-rule ABI 22 artifacts. 0.33.91 also rejects redundant
+  argument-position borrows (`E_REDUNDANT_ARG_BORROW`): when a
+  parameter is declared `&T`/`&mut T`, the call site passes the value
+  bare — these sources and all examples below use that spelling)
 - Package artifacts under a shared package root (`.zdmp` plus the signed
   `.author-claim`, `.cert-claim`, and `.provenance.zst` sidecars)
 - The publisher's `.author-profile` (shipped inside the versioned
@@ -168,15 +173,15 @@ fn health_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Re
     return core.Result::Ok(rest.json_response(200, "{\"ok\":true}"));
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     var b = rest.new_app_builder();
-    rest.bind(&mut b, "0.0.0.0", 8080);
+    rest.bind(b, "0.0.0.0", 8080);
 
     match rest.build_app(move b) {
         core.Result::Err(_) => { return 1; },
         core.Result::Ok(a) => {
             var app = move a;
-            match rest.add_route(&mut app, "GET", "/health", health_handler) {
+            match rest.add_route(app, "GET", "/health", health_handler) {
                 core.Result::Err(_) => { return 2; },
                 core.Result::Ok(_) => {}
             }
@@ -184,7 +189,7 @@ fn main() nothrow -> Int {
                 core.Result::Err(_) => { return 3; },
                 core.Result::Ok(srv) => {
                     var running = move srv;
-                    match rest.shutdown(&mut running) {
+                    match rest.shutdown(running) {
                         core.Result::Ok(_) => { return 0; },
                         core.Result::Err(_) => { return 4; }
                     }
@@ -205,14 +210,14 @@ import std.console as console;
 import std.format as fmt;
 import web.client as client;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     var cfg = client.new_client_config();
-    client.with_tls_trust_store(&mut cfg,
+    client.with_tls_trust_store(cfg,
         client.TrustStore::PemFile(path = "/etc/ssl/certs/ca-certificates.crt"));
 
     var session = client.new_session(move cfg);
 
-    match client.get(&session, "https://api.example.com/health") {
+    match client.get(session, "https://api.example.com/health") {
         core.Result::Ok(resp) => {
             console.println("status=" + fmt.format_int(resp.status));
             return 0;
@@ -229,10 +234,10 @@ For custom requests:
 
 ```drift
 var req = client.new_request("POST", "https://api.example.com/items");
-client.set_header(&mut req, "Accept", "application/json");
-client.set_json_body(&mut req, "{\"name\":\"x\"}");
+client.set_header(req, "Accept", "application/json");
+client.set_json_body(req, "{\"name\":\"x\"}");
 
-match client.send(&session, move req) {
+match client.send(session, move req) {
     core.Result::Ok(resp) => { ... },
     core.Result::Err(e) => { ... }
 }

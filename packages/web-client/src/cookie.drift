@@ -82,16 +82,16 @@ pub fn parse_set_cookie(header_value: &String, request_host: &String, request_pa
 			if next_semi >= 0 { attr_end = next_semi; }
 
 			val attr = _trim(_substring(header_value, pos, attr_end));
-			val attr_eq = _find_char(&attr, cast<Byte>(61));
+			val attr_eq = _find_char(attr, cast<Byte>(61));
 			if attr_eq >= 0 {
-				val attr_name = _ascii_lower(_trim(_substring(&attr, 0, attr_eq)));
-				val attr_val = _trim(_substring(&attr, attr_eq + 1, attr.byte_length()));
+				val attr_name = _ascii_lower(_trim(_substring(attr, 0, attr_eq)));
+				val attr_val = _trim(_substring(attr, attr_eq + 1, attr.byte_length()));
 				if attr_name == "domain" {
 					dom = _ascii_lower(attr_val);
 					// Strip leading dot.
 					if dom.byte_length() > 0 {
-						if core.string_byte_at(&dom, 0) == cast<Byte>(46) {
-							dom = _substring(&dom, 1, dom.byte_length());
+						if core.string_byte_at(dom, 0) == cast<Byte>(46) {
+							dom = _substring(dom, 1, dom.byte_length());
 						}
 					}
 				}
@@ -136,7 +136,7 @@ pub fn parse_set_cookie(header_value: &String, request_host: &String, request_pa
 	} else {
 		// Domain attribute present: verify request host matches.
 		val lower_host = _ascii_lower(*request_host);
-		if not _domain_matches(&lower_host, &dom) {
+		if not _domain_matches(lower_host, dom) {
 			return Optional::None();
 		}
 	}
@@ -168,7 +168,7 @@ pub fn store_cookie(jar: &mut CookieJar, cookie: Cookie) nothrow -> Void {
 	if cookie.expires_unix > 0 {
 		if cookie.expires_unix <= time.utc_unix_seconds_now() {
 			// Remove any existing cookie with same key.
-			_remove_cookie(jar, &cookie.name, &cookie.cookie_domain, &cookie.path);
+			_remove_cookie(jar, cookie.name, cookie.cookie_domain, cookie.path);
 			return;
 		}
 	}
@@ -231,7 +231,7 @@ pub fn cookies_for_request(jar: &CookieJar, host: &String, path: &String, is_sec
 				// Skip expired (lazy cleanup).
 				// TODO: remove expired entries on next write.
 			} else {
-				if _cookie_matches(jar, i, &lower_host, path, is_secure) {
+				if _cookie_matches(jar, i, lower_host, path, is_secure) {
 					if result.byte_length() > 0 {
 						result = result + "; ";
 					}
@@ -241,7 +241,7 @@ pub fn cookies_for_request(jar: &CookieJar, host: &String, path: &String, is_sec
 			}
 		} else {
 			// Session cookie (no expiry).
-			if _cookie_matches(jar, i, &lower_host, path, is_secure) {
+			if _cookie_matches(jar, i, lower_host, path, is_secure) {
 				if result.byte_length() > 0 {
 					result = result + "; ";
 				}
@@ -270,13 +270,13 @@ fn _cookie_matches(jar: &CookieJar, idx: Int, host: &String, path: &String, is_s
 		}
 	} else {
 		// Domain cookie: host must match or be a subdomain.
-		if not _domain_matches(host, &jar.domains[idx]) {
+		if not _domain_matches(host, jar.domains[idx]) {
 			return false;
 		}
 	}
 
 	// Path check.
-	if not _path_matches(path, &jar.paths[idx]) {
+	if not _path_matches(path, jar.paths[idx]) {
 		return false;
 	}
 
@@ -383,23 +383,23 @@ fn _trim(s: String) nothrow -> String {
 		if start >= len {
 			return "";
 		}
-		val b = core.string_byte_at(&s, start);
+		val b = core.string_byte_at(s, start);
 		if b != cast<Byte>(32) and b != cast<Byte>(9) {
 			scanning = false;
 		} else {
 			start = start + 1;
 		}
 	}
-	return _trim_end(_substring(&s, start, len));
+	return _trim_end(_substring(s, start, len));
 }
 
 fn _trim_end(s: String) nothrow -> String {
 	val len = s.byte_length();
 	var end = len;
 	while end > 0 {
-		val b = core.string_byte_at(&s, end - 1);
+		val b = core.string_byte_at(s, end - 1);
 		if b != cast<Byte>(32) and b != cast<Byte>(9) {
-			return _substring(&s, 0, end);
+			return _substring(s, 0, end);
 		}
 		end = end - 1;
 	}
@@ -412,7 +412,7 @@ fn _ascii_lower(s: String) nothrow -> String {
 	var b = io.buffer(len);
 	var i = 0;
 	while i < len {
-		var ch = core.string_byte_at(&s, i);
+		var ch = core.string_byte_at(s, i);
 		val v = cast<Int>(ch);
 		if v >= 65 and v <= 90 {
 			ch = cast<Byte>(v + 32);

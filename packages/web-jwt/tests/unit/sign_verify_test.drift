@@ -54,14 +54,14 @@ fn scenario_sign_verify_happy_path() nothrow -> Int {
 	var secret = _test_secret();
 	var opts = jwt.new_sign_options();
 	var token = "";
-	match jwt.sign_hs256(&header, &payload, &secret, &opts) {
+	match jwt.sign_hs256(header, payload, secret, opts) {
 		core.Result::Ok(v) => { token = move v; },
 		core.Result::Err(_) => { return 101; }
 	}
 	if token.byte_length() <= 0 { return 102; }
 	val policy = _default_policy();
 	val now_unix = 1700001000;
-	match jwt.verify_hs256(&token, &secret, now_unix, &policy) {
+	match jwt.verify_hs256(token, secret, now_unix, policy) {
 		core.Result::Ok(v) => {
 			if v.header_json != header { return 103; }
 			if v.payload_json != payload { return 104; }
@@ -77,14 +77,14 @@ fn scenario_wrong_secret_rejected() nothrow -> Int {
 	var secret = _test_secret();
 	var opts = jwt.new_sign_options();
 	var token = "";
-	match jwt.sign_hs256(&header, &payload, &secret, &opts) {
+	match jwt.sign_hs256(header, payload, secret, opts) {
 		core.Result::Ok(v) => { token = move v; },
 		core.Result::Err(_) => { return 201; }
 	}
 	var wrong = _wrong_secret();
 	val policy = _default_policy();
 	val now_unix = 1700001000;
-	match jwt.verify_hs256(&token, &wrong, now_unix, &policy) {
+	match jwt.verify_hs256(token, wrong, now_unix, policy) {
 		core.Result::Ok(_) => { return 202; },
 		core.Result::Err(e) => {
 			if e.tag != "jwt-signature-mismatch" { return 203; }
@@ -99,7 +99,7 @@ fn scenario_tampered_payload_rejected() nothrow -> Int {
 	var secret = _test_secret();
 	var opts = jwt.new_sign_options();
 	var token = "";
-	match jwt.sign_hs256(&header, &payload, &secret, &opts) {
+	match jwt.sign_hs256(header, payload, secret, opts) {
 		core.Result::Ok(v) => { token = move v; },
 		core.Result::Err(_) => { return 301; }
 	}
@@ -108,7 +108,7 @@ fn scenario_tampered_payload_rejected() nothrow -> Int {
 	var first_dot = -1;
 	var ti = 0;
 	while ti < tlen {
-		if core.string_byte_at(&token, ti) == cast<Byte>(46) {
+		if core.string_byte_at(token, ti) == cast<Byte>(46) {
 			if first_dot < 0 { first_dot = ti; }
 		}
 		ti = ti + 1;
@@ -118,21 +118,21 @@ fn scenario_tampered_payload_rejected() nothrow -> Int {
 	var bi = 0;
 	while bi < tlen {
 		if bi == first_dot + 1 {
-			val orig = core.string_byte_at(&token, bi);
+			val orig = core.string_byte_at(token, bi);
 			if orig == cast<Byte>(65) {
 				tampered_bytes.push(cast<Byte>(66));
 			} else {
 				tampered_bytes.push(cast<Byte>(65));
 			}
 		} else {
-			tampered_bytes.push(core.string_byte_at(&token, bi));
+			tampered_bytes.push(core.string_byte_at(token, bi));
 		}
 		bi = bi + 1;
 	}
-	val tampered = _bytes_to_string(&tampered_bytes);
+	val tampered = _bytes_to_string(tampered_bytes);
 	val policy = _default_policy();
 	val now_unix = 1700001000;
-	match jwt.verify_hs256(&tampered, &secret, now_unix, &policy) {
+	match jwt.verify_hs256(tampered, secret, now_unix, policy) {
 		core.Result::Ok(_) => { return 303; },
 		core.Result::Err(e) => {
 			if e.tag != "jwt-signature-mismatch" and e.tag != "jwt-invalid-segment" and e.tag != "jwt-invalid-payload-json" {
@@ -149,7 +149,7 @@ fn scenario_tampered_header_rejected() nothrow -> Int {
 	var secret = _test_secret();
 	var opts = jwt.new_sign_options();
 	var token = "";
-	match jwt.sign_hs256(&header, &payload, &secret, &opts) {
+	match jwt.sign_hs256(header, payload, secret, opts) {
 		core.Result::Ok(v) => { token = move v; },
 		core.Result::Err(_) => { return 401; }
 	}
@@ -159,20 +159,20 @@ fn scenario_tampered_header_rejected() nothrow -> Int {
 	var bi = 0;
 	while bi < tlen {
 		if bi == 0 {
-			val orig = core.string_byte_at(&token, 0);
+			val orig = core.string_byte_at(token, 0);
 			if orig == cast<Byte>(65) {
 				tampered_bytes.push(cast<Byte>(66));
 			} else {
 				tampered_bytes.push(cast<Byte>(65));
 			}
 		} else {
-			tampered_bytes.push(core.string_byte_at(&token, bi));
+			tampered_bytes.push(core.string_byte_at(token, bi));
 		}
 		bi = bi + 1;
 	}
-	val tampered = _bytes_to_string(&tampered_bytes);
+	val tampered = _bytes_to_string(tampered_bytes);
 	val policy = _default_policy();
-	match jwt.verify_hs256(&tampered, &secret, 0, &policy) {
+	match jwt.verify_hs256(tampered, secret, 0, policy) {
 		core.Result::Ok(_) => { return 402; },
 		core.Result::Err(_) => { return 0; }
 	}
@@ -182,21 +182,21 @@ fn scenario_malformed_segment_count() nothrow -> Int {
 	var secret = _test_secret();
 	val policy = _default_policy();
 	val no_dots = "aGVsbG8";
-	match jwt.verify_hs256(&no_dots, &secret, 0, &policy) {
+	match jwt.verify_hs256(no_dots, secret, 0, policy) {
 		core.Result::Ok(_) => { return 501; },
 		core.Result::Err(e) => {
 			if e.tag != "jwt-invalid-format" { return 502; }
 		}
 	}
 	val two_segments = "aGVsbG8.d29ybGQ";
-	match jwt.verify_hs256(&two_segments, &secret, 0, &policy) {
+	match jwt.verify_hs256(two_segments, secret, 0, policy) {
 		core.Result::Ok(_) => { return 503; },
 		core.Result::Err(e) => {
 			if e.tag != "jwt-invalid-format" { return 504; }
 		}
 	}
 	val four_segments = "a.b.c.d";
-	match jwt.verify_hs256(&four_segments, &secret, 0, &policy) {
+	match jwt.verify_hs256(four_segments, secret, 0, policy) {
 		core.Result::Ok(_) => { return 505; },
 		core.Result::Err(e) => {
 			if e.tag != "jwt-invalid-format" { return 506; }
@@ -210,7 +210,7 @@ fn scenario_unsupported_alg_rejected() nothrow -> Int {
 	val payload = "{\"sub\":\"u123\"}";
 	var secret = _test_secret();
 	var opts = jwt.new_sign_options();
-	match jwt.sign_hs256(&header, &payload, &secret, &opts) {
+	match jwt.sign_hs256(header, payload, secret, opts) {
 		core.Result::Ok(_) => { return 601; },
 		core.Result::Err(e) => {
 			if e.tag != "jwt-unsupported-alg" { return 602; }
@@ -224,7 +224,7 @@ fn scenario_missing_alg_rejected() nothrow -> Int {
 	val payload = "{\"sub\":\"u123\"}";
 	var secret = _test_secret();
 	var opts = jwt.new_sign_options();
-	match jwt.sign_hs256(&header, &payload, &secret, &opts) {
+	match jwt.sign_hs256(header, payload, secret, opts) {
 		core.Result::Ok(_) => { return 701; },
 		core.Result::Err(e) => {
 			if e.tag != "jwt-missing-alg" { return 702; }
@@ -238,7 +238,7 @@ fn scenario_invalid_header_json() nothrow -> Int {
 	val payload = "{\"sub\":\"u123\"}";
 	var secret = _test_secret();
 	var opts = jwt.new_sign_options();
-	match jwt.sign_hs256(&header, &payload, &secret, &opts) {
+	match jwt.sign_hs256(header, payload, secret, opts) {
 		core.Result::Ok(_) => { return 801; },
 		core.Result::Err(e) => {
 			if e.tag != "jwt-invalid-header-json" { return 802; }
@@ -253,7 +253,7 @@ fn scenario_sign_no_typ_enforcement() nothrow -> Int {
 	var secret = _test_secret();
 	var opts = jwt.new_sign_options();
 	// With enforce_typ_jwt=true, missing typ should fail
-	match jwt.sign_hs256(&header, &payload, &secret, &opts) {
+	match jwt.sign_hs256(header, payload, secret, opts) {
 		core.Result::Ok(_) => { return 901; },
 		core.Result::Err(e) => {
 			if e.tag != "jwt-header-typ-mismatch" { return 902; }
@@ -262,7 +262,7 @@ fn scenario_sign_no_typ_enforcement() nothrow -> Int {
 	// With enforce_typ_jwt=false, missing typ should succeed
 	var opts2 = jwt.new_sign_options();
 	opts2.enforce_typ_jwt = false;
-	match jwt.sign_hs256(&header, &payload, &secret, &opts2) {
+	match jwt.sign_hs256(header, payload, secret, opts2) {
 		core.Result::Ok(_) => { return 0; },
 		core.Result::Err(_) => { return 903; }
 	}

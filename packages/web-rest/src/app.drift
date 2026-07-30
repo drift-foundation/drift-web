@@ -162,7 +162,7 @@ pub fn add_route_group_middleware(app: &mut App, rg: &RouteGroup, mw: core.Callb
 }
 
 pub fn add_route_group(app: &mut App, prefix: String) nothrow -> core.Result<RouteGroup, errors.RestError> {
-	val segs = router.split_path(&prefix);
+	val segs = router.split_path(prefix);
 	var i = 0;
 	while i < segs.len {
 		val seg = &segs[i];
@@ -205,7 +205,7 @@ fn _throws_placeholder(req: &request.Request, ctx: &mut context.Context) -> resp
 }
 
 pub fn add_route(app: &mut App, method: String, path: String, handler: core.Callback2<&request.Request, &mut context.Context, core.Result<response.Response, errors.RestError>>) nothrow -> core.Result<Void, errors.RestError> {
-	match router.parse_route_pattern(&path) {
+	match router.parse_route_pattern(path) {
 		core.Result::Err(e) => {
 			return core.Result::Err(e);
 		},
@@ -224,7 +224,7 @@ pub fn add_route(app: &mut App, method: String, path: String, handler: core.Call
 
 pub fn add_route_group_route(app: &mut App, rg: &RouteGroup, method: String, path: String, handler: core.Callback2<&request.Request, &mut context.Context, core.Result<response.Response, errors.RestError>>) nothrow -> core.Result<Void, errors.RestError> {
 	var full_path = app.group_prefix_raw[rg.id];
-	val route_segs = router.split_path(&path);
+	val route_segs = router.split_path(path);
 	var j = 0;
 	while j < route_segs.len {
 		full_path = full_path + "/" + route_segs[j];
@@ -233,7 +233,7 @@ pub fn add_route_group_route(app: &mut App, rg: &RouteGroup, method: String, pat
 	if full_path.byte_length() == 0 {
 		full_path = "/";
 	}
-	match router.parse_route_pattern(&full_path) {
+	match router.parse_route_pattern(full_path) {
 		core.Result::Err(e) => {
 			return core.Result::Err(e);
 		},
@@ -251,7 +251,7 @@ pub fn add_route_group_route(app: &mut App, rg: &RouteGroup, method: String, pat
 }
 
 pub fn add_throws_route(app: &mut App, method: String, path: String, handler: core.CallbackThrow2<&request.Request, &mut context.Context, response.Response>) nothrow -> core.Result<Void, errors.RestError> {
-	match router.parse_route_pattern(&path) {
+	match router.parse_route_pattern(path) {
 		core.Result::Err(e) => {
 			return core.Result::Err(e);
 		},
@@ -270,7 +270,7 @@ pub fn add_throws_route(app: &mut App, method: String, path: String, handler: co
 
 pub fn add_route_group_throws_route(app: &mut App, rg: &RouteGroup, method: String, path: String, handler: core.CallbackThrow2<&request.Request, &mut context.Context, response.Response>) nothrow -> core.Result<Void, errors.RestError> {
 	var full_path = app.group_prefix_raw[rg.id];
-	val route_segs = router.split_path(&path);
+	val route_segs = router.split_path(path);
 	var j = 0;
 	while j < route_segs.len {
 		full_path = full_path + "/" + route_segs[j];
@@ -279,7 +279,7 @@ pub fn add_route_group_throws_route(app: &mut App, rg: &RouteGroup, method: Stri
 	if full_path.byte_length() == 0 {
 		full_path = "/";
 	}
-	match router.parse_route_pattern(&full_path) {
+	match router.parse_route_pattern(full_path) {
 		core.Result::Err(e) => {
 			return core.Result::Err(e);
 		},
@@ -351,7 +351,7 @@ pub fn dispatch(app_arc: conc.Arc<App>, req: &mut request.Request, ctx: &mut con
 	while ri < app.route_methods.len {
 		if app.route_methods[ri] == req.method {
 			val pat = &app.route_patterns[ri];
-			if router.match_route_path(pat, &req.path) {
+			if router.match_route_path(pat, req.path) {
 				val sc = pat.static_count;
 				if sc > best_static {
 					best_static = sc;
@@ -371,8 +371,8 @@ pub fn dispatch(app_arc: conc.Arc<App>, req: &mut request.Request, ctx: &mut con
 	request.clear_path_params(req);
 	val best_pat = &app.route_patterns[best_idx];
 	// Swap the path out so extraction can borrow it while mutating req.
-	var path_tmp = mem.replace(&mut req.path, "");
-	router.extract_path_params_path(best_pat, &path_tmp, req);
+	var path_tmp = mem.replace(req.path, "");
+	router.extract_path_params_path(best_pat, path_tmp, req);
 	req.path = move path_tmp;
 
 	// 4b. Cache body JSON parse result

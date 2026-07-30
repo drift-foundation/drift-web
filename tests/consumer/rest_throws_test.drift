@@ -71,57 +71,57 @@ fn _guard_reject(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Res
 pub fn main() nothrow -> Int {
 	val timeout = conc.Duration(millis = 5000);
 	var b = rest.new_app_builder();
-	rest.bind(&mut b, "127.0.0.1", 0);
+	rest.bind(b, "127.0.0.1", 0);
 	match rest.build_app(move b) {
 		core.Result::Err(_) => { return 1; },
 		core.Result::Ok(a) => {
 			var app = move a;
 
 			// --- Register throws routes (top-level) ---
-			match rest.add_throws_route(&mut app, "GET", "/ok", core.callback_throw2(_ok_handler)) {
+			match rest.add_throws_route(app, "GET", "/ok", core.callback_throw2(_ok_handler)) {
 				core.Result::Err(_) => { return 2; },
 				core.Result::Ok(_) => {}
 			}
-			match rest.add_throws_route(&mut app, "POST", "/bad", core.callback_throw2(_bad_request_handler)) {
+			match rest.add_throws_route(app, "POST", "/bad", core.callback_throw2(_bad_request_handler)) {
 				core.Result::Err(_) => { return 3; },
 				core.Result::Ok(_) => {}
 			}
-			match rest.add_throws_route(&mut app, "GET", "/unauth", core.callback_throw2(_unauthorized_handler)) {
+			match rest.add_throws_route(app, "GET", "/unauth", core.callback_throw2(_unauthorized_handler)) {
 				core.Result::Err(_) => { return 4; },
 				core.Result::Ok(_) => {}
 			}
-			match rest.add_throws_route(&mut app, "GET", "/forbidden", core.callback_throw2(_forbidden_handler)) {
+			match rest.add_throws_route(app, "GET", "/forbidden", core.callback_throw2(_forbidden_handler)) {
 				core.Result::Err(_) => { return 5; },
 				core.Result::Ok(_) => {}
 			}
-			match rest.add_throws_route(&mut app, "GET", "/notfound", core.callback_throw2(_not_found_handler)) {
+			match rest.add_throws_route(app, "GET", "/notfound", core.callback_throw2(_not_found_handler)) {
 				core.Result::Err(_) => { return 6; },
 				core.Result::Ok(_) => {}
 			}
-			match rest.add_throws_route(&mut app, "PUT", "/conflict", core.callback_throw2(_conflict_handler)) {
+			match rest.add_throws_route(app, "PUT", "/conflict", core.callback_throw2(_conflict_handler)) {
 				core.Result::Err(_) => { return 7; },
 				core.Result::Ok(_) => {}
 			}
-			match rest.add_throws_route(&mut app, "GET", "/internal", core.callback_throw2(_internal_handler)) {
+			match rest.add_throws_route(app, "GET", "/internal", core.callback_throw2(_internal_handler)) {
 				core.Result::Err(_) => { return 8; },
 				core.Result::Ok(_) => {}
 			}
 
 			// --- Register nothrow route (coexistence) ---
-			match rest.add_route(&mut app, "GET", "/nothrow", core.callback2(_nothrow_handler)) {
+			match rest.add_route(app, "GET", "/nothrow", core.callback2(_nothrow_handler)) {
 				core.Result::Err(_) => { return 9; },
 				core.Result::Ok(_) => {}
 			}
 
 			// --- Register route-group throws routes ---
-			match rest.add_route_group(&mut app, "/api") {
+			match rest.add_route_group(app, "/api") {
 				core.Result::Err(_) => { return 10; },
 				core.Result::Ok(rg) => {
-					match rest.add_route_group_throws_route(&mut app, &rg, "GET", "/ok", core.callback_throw2(_group_ok_handler)) {
+					match rest.add_route_group_throws_route(app, rg, "GET", "/ok", core.callback_throw2(_group_ok_handler)) {
 						core.Result::Err(_) => { return 11; },
 						core.Result::Ok(_) => {}
 					}
-					match rest.add_route_group_throws_route(&mut app, &rg, "POST", "/fail", core.callback_throw2(_group_fail_handler)) {
+					match rest.add_route_group_throws_route(app, rg, "POST", "/fail", core.callback_throw2(_group_fail_handler)) {
 						core.Result::Err(_) => { return 12; },
 						core.Result::Ok(_) => {}
 					}
@@ -129,11 +129,11 @@ pub fn main() nothrow -> Int {
 			}
 
 			// --- Register guarded route-group with throws route ---
-			match rest.add_route_group(&mut app, "/guarded") {
+			match rest.add_route_group(app, "/guarded") {
 				core.Result::Err(_) => { return 13; },
 				core.Result::Ok(grg) => {
-					rest.add_route_group_guard(&mut app, &grg, core.callback2(_guard_reject));
-					match rest.add_route_group_throws_route(&mut app, &grg, "GET", "/test", core.callback_throw2(_ok_handler)) {
+					rest.add_route_group_guard(app, grg, core.callback2(_guard_reject));
+					match rest.add_route_group_throws_route(app, grg, "GET", "/test", core.callback_throw2(_ok_handler)) {
 						core.Result::Err(_) => { return 14; },
 						core.Result::Ok(_) => {}
 					}
@@ -144,53 +144,53 @@ pub fn main() nothrow -> Int {
 				core.Result::Err(_) => { return 15; },
 				core.Result::Ok(rs) => {
 					var running = move rs;
-					val port = rest.server_port(&running);
+					val port = rest.server_port(running);
 
 					// Scenario 1: throws handler returns normally → 200
-					val rc1 = _send_and_check(&running, port, "GET", "/ok", 200, timeout);
-					if rc1 != 0 { val _ = rest.shutdown(&mut running); return 100 + rc1; }
+					val rc1 = _send_and_check(running, port, "GET", "/ok", 200, timeout);
+					if rc1 != 0 { val _ = rest.shutdown(running); return 100 + rc1; }
 
 					// Scenario 2: throws RestBadRequest → 400
-					val rc2 = _send_and_check(&running, port, "POST", "/bad", 400, timeout);
-					if rc2 != 0 { val _ = rest.shutdown(&mut running); return 200 + rc2; }
+					val rc2 = _send_and_check(running, port, "POST", "/bad", 400, timeout);
+					if rc2 != 0 { val _ = rest.shutdown(running); return 200 + rc2; }
 
 					// Scenario 3: throws RestUnauthorized → 401
-					val rc3 = _send_and_check(&running, port, "GET", "/unauth", 401, timeout);
-					if rc3 != 0 { val _ = rest.shutdown(&mut running); return 300 + rc3; }
+					val rc3 = _send_and_check(running, port, "GET", "/unauth", 401, timeout);
+					if rc3 != 0 { val _ = rest.shutdown(running); return 300 + rc3; }
 
 					// Scenario 4: throws RestForbidden → 403
-					val rc4 = _send_and_check(&running, port, "GET", "/forbidden", 403, timeout);
-					if rc4 != 0 { val _ = rest.shutdown(&mut running); return 400 + rc4; }
+					val rc4 = _send_and_check(running, port, "GET", "/forbidden", 403, timeout);
+					if rc4 != 0 { val _ = rest.shutdown(running); return 400 + rc4; }
 
 					// Scenario 5: throws RestNotFound → 404
-					val rc5 = _send_and_check(&running, port, "GET", "/notfound", 404, timeout);
-					if rc5 != 0 { val _ = rest.shutdown(&mut running); return 500 + rc5; }
+					val rc5 = _send_and_check(running, port, "GET", "/notfound", 404, timeout);
+					if rc5 != 0 { val _ = rest.shutdown(running); return 500 + rc5; }
 
 					// Scenario 6: throws RestConflict → 409
-					val rc6 = _send_and_check(&running, port, "PUT", "/conflict", 409, timeout);
-					if rc6 != 0 { val _ = rest.shutdown(&mut running); return 600 + rc6; }
+					val rc6 = _send_and_check(running, port, "PUT", "/conflict", 409, timeout);
+					if rc6 != 0 { val _ = rest.shutdown(running); return 600 + rc6; }
 
 					// Scenario 7: throws RestInternal → 500
-					val rc7 = _send_and_check(&running, port, "GET", "/internal", 500, timeout);
-					if rc7 != 0 { val _ = rest.shutdown(&mut running); return 700 + rc7; }
+					val rc7 = _send_and_check(running, port, "GET", "/internal", 500, timeout);
+					if rc7 != 0 { val _ = rest.shutdown(running); return 700 + rc7; }
 
 					// Scenario 8: nothrow route coexists → 200
-					val rc8 = _send_and_check(&running, port, "GET", "/nothrow", 200, timeout);
-					if rc8 != 0 { val _ = rest.shutdown(&mut running); return 800 + rc8; }
+					val rc8 = _send_and_check(running, port, "GET", "/nothrow", 200, timeout);
+					if rc8 != 0 { val _ = rest.shutdown(running); return 800 + rc8; }
 
 					// Scenario 9: group throws route returns normally → 200
-					val rc9 = _send_and_check(&running, port, "GET", "/api/ok", 200, timeout);
-					if rc9 != 0 { val _ = rest.shutdown(&mut running); return 900 + rc9; }
+					val rc9 = _send_and_check(running, port, "GET", "/api/ok", 200, timeout);
+					if rc9 != 0 { val _ = rest.shutdown(running); return 900 + rc9; }
 
 					// Scenario 10: group throws route throws → 403
-					val rc10 = _send_and_check(&running, port, "POST", "/api/fail", 403, timeout);
-					if rc10 != 0 { val _ = rest.shutdown(&mut running); return 1000 + rc10; }
+					val rc10 = _send_and_check(running, port, "POST", "/api/fail", 403, timeout);
+					if rc10 != 0 { val _ = rest.shutdown(running); return 1000 + rc10; }
 
 					// Scenario 11: guarded group — guard rejects before throws handler runs → 401
-					val rc11 = _send_and_check(&running, port, "GET", "/guarded/test", 401, timeout);
-					if rc11 != 0 { val _ = rest.shutdown(&mut running); return 1100 + rc11; }
+					val rc11 = _send_and_check(running, port, "GET", "/guarded/test", 401, timeout);
+					if rc11 != 0 { val _ = rest.shutdown(running); return 1100 + rc11; }
 
-					match rest.shutdown(&mut running) {
+					match rest.shutdown(running) {
 						core.Result::Err(_) => { return 99; },
 						core.Result::Ok(_) => {
 							console.println("consumer rest-throws: all 11 scenarios passed");
@@ -213,7 +213,7 @@ fn _send_and_check(running: &rest.RunningServer, port: Int, method: String, path
 	raw_req = raw_req + "\r\n";
 
 	var addr = net.socket_addr("127.0.0.1", port);
-	match net.connect(&addr, timeout) {
+	match net.connect(addr, timeout) {
 		core.Result::Err(_) => { return 1; },
 		core.Result::Ok(conn) => {
 			var stream = move conn;
@@ -221,10 +221,10 @@ fn _send_and_check(running: &rest.RunningServer, port: Int, method: String, path
 			var wbuf = io.buffer(bytes);
 			var i = 0;
 			while i < bytes {
-				io.buffer_write(&mut wbuf, i, core.string_byte_at(&raw_req, i));
+				io.buffer_write(&mut wbuf, i, core.string_byte_at(raw_req, i));
 				i = i + 1;
 			}
-			match stream.write(&wbuf, timeout) {
+			match stream.write(wbuf, timeout) {
 				core.Result::Err(_) => {
 					val _ = stream.close(timeout);
 					return 2;
@@ -235,7 +235,7 @@ fn _send_and_check(running: &rest.RunningServer, port: Int, method: String, path
 			var done = false;
 			while !done {
 				var rbuf = io.buffer(4096);
-				match stream.read(&mut rbuf, timeout) {
+				match stream.read(rbuf, timeout) {
 					core.Result::Err(_) => { done = true; },
 					core.Result::Ok(n) => {
 						if n == 0 { done = true; }

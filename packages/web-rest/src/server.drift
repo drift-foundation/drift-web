@@ -60,7 +60,7 @@ pub fn listen_app(a: &app.App, timeout: conc.Duration) nothrow -> core.Result<ne
 	val host = a.bind_hosts[0];
 	val port = a.bind_ports[0];
 	var addr = net.socket_addr(host, port);
-	match net.listen(&addr, timeout) {
+	match net.listen(addr, timeout) {
 		core.Result::Ok(listener) => {
 			return core.Result::Ok(move listener);
 		},
@@ -90,7 +90,7 @@ fn _run_serve(a: app.App, listener: net.TcpListener, handle: ServerHandle, timeo
 // Start a server on a VT fiber. Binds, listens, and spawns the serve loop.
 // Returns a RunningServer that can be stopped via shutdown().
 pub fn start(var a: app.App, timeout: conc.Duration) nothrow -> core.Result<RunningServer, errors.RestError> {
-	match listen_app(&a, timeout) {
+	match listen_app(a, timeout) {
 		core.Result::Err(_) => {
 			return core.Result::Err(errors.rest_error(500, "internal", "start-failed", "failed to bind listener"));
 		},
@@ -98,7 +98,7 @@ pub fn start(var a: app.App, timeout: conc.Duration) nothrow -> core.Result<Runn
 			var listener = move lst;
 			val port = listener.local_port();
 			var handle = new_server_handle();
-			var caller_handle = clone_handle(&handle);
+			var caller_handle = clone_handle(handle);
 			var vt = conc.spawn_cb(| | captures(move a, move listener, move handle, copy timeout) => {
 				return _run_serve(move a, move listener, move handle, timeout);
 			});
@@ -116,7 +116,7 @@ pub fn server_port(rs: &RunningServer) nothrow -> Int {
 // Stop the server and wait for it to finish.
 // Returns Ok on clean shutdown, Err if the server VT failed.
 pub fn shutdown(rs: &mut RunningServer) nothrow -> core.Result<Void, errors.RestError> {
-	stop(&rs.handle);
+	stop(rs.handle);
 	match rs.vt.join() {
 		core.Result::Err(_) => {
 			return core.Result::Err(errors.rest_error(500, "internal", "server-join-failed", "failed to join server thread"));
@@ -189,15 +189,15 @@ pub fn serve(a: app.App, listener: net.TcpListener, handle: ServerHandle, timeou
 	var read_scratch = io.buffer(4096);
 	var poll_entries: Array<io.PollEntry> = [];
 
-	while !_is_stopped(&handle) {
+	while !_is_stopped(handle) {
 		if handle.max_requests > 0 {
 			if requests_served >= handle.max_requests {
-				stop(&handle);
+				stop(handle);
 			}
 		}
-		if !_is_stopped(&handle) {
+		if !_is_stopped(handle) {
 			var progressed = false;
-			val now_ms = time.elapsed_ms(&clock);
+			val now_ms = time.elapsed_ms(clock);
 
 			// 1. Accept newly-available connections — gated on listener readiness
 			// (see above), draining the whole backlog when we do accept.
@@ -254,7 +254,7 @@ pub fn serve(a: app.App, listener: net.TcpListener, handle: ServerHandle, timeou
 							var rerr = false;
 							var eof = false;
 							var wblock = false;
-							match conns[i].stream.read(&mut read_scratch, zero) {
+							match conns[i].stream.read(read_scratch, zero) {
 								core.Result::Ok(n) => {
 									if n == 0 { eof = true; } else { got = n; }
 								},
@@ -295,13 +295,13 @@ pub fn serve(a: app.App, listener: net.TcpListener, handle: ServerHandle, timeou
 						if conns[i].rbuf.len > 0 {
 							event_counter = event_counter + 1;
 							val eid = "evt-" + fmt.format_int(event_counter);
-							var parse_res = http.try_parse_request(&mut conns[i].rbuf);
+							var parse_res = http.try_parse_request(conns[i].rbuf);
 							match parse_res {
 								core.Result::Err(perr) => {
 									// Malformed request: send a 400 then close
 									// (only this connection — others unaffected).
-									val er = response.error_envelope(&perr, &eid);
-									var ebytes = http.serialize_response(&er, true);
+									val er = response.error_envelope(perr, eid);
+									var ebytes = http.serialize_response(er, true);
 									conns[i].wbuf = move ebytes;
 									conns[i].close_after = true;
 									progressed = true;
@@ -311,7 +311,7 @@ pub fn serve(a: app.App, listener: net.TcpListener, handle: ServerHandle, timeou
 										Optional::Some(parsed) => {
 											var p = move parsed;
 											val conn_close = p.conn_close == true;
-											var obytes = _dispatch_to_bytes(&app_arc, move p, &eid, conn_close);
+											var obytes = _dispatch_to_bytes(app_arc, move p, eid, conn_close);
 											conns[i].wbuf = move obytes;
 											conns[i].close_after = conn_close;
 											requests_served = requests_served + 1;
@@ -333,7 +333,7 @@ pub fn serve(a: app.App, listener: net.TcpListener, handle: ServerHandle, timeou
 						val remaining = conns[i].wbuf.len - conns[i].woff;
 						var wrote = 0;
 						var werr = false;
-						match conns[i].stream.write_bytes(&mut conns[i].wbuf, conns[i].woff, remaining, zero) {
+						match conns[i].stream.write_bytes(conns[i].wbuf, conns[i].woff, remaining, zero) {
 							core.Result::Ok(n) => { wrote = n; },
 							core.Result::Err(e) => {
 								if e.kind != net.NET_ERROR_KIND_WOULD_BLOCK {
@@ -380,8 +380,8 @@ pub fn serve(a: app.App, listener: net.TcpListener, handle: ServerHandle, timeou
 								event_counter = event_counter + 1;
 								val eid = "evt-" + fmt.format_int(event_counter);
 								val terr = errors.rest_error(400, "request-invalid", "incomplete-body", "request incomplete before idle timeout");
-								val er = response.error_envelope(&terr, &eid);
-								var ebytes = http.serialize_response(&er, true);
+								val er = response.error_envelope(terr, eid);
+								var ebytes = http.serialize_response(er, true);
 								conns[i].rbuf.clear();
 								conns[i].wbuf = move ebytes;
 								conns[i].close_after = true;
@@ -428,7 +428,7 @@ pub fn serve(a: app.App, listener: net.TcpListener, handle: ServerHandle, timeou
 					poll_entries.push(io.PollEntry(fd = conns[pi].fd, token = pi, want_read = !want_write, want_write = want_write));
 					pi = pi + 1;
 				}
-				match io.poll_many(&poll_entries, poll_timeout) {
+				match io.poll_many(poll_entries, poll_timeout) {
 					core.Result::Ok(ready) => {
 						// Distribute readiness: gate the next accept on the listener
 						// being readable, and mark each connection readable so 2a
@@ -475,7 +475,7 @@ pub fn serve(a: app.App, listener: net.TcpListener, handle: ServerHandle, timeou
 				var cc = move c;
 				if cc.wbuf.len > cc.woff {
 					val fl = cc.wbuf.len - cc.woff;
-					val _ = cc.stream.write_bytes(&mut cc.wbuf, cc.woff, fl, flush_timeout);
+					val _ = cc.stream.write_bytes(cc.wbuf, cc.woff, fl, flush_timeout);
 				}
 				val _ = cc.stream.close(zero);
 			},
@@ -490,12 +490,12 @@ pub fn serve(a: app.App, listener: net.TcpListener, handle: ServerHandle, timeou
 // in) and threaded through so the serializer emits the right Connection header.
 fn _dispatch_to_bytes(app_arc: &conc.Arc<app.App>, parsed: http.ParsedRequest, event_id: &String, conn_close: Bool) nothrow -> Array<Byte> {
 	var p = move parsed;
-	var mut_req = mem.replace(&mut p.req, request.new_request("", ""));
+	var mut_req = mem.replace(p.req, request.new_request("", ""));
 	var resp_to_write = response.json_response(500, "");
 	var ctx = context.new_context();
-	match app.dispatch(app_arc.clone(), &mut mut_req, &mut ctx) {
+	match app.dispatch(app_arc.clone(), mut_req, ctx) {
 		core.Result::Ok(resp) => { resp_to_write = move resp; },
-		core.Result::Err(dispatch_err) => { resp_to_write = response.error_envelope(&dispatch_err, event_id); }
+		core.Result::Err(dispatch_err) => { resp_to_write = response.error_envelope(dispatch_err, event_id); }
 	}
-	return http.serialize_response(&resp_to_write, conn_close);
+	return http.serialize_response(resp_to_write, conn_close);
 }

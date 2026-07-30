@@ -48,25 +48,25 @@ fn _safe_fields_json(fields_json: &String) nothrow -> String {
 }
 
 pub fn error_envelope(err: &errors.RestError, event_id: &String) nothrow -> Response {
-	val event_enc = core.diagnostic_json_string(&err.event);
-	val tag_enc = core.diagnostic_json_string(&err.tag);
+	val event_enc = core.diagnostic_json_string(err.event);
+	val tag_enc = core.diagnostic_json_string(err.tag);
 	val eid_enc = core.diagnostic_json_string(event_id);
 	var sb = text.string_builder(256);
 	val p1 = "{\"event\":";
-	text.sb_append_string(&mut sb, &p1);
-	text.sb_append_string(&mut sb, &event_enc);
+	text.sb_append_string(&mut sb, p1);
+	text.sb_append_string(&mut sb, event_enc);
 	val p2 = ",\"tag\":";
-	text.sb_append_string(&mut sb, &p2);
-	text.sb_append_string(&mut sb, &tag_enc);
+	text.sb_append_string(&mut sb, p2);
+	text.sb_append_string(&mut sb, tag_enc);
 	val p3 = ",\"event_id\":";
-	text.sb_append_string(&mut sb, &p3);
-	text.sb_append_string(&mut sb, &eid_enc);
+	text.sb_append_string(&mut sb, p3);
+	text.sb_append_string(&mut sb, eid_enc);
 	val p4 = ",\"fields\":";
-	text.sb_append_string(&mut sb, &p4);
-	val fields = _safe_fields_json(&err.fields_json);
-	text.sb_append_string(&mut sb, &fields);
+	text.sb_append_string(&mut sb, p4);
+	val fields = _safe_fields_json(err.fields_json);
+	text.sb_append_string(&mut sb, fields);
 	val close = "}";
-	text.sb_append_string(&mut sb, &close);
+	text.sb_append_string(&mut sb, close);
 	val body = text.sb_build(&mut sb);
 	var hk: Array<String> = [];
 	var hv: Array<String> = [];

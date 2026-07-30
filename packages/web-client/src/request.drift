@@ -46,7 +46,7 @@ pub fn set_body_string(req: &mut ClientRequest, body: String) nothrow -> Void {
 	var i = 0;
 	val n = body.byte_length();
 	while i < n {
-		out.push(core.string_byte_at(&body, i));
+		out.push(core.string_byte_at(body, i));
 		i = i + 1;
 	}
 	req.body = move out;
@@ -57,7 +57,7 @@ pub fn set_json_body(req: &mut ClientRequest, json: String) nothrow -> Void {
 	var i = 0;
 	val n = json.byte_length();
 	while i < n {
-		out.push(core.string_byte_at(&json, i));
+		out.push(core.string_byte_at(json, i));
 		i = i + 1;
 	}
 	req.body = move out;

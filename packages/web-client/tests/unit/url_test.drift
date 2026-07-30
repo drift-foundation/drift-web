@@ -7,7 +7,7 @@ import web.client as client;
 
 fn scenario_http_simple() nothrow -> Int {
 	val u = "http://example.com/health";
-	match client.parse_url(&u) {
+	match client.parse_url(u) {
 		core.Result::Err(_) => { return 101; },
 		core.Result::Ok(p) => {
 			if p.scheme != "http" { return 102; }
@@ -21,7 +21,7 @@ fn scenario_http_simple() nothrow -> Int {
 
 fn scenario_https_simple() nothrow -> Int {
 	val u = "https://api.example.com/v1/users";
-	match client.parse_url(&u) {
+	match client.parse_url(u) {
 		core.Result::Err(_) => { return 201; },
 		core.Result::Ok(p) => {
 			if p.scheme != "https" { return 202; }
@@ -35,7 +35,7 @@ fn scenario_https_simple() nothrow -> Int {
 
 fn scenario_explicit_port() nothrow -> Int {
 	val u = "http://localhost:8080/test";
-	match client.parse_url(&u) {
+	match client.parse_url(u) {
 		core.Result::Err(_) => { return 301; },
 		core.Result::Ok(p) => {
 			if p.scheme != "http" { return 302; }
@@ -49,7 +49,7 @@ fn scenario_explicit_port() nothrow -> Int {
 
 fn scenario_https_explicit_port() nothrow -> Int {
 	val u = "https://localhost:4433/secure";
-	match client.parse_url(&u) {
+	match client.parse_url(u) {
 		core.Result::Err(_) => { return 401; },
 		core.Result::Ok(p) => {
 			if p.scheme != "https" { return 402; }
@@ -63,7 +63,7 @@ fn scenario_https_explicit_port() nothrow -> Int {
 
 fn scenario_no_path() nothrow -> Int {
 	val u = "http://example.com";
-	match client.parse_url(&u) {
+	match client.parse_url(u) {
 		core.Result::Err(_) => { return 501; },
 		core.Result::Ok(p) => {
 			if p.path != "/" { return 502; }
@@ -74,7 +74,7 @@ fn scenario_no_path() nothrow -> Int {
 
 fn scenario_root_path() nothrow -> Int {
 	val u = "http://example.com/";
-	match client.parse_url(&u) {
+	match client.parse_url(u) {
 		core.Result::Err(_) => { return 601; },
 		core.Result::Ok(p) => {
 			if p.path != "/" { return 602; }
@@ -85,7 +85,7 @@ fn scenario_root_path() nothrow -> Int {
 
 fn scenario_query_string_in_path() nothrow -> Int {
 	val u = "http://example.com/search?q=drift&page=1";
-	match client.parse_url(&u) {
+	match client.parse_url(u) {
 		core.Result::Err(_) => { return 701; },
 		core.Result::Ok(p) => {
 			if p.path != "/search?q=drift&page=1" { return 702; }
@@ -96,7 +96,7 @@ fn scenario_query_string_in_path() nothrow -> Int {
 
 fn scenario_missing_scheme() nothrow -> Int {
 	val u = "example.com/path";
-	match client.parse_url(&u) {
+	match client.parse_url(u) {
 		core.Result::Ok(_) => { return 801; },
 		core.Result::Err(e) => {
 			if e.tag != client.TAG_INVALID_URL { return 802; }
@@ -107,7 +107,7 @@ fn scenario_missing_scheme() nothrow -> Int {
 
 fn scenario_empty_host() nothrow -> Int {
 	val u = "http:///path";
-	match client.parse_url(&u) {
+	match client.parse_url(u) {
 		core.Result::Ok(_) => { return 901; },
 		core.Result::Err(e) => {
 			if e.tag != client.TAG_INVALID_URL { return 902; }
@@ -118,7 +118,7 @@ fn scenario_empty_host() nothrow -> Int {
 
 fn scenario_invalid_port() nothrow -> Int {
 	val u = "http://localhost:abc/path";
-	match client.parse_url(&u) {
+	match client.parse_url(u) {
 		core.Result::Ok(_) => { return 1001; },
 		core.Result::Err(e) => {
 			if e.tag != client.TAG_INVALID_URL { return 1002; }
@@ -129,7 +129,7 @@ fn scenario_invalid_port() nothrow -> Int {
 
 fn scenario_query_only_no_path() nothrow -> Int {
 	val u = "http://example.com?q=1";
-	match client.parse_url(&u) {
+	match client.parse_url(u) {
 		core.Result::Err(_) => { return 1201; },
 		core.Result::Ok(p) => {
 			if p.host != "example.com" { return 1202; }
@@ -142,7 +142,7 @@ fn scenario_query_only_no_path() nothrow -> Int {
 
 fn scenario_query_with_path() nothrow -> Int {
 	val u = "https://api.example.com/v1?key=val";
-	match client.parse_url(&u) {
+	match client.parse_url(u) {
 		core.Result::Err(_) => { return 1301; },
 		core.Result::Ok(p) => {
 			if p.host != "api.example.com" { return 1302; }
@@ -155,7 +155,7 @@ fn scenario_query_with_path() nothrow -> Int {
 
 fn scenario_port_out_of_range() nothrow -> Int {
 	val u = "http://localhost:99999/path";
-	match client.parse_url(&u) {
+	match client.parse_url(u) {
 		core.Result::Ok(_) => { return 1101; },
 		core.Result::Err(e) => {
 			if e.tag != client.TAG_INVALID_URL { return 1102; }

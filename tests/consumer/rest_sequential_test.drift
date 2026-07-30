@@ -36,7 +36,7 @@ fn _send_one(addr: &net.SocketAddr, raw_req: &String, timeout: conc.Duration) no
 				io.buffer_write(&mut wbuf, i, core.string_byte_at(raw_req, i));
 				i = i + 1;
 			}
-			match stream.write(&wbuf, timeout) {
+			match stream.write(wbuf, timeout) {
 				core.Result::Err(_) => {
 					val _ = stream.close(timeout);
 					return core.Result::Err("write failed");
@@ -47,7 +47,7 @@ fn _send_one(addr: &net.SocketAddr, raw_req: &String, timeout: conc.Duration) no
 			var done = false;
 			while !done {
 				var rbuf = io.buffer(4096);
-				match stream.read(&mut rbuf, timeout) {
+				match stream.read(rbuf, timeout) {
 					core.Result::Err(_) => { done = true; },
 					core.Result::Ok(n) => {
 						if n == 0 { done = true; }
@@ -83,7 +83,7 @@ fn _send_on_stream(stream: &mut net.TcpStream, raw_req: &String, timeout: conc.D
 		io.buffer_write(&mut wbuf, i, core.string_byte_at(raw_req, i));
 		i = i + 1;
 	}
-	match stream.write(&wbuf, timeout) {
+	match stream.write(wbuf, timeout) {
 		core.Result::Err(_) => { return core.Result::Err("write failed"); },
 		core.Result::Ok(_) => {}
 	}
@@ -91,7 +91,7 @@ fn _send_on_stream(stream: &mut net.TcpStream, raw_req: &String, timeout: conc.D
 	var done = false;
 	while !done {
 		var rbuf = io.buffer(4096);
-		match stream.read(&mut rbuf, timeout) {
+		match stream.read(rbuf, timeout) {
 			core.Result::Err(_) => { done = true; },
 			core.Result::Ok(n) => {
 				if n == 0 { done = true; }
@@ -143,11 +143,11 @@ fn _contains(haystack: &String, needle: &String) nothrow -> Bool {
 fn _assert_200(resp: &String, label: &String) nothrow -> Int {
 	val ok_marker = "200 OK";
 	val body_marker = "{\"ok\":true}";
-	if !_contains(resp, &ok_marker) {
+	if !_contains(resp, ok_marker) {
 		console.println("FAIL " + *label + ": expected 200 OK, got: " + *resp);
 		return 1;
 	}
-	if !_contains(resp, &body_marker) {
+	if !_contains(resp, body_marker) {
 		console.println("FAIL " + *label + ": missing body");
 		return 2;
 	}
@@ -160,12 +160,12 @@ pub fn main() nothrow -> Int {
 	val client_timeout = conc.Duration(millis = 5000);
 
 	var b = rest.new_app_builder();
-	rest.bind(&mut b, "127.0.0.1", 0);
+	rest.bind(b, "127.0.0.1", 0);
 	match rest.build_app(move b) {
 		core.Result::Err(_) => { return 1; },
 		core.Result::Ok(a) => {
 			var app = move a;
-			match rest.add_route(&mut app, "GET", "/health", core.callback2(health)) {
+			match rest.add_route(app, "GET", "/health", core.callback2(health)) {
 				core.Result::Err(_) => { return 2; },
 				core.Result::Ok(_) => {}
 			}
@@ -176,47 +176,47 @@ pub fn main() nothrow -> Int {
 				},
 				core.Result::Ok(rs) => {
 					var running = move rs;
-					val port = rest.server_port(&running);
+					val port = rest.server_port(running);
 					var addr = net.socket_addr("127.0.0.1", port);
 
 					// --- Scenario 1: two requests on one keep-alive connection ---
-					match net.connect(&addr, client_timeout) {
+					match net.connect(addr, client_timeout) {
 						core.Result::Err(_) => {
 							console.println("FAIL: scenario 1 connect");
-							val _ = rest.shutdown(&mut running);
+							val _ = rest.shutdown(running);
 							return 10;
 						},
 						core.Result::Ok(conn) => {
 							var stream = move conn;
 							val req_ka = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
-							match _send_on_stream(&mut stream, &req_ka, client_timeout) {
+							match _send_on_stream(stream, req_ka, client_timeout) {
 								core.Result::Err(e) => {
 									console.println("FAIL: scenario 1 req 1: " + e);
 									val _ = stream.close(client_timeout);
-									val _ = rest.shutdown(&mut running);
+									val _ = rest.shutdown(running);
 									return 11;
 								},
 								core.Result::Ok(r1) => {
 									val l1 = "scenario 1 req 1";
-									if _assert_200(&r1, &l1) != 0 {
+									if _assert_200(r1, l1) != 0 {
 										val _ = stream.close(client_timeout);
-										val _ = rest.shutdown(&mut running);
+										val _ = rest.shutdown(running);
 										return 12;
 									}
 								}
 							}
-							match _send_on_stream(&mut stream, &req_ka, client_timeout) {
+							match _send_on_stream(stream, req_ka, client_timeout) {
 								core.Result::Err(e) => {
 									console.println("FAIL: scenario 1 req 2: " + e);
 									val _ = stream.close(client_timeout);
-									val _ = rest.shutdown(&mut running);
+									val _ = rest.shutdown(running);
 									return 13;
 								},
 								core.Result::Ok(r2) => {
 									val l2 = "scenario 1 req 2";
-									if _assert_200(&r2, &l2) != 0 {
+									if _assert_200(r2, l2) != 0 {
 										val _ = stream.close(client_timeout);
-										val _ = rest.shutdown(&mut running);
+										val _ = rest.shutdown(running);
 										return 14;
 									}
 								}
@@ -230,16 +230,16 @@ pub fn main() nothrow -> Int {
 					val req_close = "GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
 					var sep_i = 0;
 					while sep_i < 5 {
-						match _send_one(&addr, &req_close, client_timeout) {
+						match _send_one(addr, req_close, client_timeout) {
 							core.Result::Err(e) => {
 								console.println("FAIL: scenario 2 req " + fmt.format_int(sep_i + 1) + ": " + e);
-								val _ = rest.shutdown(&mut running);
+								val _ = rest.shutdown(running);
 								return 20 + sep_i;
 							},
 							core.Result::Ok(r) => {
 								val l = "scenario 2 req " + fmt.format_int(sep_i + 1) + " (separate conn)";
-								if _assert_200(&r, &l) != 0 {
-									val _ = rest.shutdown(&mut running);
+								if _assert_200(r, l) != 0 {
+									val _ = rest.shutdown(running);
 									return 20 + sep_i;
 								}
 							}
@@ -248,22 +248,22 @@ pub fn main() nothrow -> Int {
 					}
 
 					// --- Scenario 3: explicit Connection: close ---
-					match _send_one(&addr, &req_close, client_timeout) {
+					match _send_one(addr, req_close, client_timeout) {
 						core.Result::Err(e) => {
 							console.println("FAIL: scenario 3 (conn close): " + e);
-							val _ = rest.shutdown(&mut running);
+							val _ = rest.shutdown(running);
 							return 30;
 						},
 						core.Result::Ok(r) => {
 							val l = "scenario 3 (conn close)";
-							if _assert_200(&r, &l) != 0 {
-								val _ = rest.shutdown(&mut running);
+							if _assert_200(r, l) != 0 {
+								val _ = rest.shutdown(running);
 								return 31;
 							}
 						}
 					}
 
-					match rest.shutdown(&mut running) {
+					match rest.shutdown(running) {
 						core.Result::Err(_) => { return 40; },
 						core.Result::Ok(_) => {
 							console.println("consumer rest-sequential: all 3 scenarios passed");

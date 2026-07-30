@@ -67,14 +67,14 @@ pub fn main() nothrow -> Int {
 	}
 
 	var cfg = client.new_client_config();
-	client.with_tls_trust_store(&mut cfg, client.TrustStore::PemFile(path = ca_path));
+	client.with_tls_trust_store(cfg, client.TrustStore::PemFile(path = ca_path));
 	var session = client.new_session(move cfg);
 
 	val url = "https://127.0.0.1:" + fmt.format_int(https_port) + "/health";
 
 	// First request: succeeds, server closes connection after response.
 	console.println("request 1...");
-	match client.get(&session, url) {
+	match client.get(session, url) {
 		core.Result::Err(e) => {
 			console.println("request 1 failed: " + e.tag + " " + e.message);
 			return 1;
@@ -88,7 +88,7 @@ pub fn main() nothrow -> Int {
 	// BUG: write() to closed socket -> SIGPIPE (exit 141).
 	// FIXED: should reconnect and succeed.
 	console.println("request 2 (reuse stale connection)...");
-	match client.get(&session, url) {
+	match client.get(session, url) {
 		core.Result::Err(e) => {
 			console.println("request 2 failed: " + e.tag + " " + e.message);
 			return 3;

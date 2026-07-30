@@ -49,7 +49,7 @@ fn _small_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Re
 // Returns response with Connection: close header.
 fn _close_handler(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {
 	var resp = rest.json_response(200, "{\"closed\":true}");
-	rest.with_response_header(&mut resp, "Connection", "close");
+	rest.with_response_header(resp, "Connection", "close");
 	return core.Result::Ok(move resp);
 }
 
@@ -66,7 +66,7 @@ fn scenario_large_then_small(session: &client.Session, port: Int) nothrow -> Int
 		core.Result::Err(_) => { return 1001; },
 		core.Result::Ok(resp) => {
 			if resp.status != 200 { return 1002; }
-			match client.response_body_string(&resp) {
+			match client.response_body_string(resp) {
 				core.Result::Err(_) => { return 1003; },
 				core.Result::Ok(body) => {
 					if body.byte_length() < 7900 { return 1004; }
@@ -81,7 +81,7 @@ fn scenario_large_then_small(session: &client.Session, port: Int) nothrow -> Int
 		core.Result::Err(_) => { return 1005; },
 		core.Result::Ok(resp) => {
 			if resp.status != 200 { return 1006; }
-			match client.response_body_string(&resp) {
+			match client.response_body_string(resp) {
 				core.Result::Err(_) => { return 1007; },
 				core.Result::Ok(body) => {
 					if body.byte_length() < 90 { return 1008; }
@@ -116,7 +116,7 @@ fn scenario_alternating_sizes(session: &client.Session, port: Int) nothrow -> In
 			core.Result::Err(_) => { return 2000 + i * 10 + 1; },
 			core.Result::Ok(resp) => {
 				if resp.status != 200 { return 2000 + i * 10 + 2; }
-				match client.response_body_string(&resp) {
+				match client.response_body_string(resp) {
 					core.Result::Err(_) => { return 2000 + i * 10 + 3; },
 					core.Result::Ok(body) => {
 						if body.byte_length() < expected_min { return 2000 + i * 10 + 4; }
@@ -147,7 +147,7 @@ fn scenario_server_close(session: &client.Session, port: Int) nothrow -> Int {
 		core.Result::Err(_) => { return 3003; },
 		core.Result::Ok(resp) => {
 			if resp.status != 200 { return 3004; }
-			match client.response_body_string(&resp) {
+			match client.response_body_string(resp) {
 				core.Result::Err(_) => { return 3005; },
 				core.Result::Ok(body) => {
 					val expected = "{\"closed\":true}";
@@ -163,7 +163,7 @@ fn scenario_server_close(session: &client.Session, port: Int) nothrow -> Int {
 		core.Result::Err(_) => { return 3007; },
 		core.Result::Ok(resp) => {
 			if resp.status != 200 { return 3008; }
-			match client.response_body_string(&resp) {
+			match client.response_body_string(resp) {
 				core.Result::Err(_) => { return 3009; },
 				core.Result::Ok(body) => {
 					val expected = "{\"ok\":true}";
@@ -188,7 +188,7 @@ fn scenario_many_exact(session: &client.Session, port: Int) nothrow -> Int {
 			core.Result::Err(_) => { return 4000 + i; },
 			core.Result::Ok(resp) => {
 				if resp.status != 200 { return 4100 + i; }
-				match client.response_body_string(&resp) {
+				match client.response_body_string(resp) {
 					core.Result::Err(_) => { return 4200 + i; },
 					core.Result::Ok(body) => {
 						if body != expected { return 4300 + i; }
@@ -212,42 +212,42 @@ fn _stop(running: &mut rest.RunningServer) nothrow -> Void {
 
 pub fn main() nothrow -> Int {
 	var b = rest.new_app_builder();
-	rest.bind(&mut b, "127.0.0.1", 0);
+	rest.bind(b, "127.0.0.1", 0);
 	match rest.build_app(move b) {
 		core.Result::Err(_) => { return 1; },
 		core.Result::Ok(a) => {
 			var app = move a;
-			match rest.add_route(&mut app, "GET", "/health", _health_handler) {
+			match rest.add_route(app, "GET", "/health", _health_handler) {
 				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
-			match rest.add_route(&mut app, "GET", "/large", _large_handler) {
+			match rest.add_route(app, "GET", "/large", _large_handler) {
 				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
-			match rest.add_route(&mut app, "GET", "/small", _small_handler) {
+			match rest.add_route(app, "GET", "/small", _small_handler) {
 				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
-			match rest.add_route(&mut app, "GET", "/close", _close_handler) {
+			match rest.add_route(app, "GET", "/close", _close_handler) {
 				core.Result::Err(_) => { return 2; }, core.Result::Ok(_) => {} }
 			match rest.start(move app, conc.Duration(millis = 5000)) {
 				core.Result::Err(_) => { return 3; },
 				core.Result::Ok(srv) => {
 					var running = move srv;
-					val port = rest.server_port(&running);
+					val port = rest.server_port(running);
 
 					var cfg = client.new_client_config();
 					var session = client.new_session(move cfg);
 
-					val r1 = scenario_large_then_small(&session, port);
-					if r1 != 0 { console.println("FAIL: large_then_small " + fmt.format_int(r1)); _stop(&mut running); return r1; }
+					val r1 = scenario_large_then_small(session, port);
+					if r1 != 0 { console.println("FAIL: large_then_small " + fmt.format_int(r1)); _stop(running); return r1; }
 
-					val r2 = scenario_alternating_sizes(&session, port);
-					if r2 != 0 { console.println("FAIL: alternating_sizes " + fmt.format_int(r2)); _stop(&mut running); return r2; }
+					val r2 = scenario_alternating_sizes(session, port);
+					if r2 != 0 { console.println("FAIL: alternating_sizes " + fmt.format_int(r2)); _stop(running); return r2; }
 
-					val r3 = scenario_server_close(&session, port);
-					if r3 != 0 { console.println("FAIL: server_close " + fmt.format_int(r3)); _stop(&mut running); return r3; }
+					val r3 = scenario_server_close(session, port);
+					if r3 != 0 { console.println("FAIL: server_close " + fmt.format_int(r3)); _stop(running); return r3; }
 
-					val r4 = scenario_many_exact(&session, port);
-					if r4 != 0 { console.println("FAIL: many_exact " + fmt.format_int(r4)); _stop(&mut running); return r4; }
+					val r4 = scenario_many_exact(session, port);
+					if r4 != 0 { console.println("FAIL: many_exact " + fmt.format_int(r4)); _stop(running); return r4; }
 
 					console.println("pool framing e2e: all 4 scenarios passed");
-					_stop(&mut running);
+					_stop(running);
 					return 0;
 				}
 			}

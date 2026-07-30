@@ -75,63 +75,63 @@ pub fn serialize_request(parsed: &url.ParsedUrl, req: &request.ClientRequest) no
 	var out: Array<Byte> = [];
 
 	// Request line: METHOD PATH HTTP/1.1\r\n
-	_push_string(&mut out, &req.method);
+	_push_string(out, req.method);
 	out.push(cast<Byte>(32));
-	_push_string(&mut out, &parsed.path);
+	_push_string(out, parsed.path);
 	val http_ver = " HTTP/1.1";
-	_push_string(&mut out, &http_ver);
-	_push_crlf(&mut out);
+	_push_string(out, http_ver);
+	_push_crlf(out);
 
 	// Host header (only if not set by caller).
 	val host_name = "Host";
-	if not _has_header_ci(req, &host_name) {
+	if not _has_header_ci(req, host_name) {
 		val host_key = "Host: ";
-		_push_string(&mut out, &host_key);
-		_push_string(&mut out, &parsed.host);
+		_push_string(out, host_key);
+		_push_string(out, parsed.host);
 		val is_default_http = parsed.scheme == "http" and parsed.port == 80;
 		val is_default_https = parsed.scheme == "https" and parsed.port == 443;
 		if not is_default_http {
 			if not is_default_https {
 				val colon = ":";
-				_push_string(&mut out, &colon);
+				_push_string(out, colon);
 				val port_str = fmt.format_int(parsed.port);
-				_push_string(&mut out, &port_str);
+				_push_string(out, port_str);
 			}
 		}
-		_push_crlf(&mut out);
+		_push_crlf(out);
 	}
 
 	// User headers.
 	var i = 0;
 	while i < req.header_keys.len {
-		_push_string(&mut out, &req.header_keys[i]);
+		_push_string(out, req.header_keys[i]);
 		val sep = ": ";
-		_push_string(&mut out, &sep);
-		_push_string(&mut out, &req.header_values[i]);
-		_push_crlf(&mut out);
+		_push_string(out, sep);
+		_push_string(out, req.header_values[i]);
+		_push_crlf(out);
 		i = i + 1;
 	}
 
 	// Content-Length if body present and not set by caller.
 	val cl_name_check = "Content-Length";
-	if req.body.len > 0 and not _has_header_ci(req, &cl_name_check) {
+	if req.body.len > 0 and not _has_header_ci(req, cl_name_check) {
 		val cl_key = "Content-Length: ";
-		_push_string(&mut out, &cl_key);
+		_push_string(out, cl_key);
 		val cl_val = fmt.format_int(req.body.len);
-		_push_string(&mut out, &cl_val);
-		_push_crlf(&mut out);
+		_push_string(out, cl_val);
+		_push_crlf(out);
 	}
 
 	// Connection: close (only if not set by caller).
 	val conn_name = "Connection";
-	if not _has_header_ci(req, &conn_name) {
+	if not _has_header_ci(req, conn_name) {
 		val conn_close = "Connection: close";
-		_push_string(&mut out, &conn_close);
-		_push_crlf(&mut out);
+		_push_string(out, conn_close);
+		_push_crlf(out);
 	}
 
 	// End of headers.
-	_push_crlf(&mut out);
+	_push_crlf(out);
 
 	// Body.
 	var j = 0;
@@ -295,19 +295,19 @@ pub fn parse_response_headers(raw: &Array<Byte>) nothrow -> core.Result<ParsedRe
 					val name = _bytes_to_string(raw, pos, colon);
 					val val_start = _skip_spaces(raw, colon + 1, line_end);
 					val value = _bytes_to_string(raw, val_start, line_end);
-					if _ascii_eq_lower(raw, pos, colon, &cl_name) {
+					if _ascii_eq_lower(raw, pos, colon, cl_name) {
 						match parse.parse_int(value) {
 							core.Result::Ok(v) => { content_length = v; },
 							core.Result::Err(_) => {}
 						}
 					}
-					if _ascii_eq_lower(raw, pos, colon, &te_name) {
-						if _ascii_eq_lower(raw, val_start, line_end, &chunked_val) {
+					if _ascii_eq_lower(raw, pos, colon, te_name) {
+						if _ascii_eq_lower(raw, val_start, line_end, chunked_val) {
 							chunked = true;
 						}
 					}
-					if _ascii_eq_lower(raw, pos, colon, &conn_name) {
-						if _ascii_eq_lower(raw, val_start, line_end, &close_val) {
+					if _ascii_eq_lower(raw, pos, colon, conn_name) {
+						if _ascii_eq_lower(raw, val_start, line_end, close_val) {
 							conn_close = true;
 						}
 					}
@@ -344,7 +344,7 @@ pub fn decode_chunked_body(raw: &Array<Byte>, start: Int, max_body: Int) nothrow
 		}
 		val size_str = _bytes_to_string(raw, pos, line_end);
 		var chunk_size = 0;
-		match _parse_hex(&size_str) {
+		match _parse_hex(size_str) {
 			core.Result::Ok(v) => { chunk_size = v; },
 			core.Result::Err(_) => {
 				return core.Result::Err(errors.client_error(errors.TAG_INVALID_RESPONSE, "invalid chunk size"));

@@ -101,18 +101,18 @@ fn _resolve_now(config: &JwtGuardConfig) nothrow -> Int {
 // Internal: verify token string against config, store principal on success.
 fn _verify_token(token: &String, config: &JwtGuardConfig, ctx: &mut context.Context) nothrow -> core.Result<Void, errors.RestError> {
 	val now = _resolve_now(config);
-	match jwt.verify_hs256(token, &config.secret, now, &config.policy) {
+	match jwt.verify_hs256(token, config.secret, now, config.policy) {
 		core.Result::Err(jwt_err) => {
-			return core.Result::Err(_map_jwt_error(&jwt_err));
+			return core.Result::Err(_map_jwt_error(jwt_err));
 		},
 		core.Result::Ok(verified) => {
-			match json.parse(&verified.payload_json) {
+			match json.parse(verified.payload_json) {
 				core.Result::Err(_) => {
 					return core.Result::Err(errors.rest_error(500, "internal", "payload-parse-failed", "verified payload is not valid JSON"));
 				},
 				core.Result::Ok(payload_node) => {
 					val sub_key = "sub";
-					match payload_node.get(&sub_key) {
+					match payload_node.get(sub_key) {
 						Optional::None => {
 							context.ctx_set<type context.Principal>(ctx, context.Principal(sub = ""));
 						},
@@ -140,17 +140,17 @@ fn _verify_token(token: &String, config: &JwtGuardConfig, ctx: &mut context.Cont
 // so the future router can bind it at registration time, yielding RestGuard(&Request, &mut Context).
 pub fn jwt_guard_apply(config: &JwtGuardConfig, req: &request.Request, ctx: &mut context.Context) nothrow -> core.Result<Void, errors.RestError> {
 	val auth_key = "Authorization";
-	match request.header(req, &auth_key) {
+	match request.header(req, auth_key) {
 		Optional::None => {
 			return core.Result::Err(errors.rest_error(401, "unauthorized", "missing-authorization", "Authorization header is required"));
 		},
 		Optional::Some(auth_value) => {
-			match _extract_bearer(&auth_value) {
+			match _extract_bearer(auth_value) {
 				Optional::None => {
 					return core.Result::Err(errors.rest_error(400, "request-invalid", "invalid-authorization-format", "Authorization header must use Bearer scheme"));
 				},
 				Optional::Some(token) => {
-					return _verify_token(&token, config, ctx);
+					return _verify_token(token, config, ctx);
 				}
 			}
 		}

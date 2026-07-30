@@ -15,12 +15,12 @@ fn health(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Result<rest.
 
 pub fn main() nothrow -> Int {
 	var b = rest.new_app_builder();
-	rest.bind(&mut b, "127.0.0.1", 0);
+	rest.bind(b, "127.0.0.1", 0);
 	match rest.build_app(move b) {
 		core.Result::Err(_) => { return 1; },
 		core.Result::Ok(a) => {
 			var app = move a;
-			match rest.add_route(&mut app, "GET", "/health", core.callback2(health)) {
+			match rest.add_route(app, "GET", "/health", core.callback2(health)) {
 				core.Result::Err(_) => { return 2; },
 				core.Result::Ok(_) => {}
 			}
@@ -28,7 +28,7 @@ pub fn main() nothrow -> Int {
 				core.Result::Err(_) => { return 3; },
 				core.Result::Ok(rs) => {
 					var running = move rs;
-					match rest.shutdown(&mut running) {
+					match rest.shutdown(running) {
 						core.Result::Err(_) => { return 4; },
 						core.Result::Ok(_) => {
 							console.println("consumer rest-startup: passed");

@@ -51,7 +51,7 @@ fn _canonical_config() nothrow -> json.JsonConfig {
 // is absent, the value isn't a string, or fields_json is malformed.
 // Saves callers from writing the json.parse + cursor lookup boilerplate.
 pub fn field(err: &RestError, key: &String) nothrow -> Optional<String> {
-	match json.parse(&err.fields_json) {
+	match json.parse(err.fields_json) {
 		core.Result::Ok(node) => { return node.select().field(key).as_string(); },
 		core.Result::Err(_) => { return Optional::None(); }
 	}
@@ -62,7 +62,7 @@ pub fn field(err: &RestError, key: &String) nothrow -> Optional<String> {
 // object so prior entries are kept; last-write-wins on duplicate keys.
 pub fn add_field(err: &mut RestError, key: String, value: String) nothrow -> Void {
 	var obj = json.new_object();
-	match json.parse(&err.fields_json) {
+	match json.parse(err.fields_json) {
 		core.Result::Ok(node) => {
 			match node.into_object() {
 				Optional::Some(o) => { obj = move o; },
@@ -74,6 +74,6 @@ pub fn add_field(err: &mut RestError, key: String, value: String) nothrow -> Voi
 	obj.set(move key, json.JsonNode::String(move value));
 	val node = obj.to_node();
 	val cfg = _canonical_config();
-	err.fields_json = json.encode_compact_with_config(&node, &cfg);
+	err.fields_json = json.encode_compact_with_config(node, cfg);
 	return core.void_value();
 }

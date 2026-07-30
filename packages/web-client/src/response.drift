@@ -68,7 +68,7 @@ pub fn response_body_json(resp: &ClientResponse) nothrow -> core.Result<json.Jso
 			return core.Result::Err(e);
 		},
 		core.Result::Ok(s) => {
-			match json.parse(&s) {
+			match json.parse(s) {
 				core.Result::Ok(node) => {
 					return core.Result::Ok(json.share(move node));
 				},

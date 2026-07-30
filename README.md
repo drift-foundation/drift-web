@@ -32,15 +32,26 @@ consumer setup, trust store configuration, and compilation instructions.
 ## Development
 
 ```bash
-export DRIFTC=/path/to/driftc
-export DRIFT_SIGN_KEY_FILE=/path/to/signing-key.seed
+# All recipes resolve driftc/drift from DRIFT_TOOLCHAIN_ROOT and packages
+# from DRIFT_PKG_ROOT. During certification point both at the staged lane:
+export DRIFT_TOOLCHAIN_ROOT=$HOME/opt/drift/staged/toolchain/drift-0.33.91+abi22
+export DRIFT_PKG_ROOT=$HOME/opt/drift/staged/libs
+# Outside certification, use the certified snapshot instead:
+#   export DRIFT_TOOLCHAIN_ROOT=$HOME/opt/drift/certified/current/toolchain
+#   export DRIFT_PKG_ROOT=$HOME/opt/drift/certified/current/pkgs
+export DRIFT_SIGN_KEY_FILE=/path/to/signing-key.seed   # deploy/reseal only
 
 just test                    # full test suite
 just deploy                  # build, sign, smoke, publish
 ```
 
-Requirements: `just`, `bash`, `driftc` (0.33.83+ / ABI 21+),
-`DRIFT_SIGN_KEY_FILE` for deploy.
+Requirements: `just`, `bash`, `driftc` (0.33.91+ / ABI 22),
+`DRIFT_SIGN_KEY_FILE` for deploy. ABI 22 changed the `String`
+representation: ABI 21 objects/packages cannot link against ABI 22
+artifacts and must be rebuilt. 0.33.91 additionally rejects redundant
+argument-position borrows (`E_REDUNDANT_ARG_BORROW`) — when a parameter
+is declared `&T`/`&mut T`, pass the value bare; the sources and docs
+use that spelling.
 
 ## Repository layout
 

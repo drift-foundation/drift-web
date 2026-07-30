@@ -73,7 +73,7 @@ pub fn take_tcp(p: &mut TcpPool, key: &String) nothrow -> Bool {
 // Swap out the TCP entries array (take ownership).
 pub fn swap_tcp_entries(p: &mut TcpPool) nothrow -> Array<TcpPoolEntry> {
 	var empty: Array<TcpPoolEntry> = [];
-	val old = mem.replace(&mut p.entries, move empty);
+	val old = mem.replace(p.entries, move empty);
 	p.key = "";
 	return move old;
 }
@@ -81,7 +81,7 @@ pub fn swap_tcp_entries(p: &mut TcpPool) nothrow -> Array<TcpPoolEntry> {
 pub fn put_tcp(p: &mut TcpPool, key: String, entry: TcpPoolEntry) nothrow -> Void {
 	var new_arr: Array<TcpPoolEntry> = [];
 	new_arr.push(move entry);
-	val old = mem.replace(&mut p.entries, move new_arr);
+	val old = mem.replace(p.entries, move new_arr);
 	p.key = move key;
 }
 
@@ -96,7 +96,7 @@ pub fn take_tls(p: &mut TlsPool, key: &String) nothrow -> Bool {
 
 pub fn swap_tls_entries(p: &mut TlsPool) nothrow -> Array<TlsPoolEntry> {
 	var empty: Array<TlsPoolEntry> = [];
-	val old = mem.replace(&mut p.entries, move empty);
+	val old = mem.replace(p.entries, move empty);
 	p.key = "";
 	return move old;
 }
@@ -104,6 +104,6 @@ pub fn swap_tls_entries(p: &mut TlsPool) nothrow -> Array<TlsPoolEntry> {
 pub fn put_tls(p: &mut TlsPool, key: String, entry: TlsPoolEntry) nothrow -> Void {
 	var new_arr: Array<TlsPoolEntry> = [];
 	new_arr.push(move entry);
-	val old = mem.replace(&mut p.entries, move new_arr);
+	val old = mem.replace(p.entries, move new_arr);
 	p.key = move key;
 }

@@ -37,7 +37,7 @@ fn _bad_throws_handler(req: &rest.Request, ctx: &mut rest.Context) -> rest.Respo
 pub fn main() nothrow -> Int {
 	val timeout = conc.Duration(millis = 5000);
 	var b = rest.new_app_builder();
-	rest.bind(&mut b, "127.0.0.1", 0);
+	rest.bind(b, "127.0.0.1", 0);
 	match rest.build_app(move b) {
 		core.Result::Err(_) => { return 1; },
 		core.Result::Ok(a) => {
@@ -51,7 +51,7 @@ pub fn main() nothrow -> Int {
 			//   - On Err with status 4xx, transforms to 503 (Err -> Err transform)
 			//     when cfg.transform_503 is set. Acts as observable signal that the
 			//     global mw saw and processed the inner Err.
-			rest.add_middleware(&mut app, |req: &rest.Request, ctx: &mut rest.Context, next| captures(share cfg) => {
+			rest.add_middleware(app, |req: &rest.Request, ctx: &mut rest.Context, next| captures(share cfg) => {
 				val result = next.call(req, ctx);
 				val do_transform = cfg.get().transform_503;
 				match move result {
@@ -68,25 +68,25 @@ pub fn main() nothrow -> Int {
 			});
 
 			// Group + group middleware: short-circuit /api/blocked with 401.
-			match rest.add_route_group(&mut app, "/api") {
+			match rest.add_route_group(app, "/api") {
 				core.Result::Err(_) => { return 2; },
 				core.Result::Ok(rg) => {
-					rest.add_route_group_middleware(&mut app, &rg, |req: &rest.Request, ctx: &mut rest.Context, next| => {
+					rest.add_route_group_middleware(app, rg, |req: &rest.Request, ctx: &mut rest.Context, next| => {
 						if req.path == "/api/blocked" {
 							return core.Result::Err(rest.rest_error(401, "unauthorized", "group-blocked", "blocked by group mw"));
 						}
 						return next.call(req, ctx);
 					});
-					match rest.add_route_group_route(&mut app, &rg, "GET", "/ok", core.callback2(_ok_handler)) {
+					match rest.add_route_group_route(app, rg, "GET", "/ok", core.callback2(_ok_handler)) {
 						core.Result::Err(_) => { return 3; },
 						core.Result::Ok(_) => {}
 					}
-					match rest.add_route_group_route(&mut app, &rg, "GET", "/blocked", core.callback2(_ok_handler)) {
+					match rest.add_route_group_route(app, rg, "GET", "/blocked", core.callback2(_ok_handler)) {
 						core.Result::Err(_) => { return 4; },
 						core.Result::Ok(_) => {}
 					}
 					// Throws-route that emits typed exception — global mw observes the Err.
-					match rest.add_route_group_throws_route(&mut app, &rg, "POST", "/throws", core.callback_throw2(_bad_throws_handler)) {
+					match rest.add_route_group_throws_route(app, rg, "POST", "/throws", core.callback_throw2(_bad_throws_handler)) {
 						core.Result::Err(_) => { return 5; },
 						core.Result::Ok(_) => {}
 					}
@@ -94,7 +94,7 @@ pub fn main() nothrow -> Int {
 			}
 
 			// Out-of-group plain route — no group mw applies.
-			match rest.add_route(&mut app, "GET", "/health", core.callback2(_ok_handler)) {
+			match rest.add_route(app, "GET", "/health", core.callback2(_ok_handler)) {
 				core.Result::Err(_) => { return 6; },
 				core.Result::Ok(_) => {}
 			}
@@ -103,26 +103,26 @@ pub fn main() nothrow -> Int {
 				core.Result::Err(_) => { return 7; },
 				core.Result::Ok(rs) => {
 					var running = move rs;
-					val port = rest.server_port(&running);
+					val port = rest.server_port(running);
 
 					// Site A: out-of-group plain → 200.
-					val a1 = _send_and_check(&running, port, "GET", "/health", 200, timeout);
-					if a1 != 0 { val _ = rest.shutdown(&mut running); return 100 + a1; }
+					val a1 = _send_and_check(running, port, "GET", "/health", 200, timeout);
+					if a1 != 0 { val _ = rest.shutdown(running); return 100 + a1; }
 
 					// Site B: in-group, plain handler → 200 (passes through both mws).
-					val a2 = _send_and_check(&running, port, "GET", "/api/ok", 200, timeout);
-					if a2 != 0 { val _ = rest.shutdown(&mut running); return 200 + a2; }
+					val a2 = _send_and_check(running, port, "GET", "/api/ok", 200, timeout);
+					if a2 != 0 { val _ = rest.shutdown(running); return 200 + a2; }
 
 					// Site C: group mw short-circuits → 401 (handler not invoked).
-					val a3 = _send_and_check(&running, port, "GET", "/api/blocked", 401, timeout);
-					if a3 != 0 { val _ = rest.shutdown(&mut running); return 300 + a3; }
+					val a3 = _send_and_check(running, port, "GET", "/api/blocked", 401, timeout);
+					if a3 != 0 { val _ = rest.shutdown(running); return 300 + a3; }
 
 					// Site D: throws-route handler throws RestBadRequest → 400 from
 					// _dispatch_throws → global mw observes and transforms to 503.
-					val a4 = _send_and_check(&running, port, "POST", "/api/throws", 503, timeout);
-					if a4 != 0 { val _ = rest.shutdown(&mut running); return 400 + a4; }
+					val a4 = _send_and_check(running, port, "POST", "/api/throws", 503, timeout);
+					if a4 != 0 { val _ = rest.shutdown(running); return 400 + a4; }
 
-					match rest.shutdown(&mut running) {
+					match rest.shutdown(running) {
 						core.Result::Err(_) => { return 99; },
 						core.Result::Ok(_) => {
 							console.println("consumer rest-middleware: all 4 sites passed");
@@ -144,7 +144,7 @@ fn _send_and_check(running: &rest.RunningServer, port: Int, method: String, path
 	raw_req = raw_req + "\r\n";
 
 	var addr = net.socket_addr("127.0.0.1", port);
-	match net.connect(&addr, timeout) {
+	match net.connect(addr, timeout) {
 		core.Result::Err(_) => { return 1; },
 		core.Result::Ok(conn) => {
 			var stream = move conn;
@@ -152,10 +152,10 @@ fn _send_and_check(running: &rest.RunningServer, port: Int, method: String, path
 			var wbuf = io.buffer(bytes);
 			var i = 0;
 			while i < bytes {
-				io.buffer_write(&mut wbuf, i, core.string_byte_at(&raw_req, i));
+				io.buffer_write(&mut wbuf, i, core.string_byte_at(raw_req, i));
 				i = i + 1;
 			}
-			match stream.write(&wbuf, timeout) {
+			match stream.write(wbuf, timeout) {
 				core.Result::Err(_) => {
 					val _ = stream.close(timeout);
 					return 2;
@@ -166,7 +166,7 @@ fn _send_and_check(running: &rest.RunningServer, port: Int, method: String, path
 			var done = false;
 			while !done {
 				var rbuf = io.buffer(4096);
-				match stream.read(&mut rbuf, timeout) {
+				match stream.read(rbuf, timeout) {
 					core.Result::Err(_) => { done = true; },
 					core.Result::Ok(n) => {
 						if n == 0 { done = true; }

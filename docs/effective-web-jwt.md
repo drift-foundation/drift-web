@@ -109,7 +109,7 @@ fn sign_example() nothrow -> core.Result<String, jwt.JwtError> {
 
 	var opts = jwt.new_sign_options();
 	opts.enforce_typ_jwt = true;
-	return jwt.sign_hs256(&header, &payload, &secret, &opts);
+	return jwt.sign_hs256(header, payload, secret, opts);
 }
 ```
 
@@ -132,7 +132,7 @@ fn verify_example(token: &String, secret: &Array<Byte>) nothrow -> Int {
 	};
 
 	val now_unix = time.utc_unix_seconds_now();
-	match jwt.verify_hs256(token, secret, now_unix, &policy) {
+	match jwt.verify_hs256(token, secret, now_unix, policy) {
 		core.Result::Ok(v) => {
 			// Verified signature + validated temporal claims.
 			val _header = v.header_json;
@@ -180,8 +180,7 @@ Policy validation:
 - `verify_hs256` accepts `now_unix` (unix seconds) from the caller.
 - Production callers should source this from `std.time`, using:
   - `std.time.utc_unix_seconds_now()`
-  - or `std.time.utc_unix_seconds(&ts)` after `ts = std.time.now_utc()`
-- `std.time.utc_unix_millis(&ts)` is available when millisecond precision is needed elsewhere.
+  - or `std.time.utc_unix_seconds(ts)` after `ts = std.time.now_utc()`
 
 ## Error tags
 
@@ -217,7 +216,7 @@ Guidance:
 ## Recommended consumer pattern
 
 1. Build verify policy once at service startup.
-2. For each request, call `verify_hs256(token, secret, now_unix, &policy)`.
+2. For each request, call `verify_hs256(token, secret, now_unix, policy)`.
 3. Map `JwtError.tag` to auth response categories.
 4. Parse app-specific claims (`iss`, `aud`, `sub`, custom) in framework layer.
 

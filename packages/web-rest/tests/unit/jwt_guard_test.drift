@@ -50,17 +50,17 @@ fn _sign_token(payload: &String) nothrow -> core.Result<String, jwt.JwtError> {
 	val header = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}";
 	var secret = _test_secret();
 	var opts = jwt.new_sign_options();
-	return jwt.sign_hs256(&header, payload, &secret, &opts);
+	return jwt.sign_hs256(header, payload, secret, opts);
 }
 
 fn _valid_token() nothrow -> core.Result<String, jwt.JwtError> {
 	val payload = "{\"sub\":\"user-42\"}";
-	return _sign_token(&payload);
+	return _sign_token(payload);
 }
 
 fn _bearer_request(token: &String) nothrow -> rest.Request {
 	var req = rest.new_request("GET", "/v1/me");
-	rest.add_header(&mut req, "Authorization", "Bearer " + *token);
+	rest.add_header(req, "Authorization", "Bearer " + *token);
 	return move req;
 }
 
@@ -70,7 +70,7 @@ fn scenario_missing_authorization() nothrow -> Int {
 	val config = _default_config();
 	val req = rest.new_request("GET", "/v1/me");
 	var ctx = rest.new_context();
-	match rest.jwt_guard_apply(&config, &req, &mut ctx) {
+	match rest.jwt_guard_apply(config, req, ctx) {
 		core.Result::Ok(_) => { return 1301; },
 		core.Result::Err(e) => {
 			if e.status != 401 { return 1302; }
@@ -86,9 +86,9 @@ fn scenario_missing_authorization() nothrow -> Int {
 fn scenario_invalid_authorization_format() nothrow -> Int {
 	val config = _default_config();
 	var req = rest.new_request("GET", "/v1/me");
-	rest.add_header(&mut req, "Authorization", "Basic dXNlcjpwYXNz");
+	rest.add_header(req, "Authorization", "Basic dXNlcjpwYXNz");
 	var ctx = rest.new_context();
-	match rest.jwt_guard_apply(&config, &req, &mut ctx) {
+	match rest.jwt_guard_apply(config, req, ctx) {
 		core.Result::Ok(_) => { return 1401; },
 		core.Result::Err(e) => {
 			if e.status != 400 { return 1402; }
@@ -108,13 +108,13 @@ fn scenario_valid_token_authorized() nothrow -> Int {
 		core.Result::Err(_) => { return 101; }
 	}
 	val config = _default_config();
-	val req = _bearer_request(&token);
+	val req = _bearer_request(token);
 	var ctx = rest.new_context();
-	match rest.jwt_guard_apply(&config, &req, &mut ctx) {
+	match rest.jwt_guard_apply(config, req, ctx) {
 		core.Result::Ok(_) => {},
 		core.Result::Err(_) => { return 102; }
 	}
-	match rest.ctx_get<type rest.Principal>(&ctx) {
+	match rest.ctx_get<type rest.Principal>(ctx) {
 		Optional::None => { return 103; },
 		Optional::Some(p) => {
 			if p.sub != "user-42" { return 104; }
@@ -132,13 +132,13 @@ fn scenario_me_handler_success() nothrow -> Int {
 		core.Result::Err(_) => { return 201; }
 	}
 	val config = _default_config();
-	val req = _bearer_request(&token);
+	val req = _bearer_request(token);
 	var ctx = rest.new_context();
-	match rest.jwt_guard_apply(&config, &req, &mut ctx) {
+	match rest.jwt_guard_apply(config, req, ctx) {
 		core.Result::Ok(_) => {},
 		core.Result::Err(_) => { return 202; }
 	}
-	match rest.require_principal(&ctx) {
+	match rest.require_principal(ctx) {
 		core.Result::Err(_) => { return 203; },
 		core.Result::Ok(p) => {
 			val resp = rest.json_response(200, "{\"sub\":\"" + p.sub + "\"}");
@@ -153,7 +153,7 @@ fn scenario_me_handler_success() nothrow -> Int {
 
 fn scenario_no_principal_unauthorized() nothrow -> Int {
 	val ctx = rest.new_context();
-	match rest.require_principal(&ctx) {
+	match rest.require_principal(ctx) {
 		core.Result::Ok(_) => { return 301; },
 		core.Result::Err(e) => {
 			if e.status != 401 { return 302; }
@@ -169,15 +169,15 @@ fn scenario_no_principal_unauthorized() nothrow -> Int {
 fn scenario_expired_token_unauthorized() nothrow -> Int {
 	val payload = "{\"sub\":\"u1\",\"exp\":1700000000}";
 	var token = "";
-	match _sign_token(&payload) {
+	match _sign_token(payload) {
 		core.Result::Ok(v) => { token = move v; },
 		core.Result::Err(_) => { return 401; }
 	}
 	var config = _default_config();
 	config.now_unix = 1700099000;
-	val req = _bearer_request(&token);
+	val req = _bearer_request(token);
 	var ctx = rest.new_context();
-	match rest.jwt_guard_apply(&config, &req, &mut ctx) {
+	match rest.jwt_guard_apply(config, req, ctx) {
 		core.Result::Ok(_) => { return 402; },
 		core.Result::Err(e) => {
 			if e.status != 401 { return 403; }
@@ -197,9 +197,9 @@ fn scenario_signature_mismatch_unauthorized() nothrow -> Int {
 		core.Result::Err(_) => { return 501; }
 	}
 	val config = rest.new_jwt_guard_config(_wrong_secret(), _default_policy());
-	val req = _bearer_request(&token);
+	val req = _bearer_request(token);
 	var ctx = rest.new_context();
-	match rest.jwt_guard_apply(&config, &req, &mut ctx) {
+	match rest.jwt_guard_apply(config, req, ctx) {
 		core.Result::Ok(_) => { return 502; },
 		core.Result::Err(e) => {
 			if e.status != 401 { return 503; }
@@ -215,15 +215,15 @@ fn scenario_signature_mismatch_unauthorized() nothrow -> Int {
 fn scenario_not_before_unauthorized() nothrow -> Int {
 	val payload = "{\"sub\":\"u1\",\"nbf\":1700000100}";
 	var token = "";
-	match _sign_token(&payload) {
+	match _sign_token(payload) {
 		core.Result::Ok(v) => { token = move v; },
 		core.Result::Err(_) => { return 601; }
 	}
 	var config = _default_config();
 	config.now_unix = 1700000000;
-	val req = _bearer_request(&token);
+	val req = _bearer_request(token);
 	var ctx = rest.new_context();
-	match rest.jwt_guard_apply(&config, &req, &mut ctx) {
+	match rest.jwt_guard_apply(config, req, ctx) {
 		core.Result::Ok(_) => { return 602; },
 		core.Result::Err(e) => {
 			if e.status != 401 { return 603; }
@@ -239,15 +239,15 @@ fn scenario_not_before_unauthorized() nothrow -> Int {
 fn scenario_iat_future_unauthorized() nothrow -> Int {
 	val payload = "{\"sub\":\"u1\",\"iat\":1700001000}";
 	var token = "";
-	match _sign_token(&payload) {
+	match _sign_token(payload) {
 		core.Result::Ok(v) => { token = move v; },
 		core.Result::Err(_) => { return 701; }
 	}
 	var config = _default_config();
 	config.now_unix = 1700000000;
-	val req = _bearer_request(&token);
+	val req = _bearer_request(token);
 	var ctx = rest.new_context();
-	match rest.jwt_guard_apply(&config, &req, &mut ctx) {
+	match rest.jwt_guard_apply(config, req, ctx) {
 		core.Result::Ok(_) => { return 702; },
 		core.Result::Err(e) => {
 			if e.status != 401 { return 703; }
@@ -263,9 +263,9 @@ fn scenario_iat_future_unauthorized() nothrow -> Int {
 fn scenario_invalid_format_bad_request() nothrow -> Int {
 	val config = _default_config();
 	var req = rest.new_request("GET", "/v1/me");
-	rest.add_header(&mut req, "Authorization", "Bearer not-a-jwt");
+	rest.add_header(req, "Authorization", "Bearer not-a-jwt");
 	var ctx = rest.new_context();
-	match rest.jwt_guard_apply(&config, &req, &mut ctx) {
+	match rest.jwt_guard_apply(config, req, ctx) {
 		core.Result::Ok(_) => { return 801; },
 		core.Result::Err(e) => {
 			if e.status != 400 { return 802; }
@@ -281,9 +281,9 @@ fn scenario_invalid_format_bad_request() nothrow -> Int {
 fn scenario_invalid_segment_bad_request() nothrow -> Int {
 	val config = _default_config();
 	var req = rest.new_request("GET", "/v1/me");
-	rest.add_header(&mut req, "Authorization", "Bearer ====.====.====");
+	rest.add_header(req, "Authorization", "Bearer ====.====.====");
 	var ctx = rest.new_context();
-	match rest.jwt_guard_apply(&config, &req, &mut ctx) {
+	match rest.jwt_guard_apply(config, req, ctx) {
 		core.Result::Ok(_) => { return 901; },
 		core.Result::Err(e) => {
 			if e.status != 400 { return 902; }
@@ -301,7 +301,7 @@ fn scenario_unsupported_alg_bad_request() nothrow -> Int {
 	val payload = "{\"sub\":\"u1\"}";
 	var secret = _test_secret();
 	var opts = jwt.new_sign_options();
-	match jwt.sign_hs256(&header, &payload, &secret, &opts) {
+	match jwt.sign_hs256(header, payload, secret, opts) {
 		core.Result::Ok(_) => { return 1001; },
 		core.Result::Err(e) => {
 			if e.tag != "jwt-unsupported-alg" { return 1002; }
@@ -315,13 +315,13 @@ fn scenario_unsupported_alg_bad_request() nothrow -> Int {
 fn scenario_error_envelope_unauthorized() nothrow -> Int {
 	val err = rest.rest_error(401, "unauthorized", "jwt-expired", "token expired");
 	val event_id = "evt-test-001";
-	val resp = rest.error_envelope(&err, &event_id);
+	val resp = rest.error_envelope(err, event_id);
 	if resp.status != 401 { return 1101; }
-	match json.parse(&resp.body) {
+	match json.parse(resp.body) {
 		core.Result::Err(_) => { return 1102; },
 		core.Result::Ok(node) => {
 			val event_key = "event";
-			match node.get(&event_key) {
+			match node.get(event_key) {
 				Optional::None => { return 1103; },
 				Optional::Some(ev) => {
 					match ev.as_string() {
@@ -333,7 +333,7 @@ fn scenario_error_envelope_unauthorized() nothrow -> Int {
 				}
 			}
 			val tag_key = "tag";
-			match node.get(&tag_key) {
+			match node.get(tag_key) {
 				Optional::None => { return 1106; },
 				Optional::Some(tg) => {
 					match tg.as_string() {
@@ -345,7 +345,7 @@ fn scenario_error_envelope_unauthorized() nothrow -> Int {
 				}
 			}
 			val eid_key = "event_id";
-			match node.get(&eid_key) {
+			match node.get(eid_key) {
 				Optional::None => { return 1109; },
 				Optional::Some(eid) => {
 					match eid.as_string() {
@@ -357,7 +357,7 @@ fn scenario_error_envelope_unauthorized() nothrow -> Int {
 				}
 			}
 			val fields_key = "fields";
-			match node.get(&fields_key) {
+			match node.get(fields_key) {
 				Optional::None => { return 1112; },
 				Optional::Some(_) => {
 					return 0;
@@ -376,14 +376,14 @@ fn scenario_typ_mismatch_bad_request() nothrow -> Int {
 	var opts = jwt.new_sign_options();
 	opts.enforce_typ_jwt = false;
 	var token = "";
-	match jwt.sign_hs256(&header, &payload, &secret, &opts) {
+	match jwt.sign_hs256(header, payload, secret, opts) {
 		core.Result::Ok(v) => { token = move v; },
 		core.Result::Err(_) => { return 1201; }
 	}
 	val config = rest.new_jwt_guard_config(_test_secret(), _default_policy());
-	val req = _bearer_request(&token);
+	val req = _bearer_request(token);
 	var ctx = rest.new_context();
-	match rest.jwt_guard_apply(&config, &req, &mut ctx) {
+	match rest.jwt_guard_apply(config, req, ctx) {
 		core.Result::Ok(_) => { return 1202; },
 		core.Result::Err(e) => {
 			if e.status != 400 { return 1203; }
@@ -404,13 +404,13 @@ fn scenario_lowercase_authorization_header() nothrow -> Int {
 	}
 	val config = _default_config();
 	var req = rest.new_request("GET", "/v1/me");
-	rest.add_header(&mut req, "authorization", "Bearer " + token);
+	rest.add_header(req, "authorization", "Bearer " + token);
 	var ctx = rest.new_context();
-	match rest.jwt_guard_apply(&config, &req, &mut ctx) {
+	match rest.jwt_guard_apply(config, req, ctx) {
 		core.Result::Ok(_) => {},
 		core.Result::Err(_) => { return 1502; }
 	}
-	match rest.ctx_get<type rest.Principal>(&ctx) {
+	match rest.ctx_get<type rest.Principal>(ctx) {
 		Optional::None => { return 1503; },
 		Optional::Some(p) => {
 			if p.sub != "user-42" { return 1504; }

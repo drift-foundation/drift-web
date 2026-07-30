@@ -11,17 +11,17 @@ import web.client as client;
 pub fn main() nothrow -> Int {
 	// Exercise the config/session/request construction path.
 	var cfg = client.new_client_config();
-	client.with_connect_timeout(&mut cfg, 5000);
-	client.with_io_timeout(&mut cfg, 5000);
-	client.with_max_response_body(&mut cfg, 1048576);
+	client.with_connect_timeout(cfg, 5000);
+	client.with_io_timeout(cfg, 5000);
+	client.with_max_response_body(cfg, 1048576);
 	var session = client.new_session(move cfg);
 
 	// Construct a request (not sent — no server).
 	var req = client.new_request("GET", "https://example.com/health");
-	client.set_header(&mut req, "Accept", "application/json");
+	client.set_header(req, "Accept", "application/json");
 
 	// Exercise URL parsing.
-	match client.parse_url(&"https://example.com:8080/path?q=1") {
+	match client.parse_url("https://example.com:8080/path?q=1") {
 		core.Result::Err(_) => { return 1; },
 		core.Result::Ok(_) => {}
 	}

@@ -41,7 +41,7 @@ fn _push_int_call_then_return(box: &mut IntBox, v: Int) nothrow -> Void {
 // PASS: one-level &mut call.
 fn scenario_one_level() nothrow -> Int {
 	var b = _new_int_box();
-	_push_int(&mut b, 42);
+	_push_int(b, 42);
 	if b.items.len != 1 { return 101; }
 	if b.items[0] != 42 { return 102; }
 	return 0;
@@ -50,7 +50,7 @@ fn scenario_one_level() nothrow -> Int {
 // PASS: two-level with call-then-return.
 fn scenario_two_level_call_then_return() nothrow -> Int {
 	var b = _new_int_box();
-	_push_int_call_then_return(&mut b, 42);
+	_push_int_call_then_return(b, 42);
 	if b.items.len != 1 { return 201; }
 	if b.items[0] != 42 { return 202; }
 	return 0;
@@ -59,7 +59,7 @@ fn scenario_two_level_call_then_return() nothrow -> Int {
 // BUG: two-level with return-forwarding — exits 301 or crashes.
 fn scenario_two_level_return_fwd() nothrow -> Int {
 	var b = _new_int_box();
-	_push_int_return_fwd(&mut b, 42);
+	_push_int_return_fwd(b, 42);
 	if b.items.len != 1 { return 301; }
 	if b.items[0] != 42 { return 302; }
 	return 0;

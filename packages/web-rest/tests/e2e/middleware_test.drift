@@ -54,7 +54,7 @@ fn _write_raw(stream: &net.TcpStream, s: &String, timeout: conc.Duration) nothro
 		io.buffer_write(&mut wbuf, i, core.string_byte_at(s, i));
 		i = i + 1;
 	}
-	match stream.write(&wbuf, timeout) {
+	match stream.write(wbuf, timeout) {
 		core.Result::Err(_) => { return core.Result::Err(rest.rest_error(500, "internal", "write-failed", "")); },
 		core.Result::Ok(_) => { return core.Result::Ok(core.void_value()); }
 	}
@@ -71,7 +71,7 @@ fn _read_one_response(stream: &net.TcpStream, conn_buf: &mut Array<Byte>, timeou
 			Optional::Some(s) => { return core.Result::Ok(s); },
 			Optional::None => {
 				var rbuf = io.buffer(4096);
-				match stream.read(&mut rbuf, timeout) {
+				match stream.read(rbuf, timeout) {
 					core.Result::Err(_) => { done = true; },
 					core.Result::Ok(n) => {
 						if n == 0 { done = true; }
@@ -213,23 +213,23 @@ fn _starts_with(s: &String, prefix: &String) nothrow -> Bool {
 pub fn main() nothrow -> Int {
 	val timeout = conc.Duration(millis = 5000);
 	var b = rest.new_app_builder();
-	rest.bind(&mut b, "127.0.0.1", 0);
+	rest.bind(b, "127.0.0.1", 0);
 	match rest.build_app(move b) {
 		core.Result::Err(_) => { return 1; },
 		core.Result::Ok(a) => {
 			var app = move a;
 
 			// Global mw — sets ReqMark with this request's path.
-			rest.add_middleware(&mut app, |req: &rest.Request, ctx: &mut rest.Context, next| => {
+			rest.add_middleware(app, |req: &rest.Request, ctx: &mut rest.Context, next| => {
 				rest.ctx_set<type ReqMark>(ctx, ReqMark(path = req.path.clone()));
 				return next.call(req, ctx);
 			});
 
-			match rest.add_route(&mut app, "GET", "/req1", core.callback2(_handler)) {
+			match rest.add_route(app, "GET", "/req1", core.callback2(_handler)) {
 				core.Result::Err(_) => { return 2; },
 				core.Result::Ok(_) => {}
 			}
-			match rest.add_route(&mut app, "GET", "/req2", core.callback2(_handler)) {
+			match rest.add_route(app, "GET", "/req2", core.callback2(_handler)) {
 				core.Result::Err(_) => { return 3; },
 				core.Result::Ok(_) => {}
 			}
@@ -238,12 +238,12 @@ pub fn main() nothrow -> Int {
 				core.Result::Err(_) => { return 4; },
 				core.Result::Ok(rs) => {
 					var running = move rs;
-					val port = rest.server_port(&running);
+					val port = rest.server_port(running);
 
 					var addr = net.socket_addr("127.0.0.1", port);
-					match net.connect(&addr, timeout) {
+					match net.connect(addr, timeout) {
 						core.Result::Err(_) => {
-							val _ = rest.shutdown(&mut running);
+							val _ = rest.shutdown(running);
 							return 5;
 						},
 						core.Result::Ok(conn) => {
@@ -252,31 +252,31 @@ pub fn main() nothrow -> Int {
 
 							// Request 1 — keep-alive (no Connection: close).
 							val req1_raw = "GET /req1 HTTP/1.1\r\nHost: localhost\r\n\r\n";
-							match _write_raw(&stream, &req1_raw, timeout) {
+							match _write_raw(stream, req1_raw, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									val _ = rest.shutdown(&mut running);
+									val _ = rest.shutdown(running);
 									return 6;
 								},
 								core.Result::Ok(_) => {}
 							}
-							match _read_one_response(&stream, &mut read_buf, timeout) {
+							match _read_one_response(stream, read_buf, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									val _ = rest.shutdown(&mut running);
+									val _ = rest.shutdown(running);
 									return 7;
 								},
 								core.Result::Ok(resp1) => {
 									val ok_line = "HTTP/1.1 200 OK";
-									if !_starts_with(&resp1, &ok_line) {
+									if !_starts_with(resp1, ok_line) {
 										val _ = stream.close(timeout);
-										val _ = rest.shutdown(&mut running);
+										val _ = rest.shutdown(running);
 										return 8;
 									}
 									val body1 = "{\"path\":\"/req1\"}";
-									if !_contains(&resp1, &body1) {
+									if !_contains(resp1, body1) {
 										val _ = stream.close(timeout);
-										val _ = rest.shutdown(&mut running);
+										val _ = rest.shutdown(running);
 										return 9;
 									}
 								}
@@ -286,38 +286,38 @@ pub fn main() nothrow -> Int {
 							// If Context leaked across requests, handler would see
 							// "saw-/req1" body (status 500) when serving /req2.
 							val req2_raw = "GET /req2 HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
-							match _write_raw(&stream, &req2_raw, timeout) {
+							match _write_raw(stream, req2_raw, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									val _ = rest.shutdown(&mut running);
+									val _ = rest.shutdown(running);
 									return 10;
 								},
 								core.Result::Ok(_) => {}
 							}
-							match _read_one_response(&stream, &mut read_buf, timeout) {
+							match _read_one_response(stream, read_buf, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									val _ = rest.shutdown(&mut running);
+									val _ = rest.shutdown(running);
 									return 11;
 								},
 								core.Result::Ok(resp2) => {
 									val ok_line = "HTTP/1.1 200 OK";
-									if !_starts_with(&resp2, &ok_line) {
+									if !_starts_with(resp2, ok_line) {
 										val _ = stream.close(timeout);
-										val _ = rest.shutdown(&mut running);
+										val _ = rest.shutdown(running);
 										return 12;
 									}
 									val body2 = "{\"path\":\"/req2\"}";
-									if !_contains(&resp2, &body2) {
+									if !_contains(resp2, body2) {
 										val _ = stream.close(timeout);
-										val _ = rest.shutdown(&mut running);
+										val _ = rest.shutdown(running);
 										return 13;
 									}
 									// Defensive: ensure no "leak" indicator from a stale Context.
 									val leak_marker = "leak";
-									if _contains(&resp2, &leak_marker) {
+									if _contains(resp2, leak_marker) {
 										val _ = stream.close(timeout);
-										val _ = rest.shutdown(&mut running);
+										val _ = rest.shutdown(running);
 										return 14;
 									}
 								}
@@ -326,7 +326,7 @@ pub fn main() nothrow -> Int {
 						}
 					}
 
-					match rest.shutdown(&mut running) {
+					match rest.shutdown(running) {
 						core.Result::Err(_) => { return 15; },
 						core.Result::Ok(_) => {
 							console.println("e2e middleware (keep-alive + ctx isolation): passed");

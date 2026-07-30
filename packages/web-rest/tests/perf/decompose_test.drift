@@ -61,13 +61,13 @@ fn _health_handler(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Res
 
 fn bench_parse_only() nothrow -> core.Result<Int, Int> {
 	val req_str = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
-	val raw = _to_bytes(&req_str);
+	val raw = _to_bytes(req_str);
 	val n = 50000;
 
 	// Warmup
 	var wi = 0;
 	while wi < 500 {
-		match http.parse_request(&raw) {
+		match http.parse_request(raw) {
 			core.Result::Ok(_) => {},
 			core.Result::Err(_) => { return core.Result::Err(1); }
 		}
@@ -77,13 +77,13 @@ fn bench_parse_only() nothrow -> core.Result<Int, Int> {
 	val start = time.now_monotonic();
 	var i = 0;
 	while i < n {
-		match http.parse_request(&raw) {
+		match http.parse_request(raw) {
 			core.Result::Ok(_) => {},
 			core.Result::Err(_) => { return core.Result::Err(2); }
 		}
 		i = i + 1;
 	}
-	val elapsed = time.elapsed_ms(&start);
+	val elapsed = time.elapsed_ms(start);
 	return core.Result::Ok(elapsed);
 }
 
@@ -93,12 +93,12 @@ fn bench_parse_only() nothrow -> core.Result<Int, Int> {
 
 fn bench_dispatch_only() nothrow -> core.Result<Int, Int> {
 	var b = rest.new_app_builder();
-	rest.bind(&mut b, "127.0.0.1", 0);
+	rest.bind(b, "127.0.0.1", 0);
 	match rest.build_app(move b) {
 		core.Result::Err(_) => { return core.Result::Err(1); },
 		core.Result::Ok(a) => {
 			var app = move a;
-			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+			match rest_app.add_route(app, "GET", "/health", core.callback2(_health_handler)) {
 				core.Result::Err(_) => { return core.Result::Err(2); },
 				core.Result::Ok(_) => {}
 			}
@@ -111,7 +111,7 @@ fn bench_dispatch_only() nothrow -> core.Result<Int, Int> {
 			while wi < 500 {
 				var req = rest.new_request("GET", "/health");
 				var ctx = rest.new_context();
-				match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+				match rest.dispatch(app_arc.clone(), req, ctx) {
 					core.Result::Ok(_) => {},
 					core.Result::Err(_) => { return core.Result::Err(3); }
 				}
@@ -123,13 +123,13 @@ fn bench_dispatch_only() nothrow -> core.Result<Int, Int> {
 			while i < n {
 				var req = rest.new_request("GET", "/health");
 				var ctx = rest.new_context();
-				match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+				match rest.dispatch(app_arc.clone(), req, ctx) {
 					core.Result::Ok(_) => {},
 					core.Result::Err(_) => { return core.Result::Err(4); }
 				}
 				i = i + 1;
 			}
-			val elapsed = time.elapsed_ms(&start);
+			val elapsed = time.elapsed_ms(start);
 			return core.Result::Ok(elapsed);
 		}
 	}
@@ -146,17 +146,17 @@ fn bench_serialize_only() nothrow -> core.Result<Int, Int> {
 	// Warmup
 	var wi = 0;
 	while wi < 500 {
-		val _ = http.serialize_response(&resp, false);
+		val _ = http.serialize_response(resp, false);
 		wi = wi + 1;
 	}
 
 	val start = time.now_monotonic();
 	var i = 0;
 	while i < n {
-		val _ = http.serialize_response(&resp, false);
+		val _ = http.serialize_response(resp, false);
 		i = i + 1;
 	}
-	val elapsed = time.elapsed_ms(&start);
+	val elapsed = time.elapsed_ms(start);
 	return core.Result::Ok(elapsed);
 }
 
@@ -166,15 +166,15 @@ fn bench_serialize_only() nothrow -> core.Result<Int, Int> {
 
 fn bench_full_cpu_only() nothrow -> core.Result<Int, Int> {
 	val req_str = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
-	val raw = _to_bytes(&req_str);
+	val raw = _to_bytes(req_str);
 
 	var b = rest.new_app_builder();
-	rest.bind(&mut b, "127.0.0.1", 0);
+	rest.bind(b, "127.0.0.1", 0);
 	match rest.build_app(move b) {
 		core.Result::Err(_) => { return core.Result::Err(1); },
 		core.Result::Ok(a) => {
 			var app = move a;
-			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+			match rest_app.add_route(app, "GET", "/health", core.callback2(_health_handler)) {
 				core.Result::Err(_) => { return core.Result::Err(2); },
 				core.Result::Ok(_) => {}
 			}
@@ -186,19 +186,19 @@ fn bench_full_cpu_only() nothrow -> core.Result<Int, Int> {
 			// Warmup
 			var wi = 0;
 			while wi < 500 {
-				match http.parse_request(&raw) {
+				match http.parse_request(raw) {
 					core.Result::Err(_) => { return core.Result::Err(3); },
 					core.Result::Ok(req) => {
 						var mut_req = move req;
 						var ctx = rest.new_context();
-						match rest.dispatch(app_arc.clone(), &mut mut_req, &mut ctx) {
+						match rest.dispatch(app_arc.clone(), mut_req, ctx) {
 							core.Result::Err(e) => {
 								event_counter = event_counter + 1;
 								val eid = "evt-" + fmt.format_int(event_counter);
-								val _ = rest.error_envelope(&e, &eid);
+								val _ = rest.error_envelope(e, eid);
 							},
 							core.Result::Ok(resp) => {
-								val _ = http.serialize_response(&resp, false);
+								val _ = http.serialize_response(resp, false);
 							}
 						}
 					}
@@ -209,26 +209,26 @@ fn bench_full_cpu_only() nothrow -> core.Result<Int, Int> {
 			val start = time.now_monotonic();
 			var i = 0;
 			while i < n {
-				match http.parse_request(&raw) {
+				match http.parse_request(raw) {
 					core.Result::Err(_) => { return core.Result::Err(4); },
 					core.Result::Ok(req) => {
 						var mut_req = move req;
 						var ctx = rest.new_context();
-						match rest.dispatch(app_arc.clone(), &mut mut_req, &mut ctx) {
+						match rest.dispatch(app_arc.clone(), mut_req, ctx) {
 							core.Result::Err(e) => {
 								event_counter = event_counter + 1;
 								val eid = "evt-" + fmt.format_int(event_counter);
-								val _ = rest.error_envelope(&e, &eid);
+								val _ = rest.error_envelope(e, eid);
 							},
 							core.Result::Ok(resp) => {
-								val _ = http.serialize_response(&resp, false);
+								val _ = http.serialize_response(resp, false);
 							}
 						}
 					}
 				}
 				i = i + 1;
 			}
-			val elapsed = time.elapsed_ms(&start);
+			val elapsed = time.elapsed_ms(start);
 			return core.Result::Ok(elapsed);
 		}
 	}
@@ -328,7 +328,7 @@ fn _write_raw(stream: &net.TcpStream, s: &String, timeout: conc.Duration) nothro
 		io.buffer_write(&mut wbuf, i, bytes[i]);
 		i = i + 1;
 	}
-	match stream.write(&wbuf, timeout) {
+	match stream.write(wbuf, timeout) {
 		core.Result::Err(_) => { return core.Result::Err(1); },
 		core.Result::Ok(_) => { return core.Result::Ok(core.void_value()); }
 	}
@@ -357,7 +357,7 @@ fn _read_one_response(stream: &net.TcpStream, buf: &mut Array<Byte>, timeout: co
 		}
 		if !done {
 			var rbuf = io.buffer(4096);
-			match stream.read(&mut rbuf, timeout) {
+			match stream.read(rbuf, timeout) {
 				core.Result::Err(_) => { return core.Result::Err(1); },
 				core.Result::Ok(n) => {
 					if n == 0 { return core.Result::Err(2); }
@@ -396,32 +396,32 @@ fn bench_rest_keepalive() nothrow -> core.Result<Int, Int> {
 	val total_n = warmup_n + measure_n;
 
 	var b = rest.new_app_builder();
-	rest.bind(&mut b, "127.0.0.1", 0);
+	rest.bind(b, "127.0.0.1", 0);
 	match rest.build_app(move b) {
 		core.Result::Err(_) => { return core.Result::Err(1); },
 		core.Result::Ok(a) => {
 			var app = move a;
-			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+			match rest_app.add_route(app, "GET", "/health", core.callback2(_health_handler)) {
 				core.Result::Err(_) => { return core.Result::Err(2); },
 				core.Result::Ok(_) => {}
 			}
-			match server.listen_app(&app, timeout) {
+			match server.listen_app(app, timeout) {
 				core.Result::Err(_) => { return core.Result::Err(3); },
 				core.Result::Ok(lst) => {
 					var listener = move lst;
 					val port = listener.local_port();
 					var handle = server.new_server_handle();
 					handle.max_requests = total_n;
-					var caller_handle = server.clone_handle(&handle);
+					var caller_handle = server.clone_handle(handle);
 					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
 						return _run_serve(move app, move listener, move handle, timeout);
 					});
 
 					val req = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
 					var addr = net.socket_addr("127.0.0.1", port);
-					match net.connect(&addr, timeout) {
+					match net.connect(addr, timeout) {
 						core.Result::Err(_) => {
-							server.stop(&caller_handle);
+							server.stop(caller_handle);
 							val _ = sv.join();
 							return core.Result::Err(4);
 						},
@@ -432,19 +432,19 @@ fn bench_rest_keepalive() nothrow -> core.Result<Int, Int> {
 							// Warmup
 							var wi = 0;
 							while wi < warmup_n {
-								match _write_raw(&stream, &req, timeout) {
+								match _write_raw(stream, req, timeout) {
 									core.Result::Err(_) => {
 										val _ = stream.close(timeout);
-										server.stop(&caller_handle);
+										server.stop(caller_handle);
 										val _ = sv.join();
 										return core.Result::Err(10);
 									},
 									core.Result::Ok(_) => {}
 								}
-								match _read_one_response(&stream, &mut read_buf, timeout) {
+								match _read_one_response(stream, read_buf, timeout) {
 									core.Result::Err(_) => {
 										val _ = stream.close(timeout);
-										server.stop(&caller_handle);
+										server.stop(caller_handle);
 										val _ = sv.join();
 										return core.Result::Err(11);
 									},
@@ -457,19 +457,19 @@ fn bench_rest_keepalive() nothrow -> core.Result<Int, Int> {
 							val start = time.now_monotonic();
 							var mi = 0;
 							while mi < measure_n {
-								match _write_raw(&stream, &req, timeout) {
+								match _write_raw(stream, req, timeout) {
 									core.Result::Err(_) => {
 										val _ = stream.close(timeout);
-										server.stop(&caller_handle);
+										server.stop(caller_handle);
 										val _ = sv.join();
 										return core.Result::Err(20);
 									},
 									core.Result::Ok(_) => {}
 								}
-								match _read_one_response(&stream, &mut read_buf, timeout) {
+								match _read_one_response(stream, read_buf, timeout) {
 									core.Result::Err(_) => {
 										val _ = stream.close(timeout);
-										server.stop(&caller_handle);
+										server.stop(caller_handle);
 										val _ = sv.join();
 										return core.Result::Err(21);
 									},
@@ -477,10 +477,10 @@ fn bench_rest_keepalive() nothrow -> core.Result<Int, Int> {
 								}
 								mi = mi + 1;
 							}
-							val elapsed = time.elapsed_ms(&start);
+							val elapsed = time.elapsed_ms(start);
 
 							val _ = stream.close(timeout);
-							server.stop(&caller_handle);
+							server.stop(caller_handle);
 							match sv.join() {
 								core.Result::Err(_) => { return core.Result::Err(30); },
 								core.Result::Ok(exit_code) => {

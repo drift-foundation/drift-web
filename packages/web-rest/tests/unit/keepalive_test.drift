@@ -128,7 +128,7 @@ fn _write_raw(stream: &net.TcpStream, s: &String, timeout: conc.Duration) nothro
 		io.buffer_write(&mut wbuf, i, bytes[i]);
 		i = i + 1;
 	}
-	match stream.write(&wbuf, timeout) {
+	match stream.write(wbuf, timeout) {
 		core.Result::Err(_) => { return core.Result::Err(1); },
 		core.Result::Ok(_) => { return core.Result::Ok(core.void_value()); }
 	}
@@ -164,7 +164,7 @@ fn _read_one_response(stream: &net.TcpStream, buf: &mut Array<Byte>, timeout: co
 
 		if !done {
 			var rbuf = io.buffer(4096);
-			match stream.read(&mut rbuf, timeout) {
+			match stream.read(rbuf, timeout) {
 				core.Result::Err(_) => { return core.Result::Err(1); },
 				core.Result::Ok(n) => {
 					if n == 0 {
@@ -300,7 +300,7 @@ fn _read_until_eof(stream: &net.TcpStream, timeout: conc.Duration) nothrow -> St
 	var done = false;
 	while !done {
 		var rbuf = io.buffer(4096);
-		match stream.read(&mut rbuf, timeout) {
+		match stream.read(rbuf, timeout) {
 			core.Result::Err(_) => { done = true; },
 			core.Result::Ok(n) => {
 				if n == 0 {
@@ -315,7 +315,7 @@ fn _read_until_eof(stream: &net.TcpStream, timeout: conc.Duration) nothrow -> St
 			}
 		}
 	}
-	return _bytes_to_string(&collected);
+	return _bytes_to_string(collected);
 }
 
 // --- Test 1: Two requests on one TCP connection → two valid responses ---
@@ -325,32 +325,32 @@ fn scenario_two_requests_one_connection() nothrow -> Int {
 	val timeout = conc.Duration(millis = 5000);
 
 	var b = rest.new_app_builder();
-	rest.bind(&mut b, "127.0.0.1", 0);
+	rest.bind(b, "127.0.0.1", 0);
 	match rest.build_app(move b) {
 		core.Result::Err(_) => { return 101; },
 		core.Result::Ok(a) => {
 			var app = move a;
-			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+			match rest_app.add_route(app, "GET", "/health", core.callback2(_health_handler)) {
 				core.Result::Err(_) => { return 102; },
 				core.Result::Ok(_) => {}
 			}
-			match server.listen_app(&app, timeout) {
+			match server.listen_app(app, timeout) {
 				core.Result::Err(_) => { return 103; },
 				core.Result::Ok(lst) => {
 					var listener = move lst;
 					val port = listener.local_port();
 					var handle = server.new_server_handle();
 					handle.max_requests = 2;
-					var caller_handle = server.clone_handle(&handle);
+					var caller_handle = server.clone_handle(handle);
 					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
 						return _run_serve(move app, move listener, move handle, timeout);
 					});
 
 					// Open one TCP connection.
 					var addr = net.socket_addr("127.0.0.1", port);
-					match net.connect(&addr, timeout) {
+					match net.connect(addr, timeout) {
 						core.Result::Err(_) => {
-							server.stop(&caller_handle);
+							server.stop(caller_handle);
 							val _ = sv.join();
 							return 104;
 						},
@@ -360,41 +360,41 @@ fn scenario_two_requests_one_connection() nothrow -> Int {
 
 							// Request 1 (keep-alive, no Connection: close)
 							val req1 = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
-							match _write_raw(&stream, &req1, timeout) {
+							match _write_raw(stream, req1, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									server.stop(&caller_handle);
+									server.stop(caller_handle);
 									val _ = sv.join();
 									return 105;
 								},
 								core.Result::Ok(_) => {}
 							}
-							match _read_one_response(&stream, &mut read_buf, timeout) {
+							match _read_one_response(stream, read_buf, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									server.stop(&caller_handle);
+									server.stop(caller_handle);
 									val _ = sv.join();
 									return 106;
 								},
 								core.Result::Ok(resp1) => {
 									val s_200 = "HTTP/1.1 200 OK";
-									if !_starts_with(&resp1, &s_200) {
+									if !_starts_with(resp1, s_200) {
 										val _ = stream.close(timeout);
-										server.stop(&caller_handle);
+										server.stop(caller_handle);
 										val _ = sv.join();
 										return 107;
 									}
 									val m_health = "{\"ok\":true}";
-									if !_contains(&resp1, &m_health) {
+									if !_contains(resp1, m_health) {
 										val _ = stream.close(timeout);
-										server.stop(&caller_handle);
+										server.stop(caller_handle);
 										val _ = sv.join();
 										return 108;
 									}
 									val m_keepalive = "Connection: keep-alive";
-									if !_contains(&resp1, &m_keepalive) {
+									if !_contains(resp1, m_keepalive) {
 										val _ = stream.close(timeout);
-										server.stop(&caller_handle);
+										server.stop(caller_handle);
 										val _ = sv.join();
 										return 109;
 									}
@@ -403,41 +403,41 @@ fn scenario_two_requests_one_connection() nothrow -> Int {
 
 							// Request 2 on same connection (with Connection: close)
 							val req2 = "GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
-							match _write_raw(&stream, &req2, timeout) {
+							match _write_raw(stream, req2, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									server.stop(&caller_handle);
+									server.stop(caller_handle);
 									val _ = sv.join();
 									return 110;
 								},
 								core.Result::Ok(_) => {}
 							}
-							match _read_one_response(&stream, &mut read_buf, timeout) {
+							match _read_one_response(stream, read_buf, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									server.stop(&caller_handle);
+									server.stop(caller_handle);
 									val _ = sv.join();
 									return 111;
 								},
 								core.Result::Ok(resp2) => {
 									val s_200 = "HTTP/1.1 200 OK";
-									if !_starts_with(&resp2, &s_200) {
+									if !_starts_with(resp2, s_200) {
 										val _ = stream.close(timeout);
-										server.stop(&caller_handle);
+										server.stop(caller_handle);
 										val _ = sv.join();
 										return 112;
 									}
 									val m_health = "{\"ok\":true}";
-									if !_contains(&resp2, &m_health) {
+									if !_contains(resp2, m_health) {
 										val _ = stream.close(timeout);
-										server.stop(&caller_handle);
+										server.stop(caller_handle);
 										val _ = sv.join();
 										return 113;
 									}
 									val m_close = "Connection: close";
-									if !_contains(&resp2, &m_close) {
+									if !_contains(resp2, m_close) {
 										val _ = stream.close(timeout);
-										server.stop(&caller_handle);
+										server.stop(caller_handle);
 										val _ = sv.join();
 										return 114;
 									}
@@ -445,7 +445,7 @@ fn scenario_two_requests_one_connection() nothrow -> Int {
 							}
 
 							val _ = stream.close(timeout);
-							server.stop(&caller_handle);
+							server.stop(caller_handle);
 							match sv.join() {
 								core.Result::Err(_) => { return 115; },
 								core.Result::Ok(exit_code) => {
@@ -469,31 +469,31 @@ fn scenario_back_to_back_requests() nothrow -> Int {
 	val timeout = conc.Duration(millis = 5000);
 
 	var b = rest.new_app_builder();
-	rest.bind(&mut b, "127.0.0.1", 0);
+	rest.bind(b, "127.0.0.1", 0);
 	match rest.build_app(move b) {
 		core.Result::Err(_) => { return 201; },
 		core.Result::Ok(a) => {
 			var app = move a;
-			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+			match rest_app.add_route(app, "GET", "/health", core.callback2(_health_handler)) {
 				core.Result::Err(_) => { return 202; },
 				core.Result::Ok(_) => {}
 			}
-			match server.listen_app(&app, timeout) {
+			match server.listen_app(app, timeout) {
 				core.Result::Err(_) => { return 203; },
 				core.Result::Ok(lst) => {
 					var listener = move lst;
 					val port = listener.local_port();
 					var handle = server.new_server_handle();
 					handle.max_requests = 2;
-					var caller_handle = server.clone_handle(&handle);
+					var caller_handle = server.clone_handle(handle);
 					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
 						return _run_serve(move app, move listener, move handle, timeout);
 					});
 
 					var addr = net.socket_addr("127.0.0.1", port);
-					match net.connect(&addr, timeout) {
+					match net.connect(addr, timeout) {
 						core.Result::Err(_) => {
-							server.stop(&caller_handle);
+							server.stop(caller_handle);
 							val _ = sv.join();
 							return 204;
 						},
@@ -503,10 +503,10 @@ fn scenario_back_to_back_requests() nothrow -> Int {
 
 							// Write BOTH requests in a single write — back to back.
 							val both = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\nGET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
-							match _write_raw(&stream, &both, timeout) {
+							match _write_raw(stream, both, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									server.stop(&caller_handle);
+									server.stop(caller_handle);
 									val _ = sv.join();
 									return 205;
 								},
@@ -514,18 +514,18 @@ fn scenario_back_to_back_requests() nothrow -> Int {
 							}
 
 							// Read response 1
-							match _read_one_response(&stream, &mut read_buf, timeout) {
+							match _read_one_response(stream, read_buf, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									server.stop(&caller_handle);
+									server.stop(caller_handle);
 									val _ = sv.join();
 									return 206;
 								},
 								core.Result::Ok(resp1) => {
 									val s_200 = "HTTP/1.1 200 OK";
-									if !_starts_with(&resp1, &s_200) {
+									if !_starts_with(resp1, s_200) {
 										val _ = stream.close(timeout);
-										server.stop(&caller_handle);
+										server.stop(caller_handle);
 										val _ = sv.join();
 										return 207;
 									}
@@ -533,18 +533,18 @@ fn scenario_back_to_back_requests() nothrow -> Int {
 							}
 
 							// Read response 2
-							match _read_one_response(&stream, &mut read_buf, timeout) {
+							match _read_one_response(stream, read_buf, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									server.stop(&caller_handle);
+									server.stop(caller_handle);
 									val _ = sv.join();
 									return 208;
 								},
 								core.Result::Ok(resp2) => {
 									val s_200 = "HTTP/1.1 200 OK";
-									if !_starts_with(&resp2, &s_200) {
+									if !_starts_with(resp2, s_200) {
 										val _ = stream.close(timeout);
-										server.stop(&caller_handle);
+										server.stop(caller_handle);
 										val _ = sv.join();
 										return 209;
 									}
@@ -552,7 +552,7 @@ fn scenario_back_to_back_requests() nothrow -> Int {
 							}
 
 							val _ = stream.close(timeout);
-							server.stop(&caller_handle);
+							server.stop(caller_handle);
 							match sv.join() {
 								core.Result::Err(_) => { return 210; },
 								core.Result::Ok(exit_code) => {
@@ -576,31 +576,31 @@ fn scenario_connection_close_opt_out() nothrow -> Int {
 	val timeout = conc.Duration(millis = 5000);
 
 	var b = rest.new_app_builder();
-	rest.bind(&mut b, "127.0.0.1", 0);
+	rest.bind(b, "127.0.0.1", 0);
 	match rest.build_app(move b) {
 		core.Result::Err(_) => { return 301; },
 		core.Result::Ok(a) => {
 			var app = move a;
-			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+			match rest_app.add_route(app, "GET", "/health", core.callback2(_health_handler)) {
 				core.Result::Err(_) => { return 302; },
 				core.Result::Ok(_) => {}
 			}
-			match server.listen_app(&app, timeout) {
+			match server.listen_app(app, timeout) {
 				core.Result::Err(_) => { return 303; },
 				core.Result::Ok(lst) => {
 					var listener = move lst;
 					val port = listener.local_port();
 					var handle = server.new_server_handle();
 					handle.max_requests = 2;
-					var caller_handle = server.clone_handle(&handle);
+					var caller_handle = server.clone_handle(handle);
 					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
 						return _run_serve(move app, move listener, move handle, timeout);
 					});
 
 					var addr = net.socket_addr("127.0.0.1", port);
-					match net.connect(&addr, timeout) {
+					match net.connect(addr, timeout) {
 						core.Result::Err(_) => {
-							server.stop(&caller_handle);
+							server.stop(caller_handle);
 							val _ = sv.join();
 							return 304;
 						},
@@ -610,35 +610,35 @@ fn scenario_connection_close_opt_out() nothrow -> Int {
 
 							// Send request with Connection: close
 							val req = "GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
-							match _write_raw(&stream, &req, timeout) {
+							match _write_raw(stream, req, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									server.stop(&caller_handle);
+									server.stop(caller_handle);
 									val _ = sv.join();
 									return 305;
 								},
 								core.Result::Ok(_) => {}
 							}
-							match _read_one_response(&stream, &mut read_buf, timeout) {
+							match _read_one_response(stream, read_buf, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									server.stop(&caller_handle);
+									server.stop(caller_handle);
 									val _ = sv.join();
 									return 306;
 								},
 								core.Result::Ok(resp) => {
 									val s_200 = "HTTP/1.1 200 OK";
-									if !_starts_with(&resp, &s_200) {
+									if !_starts_with(resp, s_200) {
 										val _ = stream.close(timeout);
-										server.stop(&caller_handle);
+										server.stop(caller_handle);
 										val _ = sv.join();
 										return 307;
 									}
 									// Response must have Connection: close
 									val m_close = "Connection: close";
-									if !_contains(&resp, &m_close) {
+									if !_contains(resp, m_close) {
 										val _ = stream.close(timeout);
-										server.stop(&caller_handle);
+										server.stop(caller_handle);
 										val _ = sv.join();
 										return 308;
 									}
@@ -647,14 +647,14 @@ fn scenario_connection_close_opt_out() nothrow -> Int {
 
 							// Server should have closed. Verify: reading more yields EOF/error.
 							var rbuf = io.buffer(4096);
-							match stream.read(&mut rbuf, timeout) {
+							match stream.read(rbuf, timeout) {
 								core.Result::Err(_) => {
 									// Expected — connection closed by server.
 								},
 								core.Result::Ok(n) => {
 									if n != 0 {
 										val _ = stream.close(timeout);
-										server.stop(&caller_handle);
+										server.stop(caller_handle);
 										val _ = sv.join();
 										return 309;
 									}
@@ -662,7 +662,7 @@ fn scenario_connection_close_opt_out() nothrow -> Int {
 							}
 
 							val _ = stream.close(timeout);
-							server.stop(&caller_handle);
+							server.stop(caller_handle);
 							match sv.join() {
 								core.Result::Err(_) => { return 310; },
 								core.Result::Ok(exit_code) => {
@@ -687,16 +687,16 @@ fn scenario_idle_timeout() nothrow -> Int {
 	val timeout = conc.Duration(millis = 5000);
 
 	var b = rest.new_app_builder();
-	rest.bind(&mut b, "127.0.0.1", 0);
+	rest.bind(b, "127.0.0.1", 0);
 	match rest.build_app(move b) {
 		core.Result::Err(_) => { return 401; },
 		core.Result::Ok(a) => {
 			var app = move a;
-			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+			match rest_app.add_route(app, "GET", "/health", core.callback2(_health_handler)) {
 				core.Result::Err(_) => { return 402; },
 				core.Result::Ok(_) => {}
 			}
-			match server.listen_app(&app, timeout) {
+			match server.listen_app(app, timeout) {
 				core.Result::Err(_) => { return 403; },
 				core.Result::Ok(lst) => {
 					var listener = move lst;
@@ -704,15 +704,15 @@ fn scenario_idle_timeout() nothrow -> Int {
 					var handle = server.new_server_handle();
 					handle.max_requests = 10;
 					handle.idle_timeout_ms = 200;
-					var caller_handle = server.clone_handle(&handle);
+					var caller_handle = server.clone_handle(handle);
 					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
 						return _run_serve(move app, move listener, move handle, timeout);
 					});
 
 					var addr = net.socket_addr("127.0.0.1", port);
-					match net.connect(&addr, timeout) {
+					match net.connect(addr, timeout) {
 						core.Result::Err(_) => {
-							server.stop(&caller_handle);
+							server.stop(caller_handle);
 							val _ = sv.join();
 							return 404;
 						},
@@ -722,27 +722,27 @@ fn scenario_idle_timeout() nothrow -> Int {
 
 							// Send one request (no Connection: close — keep alive)
 							val req = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
-							match _write_raw(&stream, &req, timeout) {
+							match _write_raw(stream, req, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									server.stop(&caller_handle);
+									server.stop(caller_handle);
 									val _ = sv.join();
 									return 405;
 								},
 								core.Result::Ok(_) => {}
 							}
-							match _read_one_response(&stream, &mut read_buf, timeout) {
+							match _read_one_response(stream, read_buf, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									server.stop(&caller_handle);
+									server.stop(caller_handle);
 									val _ = sv.join();
 									return 406;
 								},
 								core.Result::Ok(resp) => {
 									val s_200 = "HTTP/1.1 200 OK";
-									if !_starts_with(&resp, &s_200) {
+									if !_starts_with(resp, s_200) {
 										val _ = stream.close(timeout);
-										server.stop(&caller_handle);
+										server.stop(caller_handle);
 										val _ = sv.join();
 										return 407;
 									}
@@ -753,7 +753,7 @@ fn scenario_idle_timeout() nothrow -> Int {
 							// After ~200ms, server should close the connection.
 							// We read and expect EOF/error.
 							var rbuf = io.buffer(4096);
-							match stream.read(&mut rbuf, conc.Duration(millis = 2000)) {
+							match stream.read(rbuf, conc.Duration(millis = 2000)) {
 								core.Result::Err(_) => {
 									// Expected — idle timeout closed.
 								},
@@ -761,7 +761,7 @@ fn scenario_idle_timeout() nothrow -> Int {
 									if n != 0 {
 										// Server sent something unexpected.
 										val _ = stream.close(timeout);
-										server.stop(&caller_handle);
+										server.stop(caller_handle);
 										val _ = sv.join();
 										return 408;
 									}
@@ -770,7 +770,7 @@ fn scenario_idle_timeout() nothrow -> Int {
 							}
 
 							val _ = stream.close(timeout);
-							server.stop(&caller_handle);
+							server.stop(caller_handle);
 							match sv.join() {
 								core.Result::Err(_) => { return 409; },
 								core.Result::Ok(exit_code) => {
@@ -795,32 +795,32 @@ fn scenario_error_isolation() nothrow -> Int {
 	val timeout = conc.Duration(millis = 5000);
 
 	var b = rest.new_app_builder();
-	rest.bind(&mut b, "127.0.0.1", 0);
+	rest.bind(b, "127.0.0.1", 0);
 	match rest.build_app(move b) {
 		core.Result::Err(_) => { return 501; },
 		core.Result::Ok(a) => {
 			var app = move a;
-			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+			match rest_app.add_route(app, "GET", "/health", core.callback2(_health_handler)) {
 				core.Result::Err(_) => { return 502; },
 				core.Result::Ok(_) => {}
 			}
-			match server.listen_app(&app, timeout) {
+			match server.listen_app(app, timeout) {
 				core.Result::Err(_) => { return 503; },
 				core.Result::Ok(lst) => {
 					var listener = move lst;
 					val port = listener.local_port();
 					var handle = server.new_server_handle();
 					handle.max_requests = 3;
-					var caller_handle = server.clone_handle(&handle);
+					var caller_handle = server.clone_handle(handle);
 					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
 						return _run_serve(move app, move listener, move handle, timeout);
 					});
 
 					// Connection 1: valid request, then malformed.
 					var addr = net.socket_addr("127.0.0.1", port);
-					match net.connect(&addr, timeout) {
+					match net.connect(addr, timeout) {
 						core.Result::Err(_) => {
-							server.stop(&caller_handle);
+							server.stop(caller_handle);
 							val _ = sv.join();
 							return 504;
 						},
@@ -830,27 +830,27 @@ fn scenario_error_isolation() nothrow -> Int {
 
 							// First: valid request
 							val req1 = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
-							match _write_raw(&s1, &req1, timeout) {
+							match _write_raw(s1, req1, timeout) {
 								core.Result::Err(_) => {
 									val _ = s1.close(timeout);
-									server.stop(&caller_handle);
+									server.stop(caller_handle);
 									val _ = sv.join();
 									return 505;
 								},
 								core.Result::Ok(_) => {}
 							}
-							match _read_one_response(&s1, &mut rb1, timeout) {
+							match _read_one_response(s1, rb1, timeout) {
 								core.Result::Err(_) => {
 									val _ = s1.close(timeout);
-									server.stop(&caller_handle);
+									server.stop(caller_handle);
 									val _ = sv.join();
 									return 506;
 								},
 								core.Result::Ok(resp1) => {
 									val s_200 = "HTTP/1.1 200 OK";
-									if !_starts_with(&resp1, &s_200) {
+									if !_starts_with(resp1, s_200) {
 										val _ = s1.close(timeout);
-										server.stop(&caller_handle);
+										server.stop(caller_handle);
 										val _ = sv.join();
 										return 507;
 									}
@@ -859,21 +859,21 @@ fn scenario_error_isolation() nothrow -> Int {
 
 							// Second: malformed request on same connection
 							val bad_req = "GARBAGE\r\n\r\n";
-							match _write_raw(&s1, &bad_req, timeout) {
+							match _write_raw(s1, bad_req, timeout) {
 								core.Result::Err(_) => {
 									val _ = s1.close(timeout);
-									server.stop(&caller_handle);
+									server.stop(caller_handle);
 									val _ = sv.join();
 									return 508;
 								},
 								core.Result::Ok(_) => {}
 							}
 							// Read error response — server should send 400 and close.
-							val err_resp = _read_until_eof(&s1, timeout);
+							val err_resp = _read_until_eof(s1, timeout);
 							val s_400 = "HTTP/1.1 400 Bad Request";
-							if !_starts_with(&err_resp, &s_400) {
+							if !_starts_with(err_resp, s_400) {
 								val _ = s1.close(timeout);
-								server.stop(&caller_handle);
+								server.stop(caller_handle);
 								val _ = sv.join();
 								return 509;
 							}
@@ -882,9 +882,9 @@ fn scenario_error_isolation() nothrow -> Int {
 					}
 
 					// Connection 2: fresh connection should work.
-					match net.connect(&addr, timeout) {
+					match net.connect(addr, timeout) {
 						core.Result::Err(_) => {
-							server.stop(&caller_handle);
+							server.stop(caller_handle);
 							val _ = sv.join();
 							return 510;
 						},
@@ -893,27 +893,27 @@ fn scenario_error_isolation() nothrow -> Int {
 							var rb2: Array<Byte> = [];
 
 							val req2 = "GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
-							match _write_raw(&s2, &req2, timeout) {
+							match _write_raw(s2, req2, timeout) {
 								core.Result::Err(_) => {
 									val _ = s2.close(timeout);
-									server.stop(&caller_handle);
+									server.stop(caller_handle);
 									val _ = sv.join();
 									return 511;
 								},
 								core.Result::Ok(_) => {}
 							}
-							match _read_one_response(&s2, &mut rb2, timeout) {
+							match _read_one_response(s2, rb2, timeout) {
 								core.Result::Err(_) => {
 									val _ = s2.close(timeout);
-									server.stop(&caller_handle);
+									server.stop(caller_handle);
 									val _ = sv.join();
 									return 512;
 								},
 								core.Result::Ok(resp2) => {
 									val s_200 = "HTTP/1.1 200 OK";
-									if !_starts_with(&resp2, &s_200) {
+									if !_starts_with(resp2, s_200) {
 										val _ = s2.close(timeout);
-										server.stop(&caller_handle);
+										server.stop(caller_handle);
 										val _ = sv.join();
 										return 513;
 									}
@@ -923,7 +923,7 @@ fn scenario_error_isolation() nothrow -> Int {
 						}
 					}
 
-					server.stop(&caller_handle);
+					server.stop(caller_handle);
 					match sv.join() {
 						core.Result::Err(_) => { return 514; },
 						core.Result::Ok(exit_code) => {
@@ -944,35 +944,35 @@ fn scenario_large_response_keepalive() nothrow -> Int {
 	val timeout = conc.Duration(millis = 5000);
 
 	var b = rest.new_app_builder();
-	rest.bind(&mut b, "127.0.0.1", 0);
+	rest.bind(b, "127.0.0.1", 0);
 	match rest.build_app(move b) {
 		core.Result::Err(_) => { return 601; },
 		core.Result::Ok(a) => {
 			var app = move a;
-			match rest_app.add_route(&mut app, "GET", "/large", core.callback2(_large_handler)) {
+			match rest_app.add_route(app, "GET", "/large", core.callback2(_large_handler)) {
 				core.Result::Err(_) => { return 602; },
 				core.Result::Ok(_) => {}
 			}
-			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+			match rest_app.add_route(app, "GET", "/health", core.callback2(_health_handler)) {
 				core.Result::Err(_) => { return 603; },
 				core.Result::Ok(_) => {}
 			}
-			match server.listen_app(&app, timeout) {
+			match server.listen_app(app, timeout) {
 				core.Result::Err(_) => { return 604; },
 				core.Result::Ok(lst) => {
 					var listener = move lst;
 					val port = listener.local_port();
 					var handle = server.new_server_handle();
 					handle.max_requests = 2;
-					var caller_handle = server.clone_handle(&handle);
+					var caller_handle = server.clone_handle(handle);
 					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
 						return _run_serve(move app, move listener, move handle, timeout);
 					});
 
 					var addr = net.socket_addr("127.0.0.1", port);
-					match net.connect(&addr, timeout) {
+					match net.connect(addr, timeout) {
 						core.Result::Err(_) => {
-							server.stop(&caller_handle);
+							server.stop(caller_handle);
 							val _ = sv.join();
 							return 605;
 						},
@@ -982,35 +982,35 @@ fn scenario_large_response_keepalive() nothrow -> Int {
 
 							// Request 1: large response (~4KB body)
 							val req1 = "GET /large HTTP/1.1\r\nHost: localhost\r\n\r\n";
-							match _write_raw(&stream, &req1, timeout) {
+							match _write_raw(stream, req1, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									server.stop(&caller_handle);
+									server.stop(caller_handle);
 									val _ = sv.join();
 									return 606;
 								},
 								core.Result::Ok(_) => {}
 							}
-							match _read_one_response(&stream, &mut read_buf, timeout) {
+							match _read_one_response(stream, read_buf, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									server.stop(&caller_handle);
+									server.stop(caller_handle);
 									val _ = sv.join();
 									return 607;
 								},
 								core.Result::Ok(resp1) => {
 									val s_200 = "HTTP/1.1 200 OK";
-									if !_starts_with(&resp1, &s_200) {
+									if !_starts_with(resp1, s_200) {
 										val _ = stream.close(timeout);
-										server.stop(&caller_handle);
+										server.stop(caller_handle);
 										val _ = sv.join();
 										return 608;
 									}
 									// Check body contains expected data
 									val m_data = "\"data\":\"XXXX";
-									if !_contains(&resp1, &m_data) {
+									if !_contains(resp1, m_data) {
 										val _ = stream.close(timeout);
-										server.stop(&caller_handle);
+										server.stop(caller_handle);
 										val _ = sv.join();
 										return 609;
 									}
@@ -1019,34 +1019,34 @@ fn scenario_large_response_keepalive() nothrow -> Int {
 
 							// Request 2: small request on same connection
 							val req2 = "GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
-							match _write_raw(&stream, &req2, timeout) {
+							match _write_raw(stream, req2, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									server.stop(&caller_handle);
+									server.stop(caller_handle);
 									val _ = sv.join();
 									return 610;
 								},
 								core.Result::Ok(_) => {}
 							}
-							match _read_one_response(&stream, &mut read_buf, timeout) {
+							match _read_one_response(stream, read_buf, timeout) {
 								core.Result::Err(_) => {
 									val _ = stream.close(timeout);
-									server.stop(&caller_handle);
+									server.stop(caller_handle);
 									val _ = sv.join();
 									return 611;
 								},
 								core.Result::Ok(resp2) => {
 									val s_200 = "HTTP/1.1 200 OK";
-									if !_starts_with(&resp2, &s_200) {
+									if !_starts_with(resp2, s_200) {
 										val _ = stream.close(timeout);
-										server.stop(&caller_handle);
+										server.stop(caller_handle);
 										val _ = sv.join();
 										return 612;
 									}
 									val m_health = "{\"ok\":true}";
-									if !_contains(&resp2, &m_health) {
+									if !_contains(resp2, m_health) {
 										val _ = stream.close(timeout);
-										server.stop(&caller_handle);
+										server.stop(caller_handle);
 										val _ = sv.join();
 										return 613;
 									}
@@ -1054,7 +1054,7 @@ fn scenario_large_response_keepalive() nothrow -> Int {
 							}
 
 							val _ = stream.close(timeout);
-							server.stop(&caller_handle);
+							server.stop(caller_handle);
 							match sv.join() {
 								core.Result::Err(_) => { return 614; },
 								core.Result::Ok(exit_code) => {
@@ -1084,7 +1084,7 @@ fn scenario_large_response_keepalive() nothrow -> Int {
 
 fn _open_keepalive_request(port: Int, timeout: conc.Duration, read_timeout: conc.Duration) nothrow -> core.Result<net.TcpStream, Int> {
 	var addr = net.socket_addr("127.0.0.1", port);
-	match net.connect(&addr, timeout) {
+	match net.connect(addr, timeout) {
 		core.Result::Err(_) => { return core.Result::Err(1); },
 		core.Result::Ok(conn) => {
 			var stream = move conn;
@@ -1092,15 +1092,15 @@ fn _open_keepalive_request(port: Int, timeout: conc.Duration, read_timeout: conc
 			// Keep-alive request (no Connection: close): server keeps the socket
 			// open, and the client leaves it open too.
 			val req = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
-			match _write_raw(&stream, &req, timeout) {
+			match _write_raw(stream, req, timeout) {
 				core.Result::Err(_) => { val _ = stream.close(timeout); return core.Result::Err(2); },
 				core.Result::Ok(_) => {}
 			}
-			match _read_one_response(&stream, &mut buf, read_timeout) {
+			match _read_one_response(stream, buf, read_timeout) {
 				core.Result::Err(_) => { val _ = stream.close(timeout); return core.Result::Err(3); },
 				core.Result::Ok(resp) => {
 					val s_200 = "HTTP/1.1 200 OK";
-					if !_starts_with(&resp, &s_200) { val _ = stream.close(timeout); return core.Result::Err(4); }
+					if !_starts_with(resp, s_200) { val _ = stream.close(timeout); return core.Result::Err(4); }
 				}
 			}
 			return core.Result::Ok(move stream);
@@ -1115,43 +1115,43 @@ fn scenario_sequential_fresh_connections() nothrow -> Int {
 	val read_timeout = conc.Duration(millis = 2000);
 
 	var b = rest.new_app_builder();
-	rest.bind(&mut b, "127.0.0.1", 0);
+	rest.bind(b, "127.0.0.1", 0);
 	match rest.build_app(move b) {
 		core.Result::Err(_) => { return 701; },
 		core.Result::Ok(a) => {
 			var app = move a;
-			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+			match rest_app.add_route(app, "GET", "/health", core.callback2(_health_handler)) {
 				core.Result::Err(_) => { return 702; },
 				core.Result::Ok(_) => {}
 			}
-			match server.listen_app(&app, timeout) {
+			match server.listen_app(app, timeout) {
 				core.Result::Err(_) => { return 703; },
 				core.Result::Ok(lst) => {
 					var listener = move lst;
 					val port = listener.local_port();
 					var handle = server.new_server_handle();
 					// Unlimited requests; stop explicitly at the end.
-					var caller_handle = server.clone_handle(&handle);
+					var caller_handle = server.clone_handle(handle);
 					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
 						return _run_serve(move app, move listener, move handle, timeout);
 					});
 
 					match _open_keepalive_request(port, timeout, read_timeout) {
-						core.Result::Err(c) => { server.stop(&caller_handle); val _ = sv.join(); return 710 + c; },
+						core.Result::Err(c) => { server.stop(caller_handle); val _ = sv.join(); return 710 + c; },
 						core.Result::Ok(c1) => {
 							var s1 = move c1;
 							match _open_keepalive_request(port, timeout, read_timeout) {
-								core.Result::Err(c) => { val _ = s1.close(timeout); server.stop(&caller_handle); val _ = sv.join(); return 720 + c; },
+								core.Result::Err(c) => { val _ = s1.close(timeout); server.stop(caller_handle); val _ = sv.join(); return 720 + c; },
 								core.Result::Ok(c2) => {
 									var s2 = move c2;
 									match _open_keepalive_request(port, timeout, read_timeout) {
-										core.Result::Err(c) => { val _ = s1.close(timeout); val _ = s2.close(timeout); server.stop(&caller_handle); val _ = sv.join(); return 730 + c; },
+										core.Result::Err(c) => { val _ = s1.close(timeout); val _ = s2.close(timeout); server.stop(caller_handle); val _ = sv.join(); return 730 + c; },
 										core.Result::Ok(c3) => {
 											var s3 = move c3;
 											val _ = s1.close(timeout);
 											val _ = s2.close(timeout);
 											val _ = s3.close(timeout);
-											server.stop(&caller_handle);
+											server.stop(caller_handle);
 											match sv.join() {
 												core.Result::Err(_) => { return 740; },
 												core.Result::Ok(exit_code) => {
@@ -1185,45 +1185,45 @@ fn scenario_partial_connection_does_not_block() nothrow -> Int {
 	val read_timeout = conc.Duration(millis = 2000);
 
 	var b = rest.new_app_builder();
-	rest.bind(&mut b, "127.0.0.1", 0);
+	rest.bind(b, "127.0.0.1", 0);
 	match rest.build_app(move b) {
 		core.Result::Err(_) => { return 801; },
 		core.Result::Ok(a) => {
 			var app = move a;
-			match rest_app.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+			match rest_app.add_route(app, "GET", "/health", core.callback2(_health_handler)) {
 				core.Result::Err(_) => { return 802; },
 				core.Result::Ok(_) => {}
 			}
-			match server.listen_app(&app, timeout) {
+			match server.listen_app(app, timeout) {
 				core.Result::Err(_) => { return 803; },
 				core.Result::Ok(lst) => {
 					var listener = move lst;
 					val port = listener.local_port();
 					var handle = server.new_server_handle();
-					var caller_handle = server.clone_handle(&handle);
+					var caller_handle = server.clone_handle(handle);
 					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
 						return _run_serve(move app, move listener, move handle, timeout);
 					});
 
 					// Conn A: send PARTIAL headers (no CRLFCRLF terminator), stay open + silent.
 					var addr = net.socket_addr("127.0.0.1", port);
-					match net.connect(&addr, timeout) {
-						core.Result::Err(_) => { server.stop(&caller_handle); val _ = sv.join(); return 810; },
+					match net.connect(addr, timeout) {
+						core.Result::Err(_) => { server.stop(caller_handle); val _ = sv.join(); return 810; },
 						core.Result::Ok(ca) => {
 							var sa = move ca;
 							val partial = "GET /health HTTP/1.1\r\nHost: localhost";
-							match _write_raw(&sa, &partial, timeout) {
-								core.Result::Err(_) => { val _ = sa.close(timeout); server.stop(&caller_handle); val _ = sv.join(); return 811; },
+							match _write_raw(sa, partial, timeout) {
+								core.Result::Err(_) => { val _ = sa.close(timeout); server.stop(caller_handle); val _ = sv.join(); return 811; },
 								core.Result::Ok(_) => {}
 							}
 							// Conn B: a complete request must be served promptly despite A.
 							match _open_keepalive_request(port, timeout, read_timeout) {
-								core.Result::Err(c) => { val _ = sa.close(timeout); server.stop(&caller_handle); val _ = sv.join(); return 820 + c; },
+								core.Result::Err(c) => { val _ = sa.close(timeout); server.stop(caller_handle); val _ = sv.join(); return 820 + c; },
 								core.Result::Ok(c2) => {
 									var sb = move c2;
 									val _ = sb.close(timeout);
 									val _ = sa.close(timeout);
-									server.stop(&caller_handle);
+									server.stop(caller_handle);
 									match sv.join() {
 										core.Result::Err(_) => { return 840; },
 										core.Result::Ok(exit_code) => {
@@ -1256,23 +1256,23 @@ fn scenario_large_request_drained() nothrow -> Int {
 	val read_timeout = conc.Duration(millis = 2000);
 
 	var b = rest.new_app_builder();
-	rest.bind(&mut b, "127.0.0.1", 0);
+	rest.bind(b, "127.0.0.1", 0);
 	match rest.build_app(move b) {
 		core.Result::Err(_) => { return 901; },
 		core.Result::Ok(a) => {
 			var app = move a;
-			match rest_app.add_route(&mut app, "POST", "/big", core.callback2(_health_handler)) {
+			match rest_app.add_route(app, "POST", "/big", core.callback2(_health_handler)) {
 				core.Result::Err(_) => { return 902; },
 				core.Result::Ok(_) => {}
 			}
-			match server.listen_app(&app, timeout) {
+			match server.listen_app(app, timeout) {
 				core.Result::Err(_) => { return 903; },
 				core.Result::Ok(lst) => {
 					var listener = move lst;
 					val port = listener.local_port();
 					var handle = server.new_server_handle();
 					handle.max_requests = 1;
-					var caller_handle = server.clone_handle(&handle);
+					var caller_handle = server.clone_handle(handle);
 					var sv = conc.spawn_cb(| | captures(move app, move listener, move handle, copy timeout) => {
 						return _run_serve(move app, move listener, move handle, timeout);
 					});
@@ -1283,24 +1283,24 @@ fn scenario_large_request_drained() nothrow -> Int {
 					val req = "POST /big HTTP/1.1\r\nHost: localhost\r\nContent-Length: " + fmt.format_int(clen) + "\r\nConnection: close\r\n\r\n" + body;
 
 					var addr = net.socket_addr("127.0.0.1", port);
-					match net.connect(&addr, timeout) {
-						core.Result::Err(_) => { server.stop(&caller_handle); val _ = sv.join(); return 904; },
+					match net.connect(addr, timeout) {
+						core.Result::Err(_) => { server.stop(caller_handle); val _ = sv.join(); return 904; },
 						core.Result::Ok(conn) => {
 							var stream = move conn;
 							var read_buf: Array<Byte> = [];
-							match _write_raw(&stream, &req, timeout) {
-								core.Result::Err(_) => { val _ = stream.close(timeout); server.stop(&caller_handle); val _ = sv.join(); return 905; },
+							match _write_raw(stream, req, timeout) {
+								core.Result::Err(_) => { val _ = stream.close(timeout); server.stop(caller_handle); val _ = sv.join(); return 905; },
 								core.Result::Ok(_) => {}
 							}
-							match _read_one_response(&stream, &mut read_buf, read_timeout) {
-								core.Result::Err(_) => { val _ = stream.close(timeout); server.stop(&caller_handle); val _ = sv.join(); return 906; },
+							match _read_one_response(stream, read_buf, read_timeout) {
+								core.Result::Err(_) => { val _ = stream.close(timeout); server.stop(caller_handle); val _ = sv.join(); return 906; },
 								core.Result::Ok(resp) => {
 									val s_200 = "HTTP/1.1 200 OK";
-									if !_starts_with(&resp, &s_200) { val _ = stream.close(timeout); server.stop(&caller_handle); val _ = sv.join(); return 907; }
+									if !_starts_with(resp, s_200) { val _ = stream.close(timeout); server.stop(caller_handle); val _ = sv.join(); return 907; }
 								}
 							}
 							val _ = stream.close(timeout);
-							server.stop(&caller_handle);
+							server.stop(caller_handle);
 							match sv.join() {
 								core.Result::Err(_) => { return 908; },
 								core.Result::Ok(exit_code) => {

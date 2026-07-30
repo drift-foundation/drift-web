@@ -77,12 +77,12 @@ pub fn parse_url(raw_url: &String) nothrow -> core.Result<ParsedUrl, errors.Clie
 	var rest_start = 0;
 	var default_port = 80;
 
-	if _starts_with(raw_url, &https_prefix) {
+	if _starts_with(raw_url, https_prefix) {
 		scheme = "https";
 		rest_start = 8;
 		default_port = 443;
 	} else {
-		if _starts_with(raw_url, &http_prefix) {
+		if _starts_with(raw_url, http_prefix) {
 			scheme = "http";
 			rest_start = 7;
 		} else {
@@ -100,8 +100,8 @@ pub fn parse_url(raw_url: &String) nothrow -> core.Result<ParsedUrl, errors.Clie
 	// Split authority from path+query at first '/' or '?'.
 	val slash_byte = cast<Byte>(47);
 	val qmark_byte = cast<Byte>(63);
-	val slash_idx = _find_char(&rest, slash_byte);
-	val qmark_idx = _find_char(&rest, qmark_byte);
+	val slash_idx = _find_char(rest, slash_byte);
+	val qmark_idx = _find_char(rest, qmark_byte);
 	// Find the earliest separator.
 	var sep_idx = -1;
 	if slash_idx >= 0 {
@@ -122,14 +122,14 @@ pub fn parse_url(raw_url: &String) nothrow -> core.Result<ParsedUrl, errors.Clie
 	var authority = "";
 	var path = "/";
 	if sep_idx >= 0 {
-		authority = _substring(&rest, 0, sep_idx);
+		authority = _substring(rest, 0, sep_idx);
 		// If separator is '?', path is /? + rest. If '/', path is from slash onward.
 		if slash_idx >= 0 and slash_idx == sep_idx {
-			path = _substring(&rest, sep_idx, rest.byte_length());
+			path = _substring(rest, sep_idx, rest.byte_length());
 		} else {
 			// Query without path: synthesize /?query
 			val qpath = "/";
-			val qtail = _substring(&rest, sep_idx, rest.byte_length());
+			val qtail = _substring(rest, sep_idx, rest.byte_length());
 			path = qpath + qtail;
 		}
 	} else {
@@ -141,12 +141,12 @@ pub fn parse_url(raw_url: &String) nothrow -> core.Result<ParsedUrl, errors.Clie
 	}
 
 	val colon_byte = cast<Byte>(58);
-	val colon_idx = _find_last_char(&authority, colon_byte);
+	val colon_idx = _find_last_char(authority, colon_byte);
 	var host = authority;
 	var port = default_port;
 	if colon_idx >= 0 {
-		host = _substring(&authority, 0, colon_idx);
-		val port_str = _substring(&authority, colon_idx + 1, authority.byte_length());
+		host = _substring(authority, 0, colon_idx);
+		val port_str = _substring(authority, colon_idx + 1, authority.byte_length());
 		if port_str.byte_length() == 0 {
 			return core.Result::Err(errors.client_error(errors.TAG_INVALID_URL, "empty port in URL"));
 		}

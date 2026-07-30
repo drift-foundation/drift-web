@@ -56,7 +56,7 @@ fn _trace_eq(actual: &Array<String>, expected: &Array<String>) nothrow -> Bool {
 
 fn _build_test_app() nothrow -> rest.App {
 	var b = rest.new_app_builder();
-	rest.bind(&mut b, "127.0.0.1", 8080);
+	rest.bind(b, "127.0.0.1", 8080);
 	match rest.build_app(move b) {
 		core.Result::Ok(a) => { return move a; },
 		core.Result::Err(_) => { return _unreachable_app(); }
@@ -65,7 +65,7 @@ fn _build_test_app() nothrow -> rest.App {
 
 fn _unreachable_app() nothrow -> rest.App {
 	var b = rest.new_app_builder();
-	rest.bind(&mut b, "0.0.0.0", 1);
+	rest.bind(b, "0.0.0.0", 1);
 	match rest.build_app(move b) {
 		core.Result::Ok(a) => { return move a; },
 		core.Result::Err(_) => { return _unreachable_app(); }
@@ -99,30 +99,30 @@ fn _unknown_throws_handler(req: &rest.Request, ctx: &mut rest.Context) -> rest.R
 // One mw, records pre+post, observes handler's Ok result.
 fn scenario_single_middleware_passthrough() nothrow -> Int {
 	var app = _build_test_app();
-	rest.add_middleware(&mut app, |r: &rest.Request, c: &mut rest.Context, next| => {
+	rest.add_middleware(app, |r: &rest.Request, c: &mut rest.Context, next| => {
 		_trace_push(c, "A:enter");
 		val result = next.call(r, c);
 		_trace_push(c, "A:exit");
 		return move result;
 	});
-	match rest.add_route(&mut app, "GET", "/", core.callback2(_ok_handler)) {
+	match rest.add_route(app, "GET", "/", core.callback2(_ok_handler)) {
 		core.Result::Err(_) => { return 101; },
 		core.Result::Ok(_) => {}
 	}
 	val app_arc = conc.arc(move app);
 	var req = rest.new_request("GET", "/");
 	var ctx = rest.new_context();
-	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+	match rest.dispatch(app_arc.clone(), req, ctx) {
 		core.Result::Err(_) => { return 102; },
 		core.Result::Ok(resp) => {
 			if resp.status != 200 { return 103; }
 		}
 	}
 	val expected: Array<String> = ["A:enter", "H:enter", "H:exit", "A:exit"];
-	match rest.ctx_get<type Trace>(&ctx) {
+	match rest.ctx_get<type Trace>(ctx) {
 		Optional::None => { return 104; },
 		Optional::Some(t) => {
-			if !_trace_eq(&t.events, &expected) { return 105; }
+			if !_trace_eq(t.events, expected) { return 105; }
 		}
 	}
 	return 0;
@@ -134,34 +134,34 @@ fn scenario_single_middleware_passthrough() nothrow -> Int {
 // M1 is registered first (registration order = outside-in).
 fn scenario_composition_order() nothrow -> Int {
 	var app = _build_test_app();
-	rest.add_middleware(&mut app, |r: &rest.Request, c: &mut rest.Context, next| => {
+	rest.add_middleware(app, |r: &rest.Request, c: &mut rest.Context, next| => {
 		_trace_push(c, "M1:enter");
 		val result = next.call(r, c);
 		_trace_push(c, "M1:exit");
 		return move result;
 	});
-	rest.add_middleware(&mut app, |r: &rest.Request, c: &mut rest.Context, next| => {
+	rest.add_middleware(app, |r: &rest.Request, c: &mut rest.Context, next| => {
 		_trace_push(c, "M2:enter");
 		val result = next.call(r, c);
 		_trace_push(c, "M2:exit");
 		return move result;
 	});
-	match rest.add_route(&mut app, "GET", "/", core.callback2(_ok_handler)) {
+	match rest.add_route(app, "GET", "/", core.callback2(_ok_handler)) {
 		core.Result::Err(_) => { return 201; },
 		core.Result::Ok(_) => {}
 	}
 	val app_arc = conc.arc(move app);
 	var req = rest.new_request("GET", "/");
 	var ctx = rest.new_context();
-	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+	match rest.dispatch(app_arc.clone(), req, ctx) {
 		core.Result::Err(_) => { return 202; },
 		core.Result::Ok(_) => {}
 	}
 	val expected: Array<String> = ["M1:enter", "M2:enter", "H:enter", "H:exit", "M2:exit", "M1:exit"];
-	match rest.ctx_get<type Trace>(&ctx) {
+	match rest.ctx_get<type Trace>(ctx) {
 		Optional::None => { return 203; },
 		Optional::Some(t) => {
-			if !_trace_eq(&t.events, &expected) { return 204; }
+			if !_trace_eq(t.events, expected) { return 204; }
 		}
 	}
 	return 0;
@@ -173,20 +173,20 @@ fn scenario_composition_order() nothrow -> Int {
 // Middleware's next.call(...) returns this Err; post-work still runs.
 fn scenario_handler_throws_typed() nothrow -> Int {
 	var app = _build_test_app();
-	rest.add_middleware(&mut app, |r: &rest.Request, c: &mut rest.Context, next| => {
+	rest.add_middleware(app, |r: &rest.Request, c: &mut rest.Context, next| => {
 		_trace_push(c, "A:enter");
 		val result = next.call(r, c);
 		_trace_push(c, "A:exit");
 		return move result;
 	});
-	match rest.add_throws_route(&mut app, "POST", "/bad", core.callback_throw2(_bad_request_throws_handler)) {
+	match rest.add_throws_route(app, "POST", "/bad", core.callback_throw2(_bad_request_throws_handler)) {
 		core.Result::Err(_) => { return 301; },
 		core.Result::Ok(_) => {}
 	}
 	val app_arc = conc.arc(move app);
 	var req = rest.new_request("POST", "/bad");
 	var ctx = rest.new_context();
-	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+	match rest.dispatch(app_arc.clone(), req, ctx) {
 		core.Result::Ok(_) => { return 302; },
 		core.Result::Err(e) => {
 			if e.status != 400 { return 303; }
@@ -195,10 +195,10 @@ fn scenario_handler_throws_typed() nothrow -> Int {
 	}
 	// Post-work ran even though handler threw — A:exit must be in the trace.
 	val expected: Array<String> = ["A:enter", "H:enter", "A:exit"];
-	match rest.ctx_get<type Trace>(&ctx) {
+	match rest.ctx_get<type Trace>(ctx) {
 		Optional::None => { return 305; },
 		Optional::Some(t) => {
-			if !_trace_eq(&t.events, &expected) { return 306; }
+			if !_trace_eq(t.events, expected) { return 306; }
 		}
 	}
 	return 0;
@@ -208,20 +208,20 @@ fn scenario_handler_throws_typed() nothrow -> Int {
 // Framework's _dispatch_throws catch-all converts to Err(internal-error 500).
 fn scenario_handler_throws_unknown() nothrow -> Int {
 	var app = _build_test_app();
-	rest.add_middleware(&mut app, |r: &rest.Request, c: &mut rest.Context, next| => {
+	rest.add_middleware(app, |r: &rest.Request, c: &mut rest.Context, next| => {
 		_trace_push(c, "A:enter");
 		val result = next.call(r, c);
 		_trace_push(c, "A:exit");
 		return move result;
 	});
-	match rest.add_throws_route(&mut app, "GET", "/boom", core.callback_throw2(_unknown_throws_handler)) {
+	match rest.add_throws_route(app, "GET", "/boom", core.callback_throw2(_unknown_throws_handler)) {
 		core.Result::Err(_) => { return 401; },
 		core.Result::Ok(_) => {}
 	}
 	val app_arc = conc.arc(move app);
 	var req = rest.new_request("GET", "/boom");
 	var ctx = rest.new_context();
-	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+	match rest.dispatch(app_arc.clone(), req, ctx) {
 		core.Result::Ok(_) => { return 402; },
 		core.Result::Err(e) => {
 			if e.status != 500 { return 403; }
@@ -229,10 +229,10 @@ fn scenario_handler_throws_unknown() nothrow -> Int {
 		}
 	}
 	val expected: Array<String> = ["A:enter", "H:enter", "A:exit"];
-	match rest.ctx_get<type Trace>(&ctx) {
+	match rest.ctx_get<type Trace>(ctx) {
 		Optional::None => { return 405; },
 		Optional::Some(t) => {
-			if !_trace_eq(&t.events, &expected) { return 406; }
+			if !_trace_eq(t.events, expected) { return 406; }
 		}
 	}
 	return 0;
@@ -243,25 +243,25 @@ fn scenario_handler_throws_unknown() nothrow -> Int {
 // Outer mw observes the short-circuit Result and post-work runs.
 fn scenario_short_circuit_no_next() nothrow -> Int {
 	var app = _build_test_app();
-	rest.add_middleware(&mut app, |r: &rest.Request, c: &mut rest.Context, next| => {
+	rest.add_middleware(app, |r: &rest.Request, c: &mut rest.Context, next| => {
 		_trace_push(c, "OUTER:enter");
 		val result = next.call(r, c);
 		_trace_push(c, "OUTER:exit");
 		return move result;
 	});
-	rest.add_middleware(&mut app, |r: &rest.Request, c: &mut rest.Context, next| => {
+	rest.add_middleware(app, |r: &rest.Request, c: &mut rest.Context, next| => {
 		_trace_push(c, "INNER:short-circuit");
 		val _unused = move next;   // explicitly drop next without calling
 		return core.Result::Err(rest.rest_error(401, "unauthorized", "mw-blocked", "blocked by inner mw"));
 	});
-	match rest.add_route(&mut app, "GET", "/", core.callback2(_ok_handler)) {
+	match rest.add_route(app, "GET", "/", core.callback2(_ok_handler)) {
 		core.Result::Err(_) => { return 501; },
 		core.Result::Ok(_) => {}
 	}
 	val app_arc = conc.arc(move app);
 	var req = rest.new_request("GET", "/");
 	var ctx = rest.new_context();
-	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+	match rest.dispatch(app_arc.clone(), req, ctx) {
 		core.Result::Ok(_) => { return 502; },
 		core.Result::Err(e) => {
 			if e.status != 401 { return 503; }
@@ -270,10 +270,10 @@ fn scenario_short_circuit_no_next() nothrow -> Int {
 	}
 	// Handler must not have run — no "H:enter" / "H:exit" in trace.
 	val expected: Array<String> = ["OUTER:enter", "INNER:short-circuit", "OUTER:exit"];
-	match rest.ctx_get<type Trace>(&ctx) {
+	match rest.ctx_get<type Trace>(ctx) {
 		Optional::None => { return 505; },
 		Optional::Some(t) => {
-			if !_trace_eq(&t.events, &expected) { return 506; }
+			if !_trace_eq(t.events, expected) { return 506; }
 		}
 	}
 	return 0;
@@ -284,7 +284,7 @@ fn scenario_short_circuit_no_next() nothrow -> Int {
 // to Err(422). Caller sees the transformed Err.
 fn scenario_transform_ok_to_err() nothrow -> Int {
 	var app = _build_test_app();
-	rest.add_middleware(&mut app, |r: &rest.Request, c: &mut rest.Context, next| => {
+	rest.add_middleware(app, |r: &rest.Request, c: &mut rest.Context, next| => {
 		val result = next.call(r, c);
 		match move result {
 			core.Result::Ok(_) => {
@@ -293,14 +293,14 @@ fn scenario_transform_ok_to_err() nothrow -> Int {
 			core.Result::Err(e) => { return core.Result::Err(move e); }
 		}
 	});
-	match rest.add_route(&mut app, "GET", "/", core.callback2(_ok_handler)) {
+	match rest.add_route(app, "GET", "/", core.callback2(_ok_handler)) {
 		core.Result::Err(_) => { return 601; },
 		core.Result::Ok(_) => {}
 	}
 	val app_arc = conc.arc(move app);
 	var req = rest.new_request("GET", "/");
 	var ctx = rest.new_context();
-	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+	match rest.dispatch(app_arc.clone(), req, ctx) {
 		core.Result::Ok(_) => { return 602; },
 		core.Result::Err(e) => {
 			if e.status != 422 { return 603; }
@@ -315,7 +315,7 @@ fn scenario_transform_ok_to_err() nothrow -> Int {
 // Outer mw catches the known error class and substitutes a 200 response.
 fn scenario_transform_err_to_ok() nothrow -> Int {
 	var app = _build_test_app();
-	rest.add_middleware(&mut app, |r: &rest.Request, c: &mut rest.Context, next| => {
+	rest.add_middleware(app, |r: &rest.Request, c: &mut rest.Context, next| => {
 		val result = next.call(r, c);
 		match move result {
 			core.Result::Err(_) => {
@@ -324,14 +324,14 @@ fn scenario_transform_err_to_ok() nothrow -> Int {
 			core.Result::Ok(resp) => { return core.Result::Ok(move resp); }
 		}
 	});
-	match rest.add_throws_route(&mut app, "POST", "/bad", core.callback_throw2(_bad_request_throws_handler)) {
+	match rest.add_throws_route(app, "POST", "/bad", core.callback_throw2(_bad_request_throws_handler)) {
 		core.Result::Err(_) => { return 701; },
 		core.Result::Ok(_) => {}
 	}
 	val app_arc = conc.arc(move app);
 	var req = rest.new_request("POST", "/bad");
 	var ctx = rest.new_context();
-	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+	match rest.dispatch(app_arc.clone(), req, ctx) {
 		core.Result::Err(_) => { return 702; },
 		core.Result::Ok(resp) => {
 			if resp.status != 200 { return 703; }
@@ -347,22 +347,22 @@ fn scenario_transform_err_to_ok() nothrow -> Int {
 // /:     trace must NOT include the group-mw enter/exit (different group, no match).
 fn scenario_group_middleware_only_fires_in_group() nothrow -> Int {
 	var app = _build_test_app();
-	match rest.add_route_group(&mut app, "/grp") {
+	match rest.add_route_group(app, "/grp") {
 		core.Result::Err(_) => { return 751; },
 		core.Result::Ok(rg) => {
-			rest.add_route_group_middleware(&mut app, &rg, |r: &rest.Request, c: &mut rest.Context, next| => {
+			rest.add_route_group_middleware(app, rg, |r: &rest.Request, c: &mut rest.Context, next| => {
 				_trace_push(c, "GROUP:enter");
 				val result = next.call(r, c);
 				_trace_push(c, "GROUP:exit");
 				return move result;
 			});
-			match rest.add_route_group_route(&mut app, &rg, "GET", "/in", core.callback2(_ok_handler)) {
+			match rest.add_route_group_route(app, rg, "GET", "/in", core.callback2(_ok_handler)) {
 				core.Result::Err(_) => { return 752; },
 				core.Result::Ok(_) => {}
 			}
 		}
 	}
-	match rest.add_route(&mut app, "GET", "/out", core.callback2(_ok_handler)) {
+	match rest.add_route(app, "GET", "/out", core.callback2(_ok_handler)) {
 		core.Result::Err(_) => { return 753; },
 		core.Result::Ok(_) => {}
 	}
@@ -371,27 +371,27 @@ fn scenario_group_middleware_only_fires_in_group() nothrow -> Int {
 	// /grp/in — group mw should fire
 	var req_in = rest.new_request("GET", "/grp/in");
 	var ctx_in = rest.new_context();
-	match rest.dispatch(app_arc.clone(), &mut req_in, &mut ctx_in) {
+	match rest.dispatch(app_arc.clone(), req_in, ctx_in) {
 		core.Result::Err(_) => { return 754; },
 		core.Result::Ok(_) => {}
 	}
 	val expected_in: Array<String> = ["GROUP:enter", "H:enter", "H:exit", "GROUP:exit"];
-	match rest.ctx_get<type Trace>(&ctx_in) {
+	match rest.ctx_get<type Trace>(ctx_in) {
 		Optional::None => { return 755; },
-		Optional::Some(t) => { if !_trace_eq(&t.events, &expected_in) { return 756; } }
+		Optional::Some(t) => { if !_trace_eq(t.events, expected_in) { return 756; } }
 	}
 
 	// /out — group mw must NOT fire
 	var req_out = rest.new_request("GET", "/out");
 	var ctx_out = rest.new_context();
-	match rest.dispatch(app_arc.clone(), &mut req_out, &mut ctx_out) {
+	match rest.dispatch(app_arc.clone(), req_out, ctx_out) {
 		core.Result::Err(_) => { return 757; },
 		core.Result::Ok(_) => {}
 	}
 	val expected_out: Array<String> = ["H:enter", "H:exit"];
-	match rest.ctx_get<type Trace>(&ctx_out) {
+	match rest.ctx_get<type Trace>(ctx_out) {
 		Optional::None => { return 758; },
-		Optional::Some(t) => { if !_trace_eq(&t.events, &expected_out) { return 759; } }
+		Optional::Some(t) => { if !_trace_eq(t.events, expected_out) { return 759; } }
 	}
 	return 0;
 }
@@ -403,26 +403,26 @@ fn scenario_group_middleware_only_fires_in_group() nothrow -> Int {
 // across the combined globals + matched group middleware in registration order.
 fn scenario_global_plus_group_mw_composition() nothrow -> Int {
 	var app = _build_test_app();
-	rest.add_middleware(&mut app, |r: &rest.Request, c: &mut rest.Context, next| => {
+	rest.add_middleware(app, |r: &rest.Request, c: &mut rest.Context, next| => {
 		_trace_push(c, "GLOBAL:enter");
 		val result = next.call(r, c);
 		_trace_push(c, "GLOBAL:exit");
 		return move result;
 	});
-	match rest.add_route_group(&mut app, "/api") {
+	match rest.add_route_group(app, "/api") {
 		core.Result::Err(_) => { return 761; },
 		core.Result::Ok(rg) => {
-			rest.add_route_group_guard(&mut app, &rg, |r: &rest.Request, c: &mut rest.Context| => {
+			rest.add_route_group_guard(app, rg, |r: &rest.Request, c: &mut rest.Context| => {
 				_trace_push(c, "GUARD");
 				return core.Result::Ok(core.void_value());
 			});
-			rest.add_route_group_middleware(&mut app, &rg, |r: &rest.Request, c: &mut rest.Context, next| => {
+			rest.add_route_group_middleware(app, rg, |r: &rest.Request, c: &mut rest.Context, next| => {
 				_trace_push(c, "GROUP:enter");
 				val result = next.call(r, c);
 				_trace_push(c, "GROUP:exit");
 				return move result;
 			});
-			match rest.add_route_group_route(&mut app, &rg, "GET", "/x", core.callback2(_ok_handler)) {
+			match rest.add_route_group_route(app, rg, "GET", "/x", core.callback2(_ok_handler)) {
 				core.Result::Err(_) => { return 762; },
 				core.Result::Ok(_) => {}
 			}
@@ -431,16 +431,16 @@ fn scenario_global_plus_group_mw_composition() nothrow -> Int {
 	val app_arc = conc.arc(move app);
 	var req = rest.new_request("GET", "/api/x");
 	var ctx = rest.new_context();
-	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+	match rest.dispatch(app_arc.clone(), req, ctx) {
 		core.Result::Err(_) => { return 763; },
 		core.Result::Ok(_) => {}
 	}
 	// Guard runs before the onion. Onion: GLOBAL is registered before GROUP, so
 	// GLOBAL is outer, GROUP is inner.
 	val expected: Array<String> = ["GUARD", "GLOBAL:enter", "GROUP:enter", "H:enter", "H:exit", "GROUP:exit", "GLOBAL:exit"];
-	match rest.ctx_get<type Trace>(&ctx) {
+	match rest.ctx_get<type Trace>(ctx) {
 		Optional::None => { return 764; },
-		Optional::Some(t) => { if !_trace_eq(&t.events, &expected) { return 765; } }
+		Optional::Some(t) => { if !_trace_eq(t.events, expected) { return 765; } }
 	}
 	return 0;
 }
@@ -449,24 +449,24 @@ fn scenario_global_plus_group_mw_composition() nothrow -> Int {
 // No middleware registered. Dispatch must still run and call the handler.
 fn scenario_zero_middleware_fast_path() nothrow -> Int {
 	var app = _build_test_app();
-	match rest.add_route(&mut app, "GET", "/", core.callback2(_ok_handler)) {
+	match rest.add_route(app, "GET", "/", core.callback2(_ok_handler)) {
 		core.Result::Err(_) => { return 801; },
 		core.Result::Ok(_) => {}
 	}
 	val app_arc = conc.arc(move app);
 	var req = rest.new_request("GET", "/");
 	var ctx = rest.new_context();
-	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+	match rest.dispatch(app_arc.clone(), req, ctx) {
 		core.Result::Err(_) => { return 802; },
 		core.Result::Ok(resp) => {
 			if resp.status != 200 { return 803; }
 		}
 	}
 	val expected: Array<String> = ["H:enter", "H:exit"];
-	match rest.ctx_get<type Trace>(&ctx) {
+	match rest.ctx_get<type Trace>(ctx) {
 		Optional::None => { return 804; },
 		Optional::Some(t) => {
-			if !_trace_eq(&t.events, &expected) { return 805; }
+			if !_trace_eq(t.events, expected) { return 805; }
 		}
 	}
 	return 0;
@@ -477,26 +477,26 @@ fn scenario_zero_middleware_fast_path() nothrow -> Int {
 // registered, but neither must execute — the guard runs before the onion.
 fn scenario_guard_rejection_skips_middleware() nothrow -> Int {
 	var app = _build_test_app();
-	rest.add_middleware(&mut app, |r: &rest.Request, c: &mut rest.Context, next| => {
+	rest.add_middleware(app, |r: &rest.Request, c: &mut rest.Context, next| => {
 		_trace_push(c, "GLOBAL:enter");
 		val result = next.call(r, c);
 		_trace_push(c, "GLOBAL:exit");
 		return move result;
 	});
-	match rest.add_route_group(&mut app, "/api") {
+	match rest.add_route_group(app, "/api") {
 		core.Result::Err(_) => { return 1101; },
 		core.Result::Ok(rg) => {
-			rest.add_route_group_guard(&mut app, &rg, |r: &rest.Request, c: &mut rest.Context| => {
+			rest.add_route_group_guard(app, rg, |r: &rest.Request, c: &mut rest.Context| => {
 				_trace_push(c, "GUARD:reject");
 				return core.Result::Err(rest.rest_error(403, "forbidden", "guard-block", "blocked by guard"));
 			});
-			rest.add_route_group_middleware(&mut app, &rg, |r: &rest.Request, c: &mut rest.Context, next| => {
+			rest.add_route_group_middleware(app, rg, |r: &rest.Request, c: &mut rest.Context, next| => {
 				_trace_push(c, "GROUP:enter");
 				val result = next.call(r, c);
 				_trace_push(c, "GROUP:exit");
 				return move result;
 			});
-			match rest.add_route_group_route(&mut app, &rg, "GET", "/x", core.callback2(_ok_handler)) {
+			match rest.add_route_group_route(app, rg, "GET", "/x", core.callback2(_ok_handler)) {
 				core.Result::Err(_) => { return 1102; },
 				core.Result::Ok(_) => {}
 			}
@@ -505,7 +505,7 @@ fn scenario_guard_rejection_skips_middleware() nothrow -> Int {
 	val app_arc = conc.arc(move app);
 	var req = rest.new_request("GET", "/api/x");
 	var ctx = rest.new_context();
-	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+	match rest.dispatch(app_arc.clone(), req, ctx) {
 		core.Result::Ok(_) => { return 1103; },
 		core.Result::Err(e) => {
 			if e.status != 403 { return 1104; }
@@ -513,9 +513,9 @@ fn scenario_guard_rejection_skips_middleware() nothrow -> Int {
 		}
 	}
 	val expected: Array<String> = ["GUARD:reject"];
-	match rest.ctx_get<type Trace>(&ctx) {
+	match rest.ctx_get<type Trace>(ctx) {
 		Optional::None => { return 1106; },
-		Optional::Some(t) => { if !_trace_eq(&t.events, &expected) { return 1107; } }
+		Optional::Some(t) => { if !_trace_eq(t.events, expected) { return 1107; } }
 	}
 	return 0;
 }
@@ -526,24 +526,24 @@ fn scenario_guard_rejection_skips_middleware() nothrow -> Int {
 // the group middleware OUTSIDE the global one for routes in that group.
 fn scenario_group_before_global_layering() nothrow -> Int {
 	var app = _build_test_app();
-	match rest.add_route_group(&mut app, "/api") {
+	match rest.add_route_group(app, "/api") {
 		core.Result::Err(_) => { return 1201; },
 		core.Result::Ok(rg) => {
 			// Group mw FIRST.
-			rest.add_route_group_middleware(&mut app, &rg, |r: &rest.Request, c: &mut rest.Context, next| => {
+			rest.add_route_group_middleware(app, rg, |r: &rest.Request, c: &mut rest.Context, next| => {
 				_trace_push(c, "GROUP:enter");
 				val result = next.call(r, c);
 				_trace_push(c, "GROUP:exit");
 				return move result;
 			});
-			match rest.add_route_group_route(&mut app, &rg, "GET", "/x", core.callback2(_ok_handler)) {
+			match rest.add_route_group_route(app, rg, "GET", "/x", core.callback2(_ok_handler)) {
 				core.Result::Err(_) => { return 1202; },
 				core.Result::Ok(_) => {}
 			}
 		}
 	}
 	// Global mw SECOND — should be inner.
-	rest.add_middleware(&mut app, |r: &rest.Request, c: &mut rest.Context, next| => {
+	rest.add_middleware(app, |r: &rest.Request, c: &mut rest.Context, next| => {
 		_trace_push(c, "GLOBAL:enter");
 		val result = next.call(r, c);
 		_trace_push(c, "GLOBAL:exit");
@@ -552,15 +552,15 @@ fn scenario_group_before_global_layering() nothrow -> Int {
 	val app_arc = conc.arc(move app);
 	var req = rest.new_request("GET", "/api/x");
 	var ctx = rest.new_context();
-	match rest.dispatch(app_arc.clone(), &mut req, &mut ctx) {
+	match rest.dispatch(app_arc.clone(), req, ctx) {
 		core.Result::Err(_) => { return 1203; },
 		core.Result::Ok(_) => {}
 	}
 	// GROUP outer, GLOBAL inner.
 	val expected: Array<String> = ["GROUP:enter", "GLOBAL:enter", "H:enter", "H:exit", "GLOBAL:exit", "GROUP:exit"];
-	match rest.ctx_get<type Trace>(&ctx) {
+	match rest.ctx_get<type Trace>(ctx) {
 		Optional::None => { return 1204; },
-		Optional::Some(t) => { if !_trace_eq(&t.events, &expected) { return 1205; } }
+		Optional::Some(t) => { if !_trace_eq(t.events, expected) { return 1205; } }
 	}
 	return 0;
 }
@@ -571,37 +571,37 @@ fn scenario_group_before_global_layering() nothrow -> Int {
 // Dispatch /b/x: GLOBAL + B-mw fire; A-mw doesn't.
 fn scenario_multiple_route_groups_isolation() nothrow -> Int {
 	var app = _build_test_app();
-	rest.add_middleware(&mut app, |r: &rest.Request, c: &mut rest.Context, next| => {
+	rest.add_middleware(app, |r: &rest.Request, c: &mut rest.Context, next| => {
 		_trace_push(c, "G:enter");
 		val result = next.call(r, c);
 		_trace_push(c, "G:exit");
 		return move result;
 	});
-	match rest.add_route_group(&mut app, "/a") {
+	match rest.add_route_group(app, "/a") {
 		core.Result::Err(_) => { return 1301; },
 		core.Result::Ok(rg_a) => {
-			rest.add_route_group_middleware(&mut app, &rg_a, |r: &rest.Request, c: &mut rest.Context, next| => {
+			rest.add_route_group_middleware(app, rg_a, |r: &rest.Request, c: &mut rest.Context, next| => {
 				_trace_push(c, "A:enter");
 				val result = next.call(r, c);
 				_trace_push(c, "A:exit");
 				return move result;
 			});
-			match rest.add_route_group_route(&mut app, &rg_a, "GET", "/x", core.callback2(_ok_handler)) {
+			match rest.add_route_group_route(app, rg_a, "GET", "/x", core.callback2(_ok_handler)) {
 				core.Result::Err(_) => { return 1302; },
 				core.Result::Ok(_) => {}
 			}
 		}
 	}
-	match rest.add_route_group(&mut app, "/b") {
+	match rest.add_route_group(app, "/b") {
 		core.Result::Err(_) => { return 1303; },
 		core.Result::Ok(rg_b) => {
-			rest.add_route_group_middleware(&mut app, &rg_b, |r: &rest.Request, c: &mut rest.Context, next| => {
+			rest.add_route_group_middleware(app, rg_b, |r: &rest.Request, c: &mut rest.Context, next| => {
 				_trace_push(c, "B:enter");
 				val result = next.call(r, c);
 				_trace_push(c, "B:exit");
 				return move result;
 			});
-			match rest.add_route_group_route(&mut app, &rg_b, "GET", "/x", core.callback2(_ok_handler)) {
+			match rest.add_route_group_route(app, rg_b, "GET", "/x", core.callback2(_ok_handler)) {
 				core.Result::Err(_) => { return 1304; },
 				core.Result::Ok(_) => {}
 			}
@@ -612,27 +612,27 @@ fn scenario_multiple_route_groups_isolation() nothrow -> Int {
 	// /a/x: GLOBAL outer, A inner — B does not appear.
 	var req_a = rest.new_request("GET", "/a/x");
 	var ctx_a = rest.new_context();
-	match rest.dispatch(app_arc.clone(), &mut req_a, &mut ctx_a) {
+	match rest.dispatch(app_arc.clone(), req_a, ctx_a) {
 		core.Result::Err(_) => { return 1305; },
 		core.Result::Ok(_) => {}
 	}
 	val expected_a: Array<String> = ["G:enter", "A:enter", "H:enter", "H:exit", "A:exit", "G:exit"];
-	match rest.ctx_get<type Trace>(&ctx_a) {
+	match rest.ctx_get<type Trace>(ctx_a) {
 		Optional::None => { return 1306; },
-		Optional::Some(t) => { if !_trace_eq(&t.events, &expected_a) { return 1307; } }
+		Optional::Some(t) => { if !_trace_eq(t.events, expected_a) { return 1307; } }
 	}
 
 	// /b/x: GLOBAL outer, B inner — A does not appear.
 	var req_b = rest.new_request("GET", "/b/x");
 	var ctx_b = rest.new_context();
-	match rest.dispatch(app_arc.clone(), &mut req_b, &mut ctx_b) {
+	match rest.dispatch(app_arc.clone(), req_b, ctx_b) {
 		core.Result::Err(_) => { return 1308; },
 		core.Result::Ok(_) => {}
 	}
 	val expected_b: Array<String> = ["G:enter", "B:enter", "H:enter", "H:exit", "B:exit", "G:exit"];
-	match rest.ctx_get<type Trace>(&ctx_b) {
+	match rest.ctx_get<type Trace>(ctx_b) {
 		Optional::None => { return 1309; },
-		Optional::Some(t) => { if !_trace_eq(&t.events, &expected_b) { return 1310; } }
+		Optional::Some(t) => { if !_trace_eq(t.events, expected_b) { return 1310; } }
 	}
 	return 0;
 }
@@ -643,23 +643,23 @@ fn scenario_multiple_route_groups_isolation() nothrow -> Int {
 fn scenario_group_of_one_pattern() nothrow -> Int {
 	var app = _build_test_app();
 	// Group containing exactly one route at /admin/dashboard.
-	match rest.add_route_group(&mut app, "/admin/dashboard") {
+	match rest.add_route_group(app, "/admin/dashboard") {
 		core.Result::Err(_) => { return 1401; },
 		core.Result::Ok(rg) => {
-			rest.add_route_group_middleware(&mut app, &rg, |r: &rest.Request, c: &mut rest.Context, next| => {
+			rest.add_route_group_middleware(app, rg, |r: &rest.Request, c: &mut rest.Context, next| => {
 				_trace_push(c, "ADMIN:enter");
 				val result = next.call(r, c);
 				_trace_push(c, "ADMIN:exit");
 				return move result;
 			});
-			match rest.add_route_group_route(&mut app, &rg, "GET", "/", core.callback2(_ok_handler)) {
+			match rest.add_route_group_route(app, rg, "GET", "/", core.callback2(_ok_handler)) {
 				core.Result::Err(_) => { return 1402; },
 				core.Result::Ok(_) => {}
 			}
 		}
 	}
 	// Sibling unrelated route — proves the group-mw is scoped to the single route.
-	match rest.add_route(&mut app, "GET", "/health", core.callback2(_ok_handler)) {
+	match rest.add_route(app, "GET", "/health", core.callback2(_ok_handler)) {
 		core.Result::Err(_) => { return 1403; },
 		core.Result::Ok(_) => {}
 	}
@@ -667,26 +667,26 @@ fn scenario_group_of_one_pattern() nothrow -> Int {
 
 	var req_in = rest.new_request("GET", "/admin/dashboard");
 	var ctx_in = rest.new_context();
-	match rest.dispatch(app_arc.clone(), &mut req_in, &mut ctx_in) {
+	match rest.dispatch(app_arc.clone(), req_in, ctx_in) {
 		core.Result::Err(_) => { return 1404; },
 		core.Result::Ok(_) => {}
 	}
 	val expected_in: Array<String> = ["ADMIN:enter", "H:enter", "H:exit", "ADMIN:exit"];
-	match rest.ctx_get<type Trace>(&ctx_in) {
+	match rest.ctx_get<type Trace>(ctx_in) {
 		Optional::None => { return 1405; },
-		Optional::Some(t) => { if !_trace_eq(&t.events, &expected_in) { return 1406; } }
+		Optional::Some(t) => { if !_trace_eq(t.events, expected_in) { return 1406; } }
 	}
 
 	var req_out = rest.new_request("GET", "/health");
 	var ctx_out = rest.new_context();
-	match rest.dispatch(app_arc.clone(), &mut req_out, &mut ctx_out) {
+	match rest.dispatch(app_arc.clone(), req_out, ctx_out) {
 		core.Result::Err(_) => { return 1407; },
 		core.Result::Ok(_) => {}
 	}
 	val expected_out: Array<String> = ["H:enter", "H:exit"];
-	match rest.ctx_get<type Trace>(&ctx_out) {
+	match rest.ctx_get<type Trace>(ctx_out) {
 		Optional::None => { return 1408; },
-		Optional::Some(t) => { if !_trace_eq(&t.events, &expected_out) { return 1409; } }
+		Optional::Some(t) => { if !_trace_eq(t.events, expected_out) { return 1409; } }
 	}
 	return 0;
 }
@@ -697,7 +697,7 @@ fn scenario_group_of_one_pattern() nothrow -> Int {
 // from the throws handler — both go through the same onion implementation.
 fn scenario_mixed_throws_and_nothrow_routes() nothrow -> Int {
 	var app = _build_test_app();
-	rest.add_middleware(&mut app, |r: &rest.Request, c: &mut rest.Context, next| => {
+	rest.add_middleware(app, |r: &rest.Request, c: &mut rest.Context, next| => {
 		_trace_push(c, "MW:enter");
 		val result = next.call(r, c);
 		match &result {
@@ -707,11 +707,11 @@ fn scenario_mixed_throws_and_nothrow_routes() nothrow -> Int {
 		_trace_push(c, "MW:exit");
 		return move result;
 	});
-	match rest.add_route(&mut app, "GET", "/ok", core.callback2(_ok_handler)) {
+	match rest.add_route(app, "GET", "/ok", core.callback2(_ok_handler)) {
 		core.Result::Err(_) => { return 1501; },
 		core.Result::Ok(_) => {}
 	}
-	match rest.add_throws_route(&mut app, "POST", "/bad", core.callback_throw2(_bad_request_throws_handler)) {
+	match rest.add_throws_route(app, "POST", "/bad", core.callback_throw2(_bad_request_throws_handler)) {
 		core.Result::Err(_) => { return 1502; },
 		core.Result::Ok(_) => {}
 	}
@@ -720,20 +720,20 @@ fn scenario_mixed_throws_and_nothrow_routes() nothrow -> Int {
 	// Nothrow route → mw observes Ok.
 	var req_ok = rest.new_request("GET", "/ok");
 	var ctx_ok = rest.new_context();
-	match rest.dispatch(app_arc.clone(), &mut req_ok, &mut ctx_ok) {
+	match rest.dispatch(app_arc.clone(), req_ok, ctx_ok) {
 		core.Result::Err(_) => { return 1503; },
 		core.Result::Ok(_) => {}
 	}
 	val expected_ok: Array<String> = ["MW:enter", "H:enter", "H:exit", "MW:saw-ok", "MW:exit"];
-	match rest.ctx_get<type Trace>(&ctx_ok) {
+	match rest.ctx_get<type Trace>(ctx_ok) {
 		Optional::None => { return 1504; },
-		Optional::Some(t) => { if !_trace_eq(&t.events, &expected_ok) { return 1505; } }
+		Optional::Some(t) => { if !_trace_eq(t.events, expected_ok) { return 1505; } }
 	}
 
 	// Throws route → framework converts to Err; mw observes Err.
 	var req_bad = rest.new_request("POST", "/bad");
 	var ctx_bad = rest.new_context();
-	match rest.dispatch(app_arc.clone(), &mut req_bad, &mut ctx_bad) {
+	match rest.dispatch(app_arc.clone(), req_bad, ctx_bad) {
 		core.Result::Ok(_) => { return 1506; },
 		core.Result::Err(e) => {
 			if e.status != 400 { return 1507; }
@@ -741,9 +741,9 @@ fn scenario_mixed_throws_and_nothrow_routes() nothrow -> Int {
 		}
 	}
 	val expected_bad: Array<String> = ["MW:enter", "H:enter", "MW:saw-err", "MW:exit"];
-	match rest.ctx_get<type Trace>(&ctx_bad) {
+	match rest.ctx_get<type Trace>(ctx_bad) {
 		Optional::None => { return 1509; },
-		Optional::Some(t) => { if !_trace_eq(&t.events, &expected_bad) { return 1510; } }
+		Optional::Some(t) => { if !_trace_eq(t.events, expected_bad) { return 1510; } }
 	}
 	return 0;
 }

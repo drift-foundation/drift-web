@@ -22,7 +22,7 @@ fn scenario_health_status_200() nothrow -> Int {
 // Scenario: health response body is valid JSON.
 fn scenario_health_body_valid_json() nothrow -> Int {
 	val resp = _health_handler();
-	match json.parse(&resp.body) {
+	match json.parse(resp.body) {
 		core.Result::Ok(_) => { return 0; },
 		core.Result::Err(_) => { return 201; }
 	}
@@ -31,10 +31,10 @@ fn scenario_health_body_valid_json() nothrow -> Int {
 // Scenario: health response body contains ok=true.
 fn scenario_health_body_ok_true() nothrow -> Int {
 	val resp = _health_handler();
-	match json.parse(&resp.body) {
+	match json.parse(resp.body) {
 		core.Result::Ok(node) => {
 			val ok_key = "ok";
-			match node.get(&ok_key) {
+			match node.get(ok_key) {
 				Optional::None => { return 301; },
 				Optional::Some(ok_node) => {
 					match ok_node.as_bool() {

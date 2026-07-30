@@ -79,14 +79,14 @@ fn _split_token(token: &String) nothrow -> core.Result<Array<String>, errors.Jwt
 
 fn _validate_header(header_node: &json.JsonNode, policy: &model.JwtVerifyPolicy) nothrow -> core.Result<Void, errors.JwtError> {
 	val alg_key = "alg";
-	match header_node.get(&alg_key) {
+	match header_node.get(alg_key) {
 		Optional::None => { return core.Result::Err(errors.jwt_error(errors.TAG_MISSING_ALG, "header missing alg field")); },
 		Optional::Some(alg_node) => {
 			match alg_node.as_string() {
 				Optional::None => { return core.Result::Err(errors.jwt_error(errors.TAG_UNSUPPORTED_ALG, "alg is not a string")); },
 				Optional::Some(alg_str) => {
 					if alg_str != "HS256" {
-						return core.Result::Err(errors.jwt_error(errors.TAG_UNSUPPORTED_ALG, "unsupported alg: " + _dup_string(&alg_str)));
+						return core.Result::Err(errors.jwt_error(errors.TAG_UNSUPPORTED_ALG, "unsupported alg: " + _dup_string(alg_str)));
 					}
 				}
 			}
@@ -94,7 +94,7 @@ fn _validate_header(header_node: &json.JsonNode, policy: &model.JwtVerifyPolicy)
 	}
 	if policy.require_typ_jwt {
 		val typ_key = "typ";
-		match header_node.get(&typ_key) {
+		match header_node.get(typ_key) {
 			Optional::None => { return core.Result::Err(errors.jwt_error(errors.TAG_HEADER_TYP_MISMATCH, "header missing typ field")); },
 			Optional::Some(typ_node) => {
 				match typ_node.as_string() {
@@ -120,47 +120,47 @@ pub fn verify_hs256_impl(token: &String, secret: &Array<Byte>, now_unix: Int, po
 	}
 	// 2. Strict base64url decode each segment.
 	var header_bytes: Array<Byte> = [];
-	match codec.base64url_decode(&segments[0]) {
+	match codec.base64url_decode(segments[0]) {
 		core.Result::Ok(v) => { header_bytes = move v; },
 		core.Result::Err(_) => { return core.Result::Err(errors.jwt_error(errors.TAG_INVALID_SEGMENT, "header segment base64url decode failed")); }
 	}
 	var payload_bytes: Array<Byte> = [];
-	match codec.base64url_decode(&segments[1]) {
+	match codec.base64url_decode(segments[1]) {
 		core.Result::Ok(v) => { payload_bytes = move v; },
 		core.Result::Err(_) => { return core.Result::Err(errors.jwt_error(errors.TAG_INVALID_SEGMENT, "payload segment base64url decode failed")); }
 	}
 	var signature_bytes: Array<Byte> = [];
-	match codec.base64url_decode(&segments[2]) {
+	match codec.base64url_decode(segments[2]) {
 		core.Result::Ok(v) => { signature_bytes = move v; },
 		core.Result::Err(_) => { return core.Result::Err(errors.jwt_error(errors.TAG_INVALID_SEGMENT, "signature segment base64url decode failed")); }
 	}
 	// 3. Parse header JSON and validate alg.
-	val header_json = _bytes_to_string(&header_bytes);
+	val header_json = _bytes_to_string(header_bytes);
 	var header_node = json.JsonNode::Null();
-	match json.parse(&header_json) {
+	match json.parse(header_json) {
 		core.Result::Ok(v) => { header_node = move v; },
 		core.Result::Err(_) => { return core.Result::Err(errors.jwt_error(errors.TAG_INVALID_HEADER_JSON, "header is not valid JSON")); }
 	}
-	match _validate_header(&header_node, policy) {
+	match _validate_header(header_node, policy) {
 		core.Result::Ok(_) => {},
 		core.Result::Err(e) => { return core.Result::Err(e); }
 	}
 	// 4. Recompute signature over original signing input (segment0 + "." + segment1).
-	val signing_input = _dup_string(&segments[0]) + "." + _dup_string(&segments[1]);
-	val signing_input_bytes = _string_bytes(&signing_input);
-	val expected_signature = crypto.hmac_sha256(secret, &signing_input_bytes);
+	val signing_input = _dup_string(segments[0]) + "." + _dup_string(segments[1]);
+	val signing_input_bytes = _string_bytes(signing_input);
+	val expected_signature = crypto.hmac_sha256(secret, signing_input_bytes);
 	// 5. Constant-time signature comparison.
-	if not crypto.constant_time_eq(&expected_signature, &signature_bytes) {
+	if not crypto.constant_time_eq(expected_signature, signature_bytes) {
 		return core.Result::Err(errors.jwt_error(errors.TAG_SIGNATURE_MISMATCH, "signature verification failed"));
 	}
 	// 6. Parse payload JSON and validate temporal claims.
-	val payload_json = _bytes_to_string(&payload_bytes);
+	val payload_json = _bytes_to_string(payload_bytes);
 	var payload_node = json.JsonNode::Null();
-	match json.parse(&payload_json) {
+	match json.parse(payload_json) {
 		core.Result::Ok(v) => { payload_node = move v; },
 		core.Result::Err(_) => { return core.Result::Err(errors.jwt_error(errors.TAG_INVALID_PAYLOAD_JSON, "payload is not valid JSON")); }
 	}
-	match claims.validate_temporal_claims(&payload_node, now_unix, policy) {
+	match claims.validate_temporal_claims(payload_node, now_unix, policy) {
 		core.Result::Ok(_) => {},
 		core.Result::Err(e) => { return core.Result::Err(e); }
 	}

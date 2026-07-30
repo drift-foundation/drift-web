@@ -41,14 +41,14 @@ fn _validate_header(header_json: &String, opts: &model.SignOptions) nothrow -> c
 		core.Result::Err(_) => { return core.Result::Err(errors.jwt_error(errors.TAG_INVALID_HEADER_JSON, "header is not valid JSON")); }
 	}
 	val alg_key = "alg";
-	match header_node.get(&alg_key) {
+	match header_node.get(alg_key) {
 		Optional::None => { return core.Result::Err(errors.jwt_error(errors.TAG_MISSING_ALG, "header missing alg field")); },
 		Optional::Some(alg_node) => {
 			match alg_node.as_string() {
 				Optional::None => { return core.Result::Err(errors.jwt_error(errors.TAG_UNSUPPORTED_ALG, "alg is not a string")); },
 				Optional::Some(alg_str) => {
 					if alg_str != "HS256" {
-						return core.Result::Err(errors.jwt_error(errors.TAG_UNSUPPORTED_ALG, "unsupported alg: " + _dup_string(&alg_str)));
+						return core.Result::Err(errors.jwt_error(errors.TAG_UNSUPPORTED_ALG, "unsupported alg: " + _dup_string(alg_str)));
 					}
 				}
 			}
@@ -56,7 +56,7 @@ fn _validate_header(header_json: &String, opts: &model.SignOptions) nothrow -> c
 	}
 	if opts.enforce_typ_jwt {
 		val typ_key = "typ";
-		match header_node.get(&typ_key) {
+		match header_node.get(typ_key) {
 			Optional::None => { return core.Result::Err(errors.jwt_error(errors.TAG_HEADER_TYP_MISMATCH, "header missing typ field")); },
 			Optional::Some(typ_node) => {
 				match typ_node.as_string() {
@@ -80,11 +80,11 @@ pub fn sign_hs256_impl(header_json: &String, payload_json: &String, secret: &Arr
 	}
 	val header_bytes = _string_bytes(header_json);
 	val payload_bytes = _string_bytes(payload_json);
-	val segment0 = codec.base64url_encode(&header_bytes);
-	val segment1 = codec.base64url_encode(&payload_bytes);
+	val segment0 = codec.base64url_encode(header_bytes);
+	val segment1 = codec.base64url_encode(payload_bytes);
 	val signing_input = segment0 + "." + segment1;
-	val signing_input_bytes = _string_bytes(&signing_input);
-	val signature = crypto.hmac_sha256(secret, &signing_input_bytes);
-	val segment2 = codec.base64url_encode(&signature);
+	val signing_input_bytes = _string_bytes(signing_input);
+	val signature = crypto.hmac_sha256(secret, signing_input_bytes);
+	val segment2 = codec.base64url_encode(signature);
 	return core.Result::Ok(signing_input + "." + segment2);
 }

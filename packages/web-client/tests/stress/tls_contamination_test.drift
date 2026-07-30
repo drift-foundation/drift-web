@@ -54,7 +54,7 @@ fn _assert_health(session: &client.Session, port: Int, label: &String) nothrow -
 				console.println(*label + " status " + fmt.format_int(resp.status));
 				return 2;
 			}
-			match client.response_body_string(&resp) {
+			match client.response_body_string(resp) {
 				core.Result::Err(_) => { return 3; },
 				core.Result::Ok(body) => {
 					val expected = "{\"ok\": true}";
@@ -72,10 +72,10 @@ fn _assert_health(session: &client.Session, port: Int, label: &String) nothrow -
 // Verify TLS failure on a session with wrong trust.
 fn _assert_tls_fail_wrong_trust(port: Int) nothrow -> Int {
 	var cfg = client.new_client_config();
-	client.with_tls_trust_store(&mut cfg, client.TrustStore::PemFile(path = "/nonexistent/ca.crt"));
+	client.with_tls_trust_store(cfg, client.TrustStore::PemFile(path = "/nonexistent/ca.crt"));
 	var session = client.new_session(move cfg);
 	val url = "https://127.0.0.1:" + fmt.format_int(port) + "/health";
-	match client.get(&session, url) {
+	match client.get(session, url) {
 		core.Result::Ok(_) => { return 1; },
 		core.Result::Err(e) => {
 			if e.tag != client.TAG_TLS_FAILED { return 2; }
@@ -87,10 +87,10 @@ fn _assert_tls_fail_wrong_trust(port: Int) nothrow -> Int {
 // Verify TLS failure on hostname mismatch.
 fn _assert_tls_fail_hostname(wrong_host_port: Int, ca_path: &String) nothrow -> Int {
 	var cfg = client.new_client_config();
-	client.with_tls_trust_store(&mut cfg, client.TrustStore::PemFile(path = *ca_path));
+	client.with_tls_trust_store(cfg, client.TrustStore::PemFile(path = *ca_path));
 	var session = client.new_session(move cfg);
 	val url = "https://127.0.0.1:" + fmt.format_int(wrong_host_port) + "/health";
-	match client.get(&session, url) {
+	match client.get(session, url) {
 		core.Result::Ok(_) => { return 1; },
 		core.Result::Err(e) => {
 			if e.tag != client.TAG_TLS_FAILED { return 2; }
@@ -115,7 +115,7 @@ pub fn main() nothrow -> Int {
 
 	// Create the "good" session — lives across all 20 cycles.
 	var cfg = client.new_client_config();
-	client.with_tls_trust_store(&mut cfg, client.TrustStore::PemFile(path = ca_path));
+	client.with_tls_trust_store(cfg, client.TrustStore::PemFile(path = ca_path));
 	var good_session = client.new_session(move cfg);
 
 	val cycles = 20;
@@ -126,7 +126,7 @@ pub fn main() nothrow -> Int {
 
 		// Step 1: good session → 200
 		val pre_label = cycle_label + " pre";
-		val s1 = _assert_health(&good_session, https_port, &pre_label);
+		val s1 = _assert_health(good_session, https_port, pre_label);
 		if s1 != 0 {
 			console.println("FAIL: " + cycle_label + " step 1 (pre-good) code " + fmt.format_int(s1));
 			return base + 1;
@@ -142,7 +142,7 @@ pub fn main() nothrow -> Int {
 			}
 		} else {
 			if wrong_host_port >= 0 {
-				val s2 = _assert_tls_fail_hostname(wrong_host_port, &ca_path);
+				val s2 = _assert_tls_fail_hostname(wrong_host_port, ca_path);
 				if s2 != 0 {
 					console.println("FAIL: " + cycle_label + " step 2 (hostname-mismatch) code " + fmt.format_int(s2));
 					return base + 3;
@@ -159,7 +159,7 @@ pub fn main() nothrow -> Int {
 
 		// Step 3: good session again — the contamination check
 		val post_label = cycle_label + " post";
-		val s3 = _assert_health(&good_session, https_port, &post_label);
+		val s3 = _assert_health(good_session, https_port, post_label);
 		if s3 != 0 {
 			console.println("FAIL: " + cycle_label + " step 3 (post-good) code " + fmt.format_int(s3));
 			return base + 4;

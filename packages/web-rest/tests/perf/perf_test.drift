@@ -140,7 +140,7 @@ fn _write_raw(stream: &net.TcpStream, s: &String, timeout: conc.Duration) nothro
 		io.buffer_write(&mut wbuf, i, bytes[i]);
 		i = i + 1;
 	}
-	match stream.write(&wbuf, timeout) {
+	match stream.write(wbuf, timeout) {
 		core.Result::Err(_) => { return core.Result::Err(1); },
 		core.Result::Ok(_) => { return core.Result::Ok(core.void_value()); }
 	}
@@ -173,7 +173,7 @@ fn _read_one_response(stream: &net.TcpStream, buf: &mut Array<Byte>, timeout: co
 
 		if !done {
 			var rbuf = io.buffer(4096);
-			match stream.read(&mut rbuf, timeout) {
+			match stream.read(rbuf, timeout) {
 				core.Result::Err(_) => { return core.Result::Err(1); },
 				core.Result::Ok(n) => {
 					if n == 0 {
@@ -296,7 +296,7 @@ fn _vt_server_loop(listener: net.TcpListener, max_requests: Int, timeout: conc.D
 							conn_alive = false;
 						}
 						if conn_alive {
-							match stream.read(&mut rbuf, timeout) {
+							match stream.read(rbuf, timeout) {
 								core.Result::Err(_) => {
 									conn_alive = false;
 								},
@@ -321,7 +321,7 @@ fn _vt_server_loop(listener: net.TcpListener, max_requests: Int, timeout: conc.D
 											si = si + 1;
 										}
 										if found {
-											match stream.write(&wbuf, timeout) {
+											match stream.write(wbuf, timeout) {
 												core.Result::Err(_) => {
 													conn_alive = false;
 												},
@@ -359,7 +359,7 @@ fn _vt_client_loop(port: Int, warmup_n: Int, measure_n: Int, timeout: conc.Durat
 	val resp_len = 63;
 
 	var addr = net.socket_addr("127.0.0.1", port);
-	match net.connect(&addr, timeout) {
+	match net.connect(addr, timeout) {
 		core.Result::Err(_) => { return -1; },
 		core.Result::Ok(conn) => {
 			var stream = move conn;
@@ -367,13 +367,13 @@ fn _vt_client_loop(port: Int, warmup_n: Int, measure_n: Int, timeout: conc.Durat
 			// Warmup
 			var i = 0;
 			while i < warmup_n {
-				match stream.write(&wbuf, timeout) {
+				match stream.write(wbuf, timeout) {
 					core.Result::Err(_) => { val _ = stream.close(timeout); return -10; },
 					core.Result::Ok(_) => {}
 				}
 				var got = 0;
 				while got < resp_len {
-					match stream.read(&mut rbuf, timeout) {
+					match stream.read(rbuf, timeout) {
 						core.Result::Err(_) => { val _ = stream.close(timeout); return -11; },
 						core.Result::Ok(n) => {
 							if n == 0 { val _ = stream.close(timeout); return -12; }
@@ -388,13 +388,13 @@ fn _vt_client_loop(port: Int, warmup_n: Int, measure_n: Int, timeout: conc.Durat
 			val start = time.now_monotonic();
 			var mi = 0;
 			while mi < measure_n {
-				match stream.write(&wbuf, timeout) {
+				match stream.write(wbuf, timeout) {
 					core.Result::Err(_) => { val _ = stream.close(timeout); return -20; },
 					core.Result::Ok(_) => {}
 				}
 				var got = 0;
 				while got < resp_len {
-					match stream.read(&mut rbuf, timeout) {
+					match stream.read(rbuf, timeout) {
 						core.Result::Err(_) => { val _ = stream.close(timeout); return -21; },
 						core.Result::Ok(n) => {
 							if n == 0 { val _ = stream.close(timeout); return -22; }
@@ -404,7 +404,7 @@ fn _vt_client_loop(port: Int, warmup_n: Int, measure_n: Int, timeout: conc.Durat
 				}
 				mi = mi + 1;
 			}
-			val elapsed = time.elapsed_ms(&start);
+			val elapsed = time.elapsed_ms(start);
 			val _ = stream.close(timeout);
 			return elapsed;
 		}
@@ -429,7 +429,7 @@ fn bench_baseline_vt() nothrow -> core.Result<Int, Int> {
 	val total_n = warmup_n + measure_n;
 
 	var addr = net.socket_addr("127.0.0.1", 0);
-	match net.listen(&addr, timeout) {
+	match net.listen(addr, timeout) {
 		core.Result::Err(_) => { return core.Result::Err(1); },
 		core.Result::Ok(lst) => {
 			var listener = move lst;
@@ -484,7 +484,7 @@ fn _health_handler(req: &rest.Request, c: &mut rest.Context) nothrow -> core.Res
 fn _rest_client_loop(port: Int, warmup_n: Int, measure_n: Int, timeout: conc.Duration) nothrow -> Int {
 	val req = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
 	var addr = net.socket_addr("127.0.0.1", port);
-	match net.connect(&addr, timeout) {
+	match net.connect(addr, timeout) {
 		core.Result::Err(_) => { return -4; },
 		core.Result::Ok(conn) => {
 			var stream = move conn;
@@ -493,11 +493,11 @@ fn _rest_client_loop(port: Int, warmup_n: Int, measure_n: Int, timeout: conc.Dur
 			// Warmup
 			var wi = 0;
 			while wi < warmup_n {
-				match _write_raw(&stream, &req, timeout) {
+				match _write_raw(stream, req, timeout) {
 					core.Result::Err(_) => { val _ = stream.close(timeout); return -10; },
 					core.Result::Ok(_) => {}
 				}
-				match _read_one_response(&stream, &mut read_buf, timeout) {
+				match _read_one_response(stream, read_buf, timeout) {
 					core.Result::Err(_) => { val _ = stream.close(timeout); return -11; },
 					core.Result::Ok(_) => {}
 				}
@@ -508,17 +508,17 @@ fn _rest_client_loop(port: Int, warmup_n: Int, measure_n: Int, timeout: conc.Dur
 			val start = time.now_monotonic();
 			var mi = 0;
 			while mi < measure_n {
-				match _write_raw(&stream, &req, timeout) {
+				match _write_raw(stream, req, timeout) {
 					core.Result::Err(_) => { val _ = stream.close(timeout); return -20; },
 					core.Result::Ok(_) => {}
 				}
-				match _read_one_response(&stream, &mut read_buf, timeout) {
+				match _read_one_response(stream, read_buf, timeout) {
 					core.Result::Err(_) => { val _ = stream.close(timeout); return -21; },
 					core.Result::Ok(_) => {}
 				}
 				mi = mi + 1;
 			}
-			val elapsed = time.elapsed_ms(&start);
+			val elapsed = time.elapsed_ms(start);
 			val _ = stream.close(timeout);
 			return elapsed;
 		}
@@ -540,12 +540,12 @@ fn bench_baseline_health() nothrow -> core.Result<Int, Int> {
 	val measure_n = 5000;
 
 	var b = rest.new_app_builder();
-	rest.bind(&mut b, "127.0.0.1", 0);
+	rest.bind(b, "127.0.0.1", 0);
 	match rest.build_app(move b) {
 		core.Result::Err(_) => { return core.Result::Err(1); },
 		core.Result::Ok(a) => {
 			var app = move a;
-			match rest.add_route(&mut app, "GET", "/health", core.callback2(_health_handler)) {
+			match rest.add_route(app, "GET", "/health", core.callback2(_health_handler)) {
 				core.Result::Err(_) => { return core.Result::Err(2); },
 				core.Result::Ok(_) => {}
 			}
@@ -553,7 +553,7 @@ fn bench_baseline_health() nothrow -> core.Result<Int, Int> {
 				core.Result::Err(_) => { return core.Result::Err(3); },
 				core.Result::Ok(rs) => {
 					var server = move rs;
-					val port = rest.server_port(&server);
+					val port = rest.server_port(server);
 
 					// Client on VT fiber (epoll path, no 10ms poll quantum).
 					var cl = conc.spawn_cb(| | captures(copy port, copy warmup_n, copy measure_n, copy timeout) => {
@@ -564,12 +564,12 @@ fn bench_baseline_health() nothrow -> core.Result<Int, Int> {
 					var elapsed = 0;
 					match cl.join() {
 						core.Result::Err(_) => {
-							val _ = rest.shutdown(&mut server);
+							val _ = rest.shutdown(server);
 							return core.Result::Err(40);
 						},
 						core.Result::Ok(result) => {
 							if result < 0 {
-								val _ = rest.shutdown(&mut server);
+								val _ = rest.shutdown(server);
 								return core.Result::Err(-(result));
 							}
 							elapsed = result;
@@ -577,7 +577,7 @@ fn bench_baseline_health() nothrow -> core.Result<Int, Int> {
 					}
 
 					// Shutdown server.
-					match rest.shutdown(&mut server) {
+					match rest.shutdown(server) {
 						core.Result::Err(_) => { return core.Result::Err(30); },
 						core.Result::Ok(_) => {}
 					}

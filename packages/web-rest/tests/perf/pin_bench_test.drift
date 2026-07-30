@@ -40,7 +40,7 @@ fn _report(name: String, iters: Int, elapsed_ms: Int, acc: Int) nothrow -> Void 
 
 pub fn main() nothrow -> Int {
 	val req_str = "GET /health?verbose=1 HTTP/1.1\r\nHost: localhost\r\nAccept: application/json\r\n\r\n";
-	val raw = _to_bytes(&req_str);
+	val raw = _to_bytes(req_str);
 
 	// --- parse ---
 	val n_parse = 300000;
@@ -48,13 +48,13 @@ pub fn main() nothrow -> Int {
 	var start = time.now_monotonic();
 	var i = 0;
 	while i < n_parse {
-		match http.parse_request(&raw) {
+		match http.parse_request(raw) {
 			core.Result::Err(_) => { acc = acc - 1; },
 			core.Result::Ok(r) => { acc = acc + r.path.byte_length(); }
 		}
 		i = i + 1;
 	}
-	_report("parse", n_parse, time.elapsed_ms(&start), acc);
+	_report("parse", n_parse, time.elapsed_ms(start), acc);
 
 	// --- serialize ---
 	val n_ser = 500000;
@@ -63,17 +63,17 @@ pub fn main() nothrow -> Int {
 	start = time.now_monotonic();
 	i = 0;
 	while i < n_ser {
-		val out = http.serialize_response(&resp, false);
+		val out = http.serialize_response(resp, false);
 		acc = acc + out.len;
 		i = i + 1;
 	}
-	_report("serialize", n_ser, time.elapsed_ms(&start), acc);
+	_report("serialize", n_ser, time.elapsed_ms(start), acc);
 
 	// --- route ---
 	val n_route = 1000000;
 	val health_path = "/health";
 	var pat_ok = false;
-	match router.parse_route_pattern(&health_path) {
+	match router.parse_route_pattern(health_path) {
 		core.Result::Err(_) => {},
 		core.Result::Ok(p) => {
 			val pat = move p;
@@ -82,24 +82,24 @@ pub fn main() nothrow -> Int {
 			start = time.now_monotonic();
 			i = 0;
 			while i < n_route {
-				val segs = router.split_path(&health_path);
-				if router.match_route(&pat, &segs) {
+				val segs = router.split_path(health_path);
+				if router.match_route(pat, segs) {
 					acc = acc + segs.len;
 				}
 				i = i + 1;
 			}
-			_report("route", n_route, time.elapsed_ms(&start), acc);
+			_report("route", n_route, time.elapsed_ms(start), acc);
 
 			acc = 0;
 			start = time.now_monotonic();
 			i = 0;
 			while i < n_route {
-				if router.match_route_path(&pat, &health_path) {
+				if router.match_route_path(pat, health_path) {
 					acc = acc + 1;
 				}
 				i = i + 1;
 			}
-			_report("route_path", n_route, time.elapsed_ms(&start), acc);
+			_report("route_path", n_route, time.elapsed_ms(start), acc);
 		}
 	}
 	if !pat_ok {
@@ -121,7 +121,7 @@ pub fn main() nothrow -> Int {
 		}
 		i = i + 1;
 	}
-	_report("sba_scan", n_scan, time.elapsed_ms(&start), acc);
+	_report("sba_scan", n_scan, time.elapsed_ms(start), acc);
 
 	// --- materialize: one 7-byte String construct + drop per iter ---
 	val n_mat = 2000000;
@@ -139,7 +139,7 @@ pub fn main() nothrow -> Int {
 		acc = acc + s.byte_length();
 		i = i + 1;
 	}
-	_report("materialize", n_mat, time.elapsed_ms(&start), acc);
+	_report("materialize", n_mat, time.elapsed_ms(start), acc);
 
 	// --- str_eq: String equality per iter (route-match shape) ---
 	val n_eq = 2000000;
@@ -160,7 +160,7 @@ pub fn main() nothrow -> Int {
 		}
 		i = i + 1;
 	}
-	_report("str_eq", n_eq, time.elapsed_ms(&start), acc);
+	_report("str_eq", n_eq, time.elapsed_ms(start), acc);
 
 	// --- byte_scan (control) ---
 	acc = 0;
@@ -174,7 +174,7 @@ pub fn main() nothrow -> Int {
 		}
 		i = i + 1;
 	}
-	_report("byte_scan", n_scan, time.elapsed_ms(&start), acc);
+	_report("byte_scan", n_scan, time.elapsed_ms(start), acc);
 
 	thread.console_writeln("[pin] DONE");
 	return 0;

@@ -198,7 +198,7 @@ fn _seg_eq(path: &String, start: Int, end: Int, target: &String) nothrow -> Bool
 }
 
 // match_route over the raw path: identical result to
-// match_route(pattern, &split_path(path)) without building the segment array.
+// match_route(pattern, split_path(path)) without building the segment array.
 pub fn match_route_path(pattern: &RoutePattern, path: &String) nothrow -> Bool {
 	val len = path.byte_length();
 	var cursor = 0;
@@ -212,7 +212,7 @@ pub fn match_route_path(pattern: &RoutePattern, path: &String) nothrow -> Bool {
 				return false;
 			}
 			if !pattern.seg_is_param[seg_idx] {
-				if !_seg_eq(path, cursor, seg_end, &pattern.seg_values[seg_idx]) {
+				if !_seg_eq(path, cursor, seg_end, pattern.seg_values[seg_idx]) {
 					return false;
 				}
 			}
@@ -238,7 +238,7 @@ pub fn extract_path_params_path(pattern: &RoutePattern, path: &String, req: &mut
 				return core.void_value();
 			}
 			if pattern.seg_is_param[seg_idx] {
-				request.add_path_param(req, _dup_string(&pattern.seg_param_names[seg_idx]), _substring(path, cursor, seg_end));
+				request.add_path_param(req, _dup_string(pattern.seg_param_names[seg_idx]), _substring(path, cursor, seg_end));
 			}
 			seg_idx = seg_idx + 1;
 			cursor = seg_end;
@@ -252,7 +252,7 @@ pub fn extract_path_params(pattern: &RoutePattern, segments: &Array<String>, req
 	var i = 0;
 	while i < pattern.seg_count {
 		if pattern.seg_is_param[i] {
-			request.add_path_param(req, _dup_string(&pattern.seg_param_names[i]), _dup_string(&segments[i]));
+			request.add_path_param(req, _dup_string(pattern.seg_param_names[i]), _dup_string(segments[i]));
 		}
 		i = i + 1;
 	}

@@ -18,7 +18,7 @@ fn _sign(payload: &String) nothrow -> core.Result<String, jwt.JwtError> {
 	val header = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}";
 	var secret = _test_secret();
 	var opts = jwt.new_sign_options();
-	return jwt.sign_hs256(&header, payload, &secret, &opts);
+	return jwt.sign_hs256(header, payload, secret, opts);
 }
 
 fn _policy(skew: Int, max_iat: Int) nothrow -> jwt.JwtVerifyPolicy {
@@ -36,14 +36,14 @@ fn _policy(skew: Int, max_iat: Int) nothrow -> jwt.JwtVerifyPolicy {
 fn scenario_expired_token() nothrow -> Int {
 	val payload = "{\"sub\":\"u1\",\"exp\":1700000000}";
 	var token = "";
-	match _sign(&payload) {
+	match _sign(payload) {
 		core.Result::Ok(v) => { token = move v; },
 		core.Result::Err(_) => { return 101; }
 	}
 	var secret = _test_secret();
 	val policy = _policy(0, 0);
 	// now is well past exp
-	match jwt.verify_hs256(&token, &secret, 1700001000, &policy) {
+	match jwt.verify_hs256(token, secret, 1700001000, policy) {
 		core.Result::Ok(_) => { return 102; },
 		core.Result::Err(e) => {
 			if e.tag != "jwt-expired" { return 103; }
@@ -55,14 +55,14 @@ fn scenario_expired_token() nothrow -> Int {
 fn scenario_expired_within_skew_accepted() nothrow -> Int {
 	val payload = "{\"sub\":\"u1\",\"exp\":1700000000}";
 	var token = "";
-	match _sign(&payload) {
+	match _sign(payload) {
 		core.Result::Ok(v) => { token = move v; },
 		core.Result::Err(_) => { return 201; }
 	}
 	var secret = _test_secret();
 	// now_unix = exp + 10 seconds, skew = 30 seconds → should pass
 	val policy = _policy(30, 0);
-	match jwt.verify_hs256(&token, &secret, 1700000010, &policy) {
+	match jwt.verify_hs256(token, secret, 1700000010, policy) {
 		core.Result::Ok(_) => { return 0; },
 		core.Result::Err(_) => { return 202; }
 	}
@@ -71,14 +71,14 @@ fn scenario_expired_within_skew_accepted() nothrow -> Int {
 fn scenario_expired_beyond_skew_rejected() nothrow -> Int {
 	val payload = "{\"sub\":\"u1\",\"exp\":1700000000}";
 	var token = "";
-	match _sign(&payload) {
+	match _sign(payload) {
 		core.Result::Ok(v) => { token = move v; },
 		core.Result::Err(_) => { return 301; }
 	}
 	var secret = _test_secret();
 	// now_unix = exp + 31, skew = 30 → now(exp+31) > exp(1700000000) + skew(30) → rejected
 	val policy = _policy(30, 0);
-	match jwt.verify_hs256(&token, &secret, 1700000031, &policy) {
+	match jwt.verify_hs256(token, secret, 1700000031, policy) {
 		core.Result::Ok(_) => { return 302; },
 		core.Result::Err(e) => {
 			if e.tag != "jwt-expired" { return 303; }
@@ -90,14 +90,14 @@ fn scenario_expired_beyond_skew_rejected() nothrow -> Int {
 fn scenario_not_before_rejected() nothrow -> Int {
 	val payload = "{\"sub\":\"u1\",\"nbf\":1700000100}";
 	var token = "";
-	match _sign(&payload) {
+	match _sign(payload) {
 		core.Result::Ok(v) => { token = move v; },
 		core.Result::Err(_) => { return 401; }
 	}
 	var secret = _test_secret();
 	val policy = _policy(0, 0);
 	// now = 1700000000, nbf = 1700000100 → now + skew(0) < nbf → rejected
-	match jwt.verify_hs256(&token, &secret, 1700000000, &policy) {
+	match jwt.verify_hs256(token, secret, 1700000000, policy) {
 		core.Result::Ok(_) => { return 402; },
 		core.Result::Err(e) => {
 			if e.tag != "jwt-not-before" { return 403; }
@@ -109,14 +109,14 @@ fn scenario_not_before_rejected() nothrow -> Int {
 fn scenario_not_before_within_skew_accepted() nothrow -> Int {
 	val payload = "{\"sub\":\"u1\",\"nbf\":1700000100}";
 	var token = "";
-	match _sign(&payload) {
+	match _sign(payload) {
 		core.Result::Ok(v) => { token = move v; },
 		core.Result::Err(_) => { return 501; }
 	}
 	var secret = _test_secret();
 	// now = 1700000090, nbf = 1700000100, skew = 30 → now + skew(30) = 1700000120 >= nbf → pass
 	val policy = _policy(30, 0);
-	match jwt.verify_hs256(&token, &secret, 1700000090, &policy) {
+	match jwt.verify_hs256(token, secret, 1700000090, policy) {
 		core.Result::Ok(_) => { return 0; },
 		core.Result::Err(_) => { return 502; }
 	}
@@ -125,7 +125,7 @@ fn scenario_not_before_within_skew_accepted() nothrow -> Int {
 fn scenario_iat_future_rejected() nothrow -> Int {
 	val payload = "{\"sub\":\"u1\",\"iat\":1700001000}";
 	var token = "";
-	match _sign(&payload) {
+	match _sign(payload) {
 		core.Result::Ok(v) => { token = move v; },
 		core.Result::Err(_) => { return 601; }
 	}
@@ -133,7 +133,7 @@ fn scenario_iat_future_rejected() nothrow -> Int {
 	// now = 1700000000, iat = 1700001000, max_future_iat_sec = 300
 	// iat(1700001000) > now(1700000000) + max(300) = 1700000300 → rejected
 	val policy = _policy(0, 300);
-	match jwt.verify_hs256(&token, &secret, 1700000000, &policy) {
+	match jwt.verify_hs256(token, secret, 1700000000, policy) {
 		core.Result::Ok(_) => { return 602; },
 		core.Result::Err(e) => {
 			if e.tag != "jwt-issued-at-future" { return 603; }
@@ -145,7 +145,7 @@ fn scenario_iat_future_rejected() nothrow -> Int {
 fn scenario_iat_future_within_tolerance_accepted() nothrow -> Int {
 	val payload = "{\"sub\":\"u1\",\"iat\":1700000200}";
 	var token = "";
-	match _sign(&payload) {
+	match _sign(payload) {
 		core.Result::Ok(v) => { token = move v; },
 		core.Result::Err(_) => { return 701; }
 	}
@@ -153,7 +153,7 @@ fn scenario_iat_future_within_tolerance_accepted() nothrow -> Int {
 	// now = 1700000000, iat = 1700000200, max_future_iat_sec = 300
 	// iat(1700000200) <= now(1700000000) + max(300) = 1700000300 → accepted
 	val policy = _policy(0, 300);
-	match jwt.verify_hs256(&token, &secret, 1700000000, &policy) {
+	match jwt.verify_hs256(token, secret, 1700000000, policy) {
 		core.Result::Ok(_) => { return 0; },
 		core.Result::Err(_) => { return 702; }
 	}
@@ -162,13 +162,13 @@ fn scenario_iat_future_within_tolerance_accepted() nothrow -> Int {
 fn scenario_non_numeric_exp_rejected() nothrow -> Int {
 	val payload = "{\"sub\":\"u1\",\"exp\":\"not-a-number\"}";
 	var token = "";
-	match _sign(&payload) {
+	match _sign(payload) {
 		core.Result::Ok(v) => { token = move v; },
 		core.Result::Err(_) => { return 801; }
 	}
 	var secret = _test_secret();
 	val policy = _policy(0, 0);
-	match jwt.verify_hs256(&token, &secret, 1700000000, &policy) {
+	match jwt.verify_hs256(token, secret, 1700000000, policy) {
 		core.Result::Ok(_) => { return 802; },
 		core.Result::Err(e) => {
 			if e.tag != "jwt-claim-invalid-type" { return 803; }
@@ -180,13 +180,13 @@ fn scenario_non_numeric_exp_rejected() nothrow -> Int {
 fn scenario_non_numeric_nbf_rejected() nothrow -> Int {
 	val payload = "{\"sub\":\"u1\",\"nbf\":true}";
 	var token = "";
-	match _sign(&payload) {
+	match _sign(payload) {
 		core.Result::Ok(v) => { token = move v; },
 		core.Result::Err(_) => { return 901; }
 	}
 	var secret = _test_secret();
 	val policy = _policy(0, 0);
-	match jwt.verify_hs256(&token, &secret, 1700000000, &policy) {
+	match jwt.verify_hs256(token, secret, 1700000000, policy) {
 		core.Result::Ok(_) => { return 902; },
 		core.Result::Err(e) => {
 			if e.tag != "jwt-claim-invalid-type" { return 903; }
@@ -198,13 +198,13 @@ fn scenario_non_numeric_nbf_rejected() nothrow -> Int {
 fn scenario_no_temporal_claims_accepted() nothrow -> Int {
 	val payload = "{\"sub\":\"u1\"}";
 	var token = "";
-	match _sign(&payload) {
+	match _sign(payload) {
 		core.Result::Ok(v) => { token = move v; },
 		core.Result::Err(_) => { return 1001; }
 	}
 	var secret = _test_secret();
 	val policy = _policy(0, 0);
-	match jwt.verify_hs256(&token, &secret, 1700000000, &policy) {
+	match jwt.verify_hs256(token, secret, 1700000000, policy) {
 		core.Result::Ok(_) => { return 0; },
 		core.Result::Err(_) => { return 1002; }
 	}

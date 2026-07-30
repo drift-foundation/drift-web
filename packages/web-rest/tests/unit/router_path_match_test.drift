@@ -19,17 +19,17 @@ fn _pattern(raw: &String) nothrow -> core.Result<router.RoutePattern, Int> {
 
 // Returns 0 when both matchers agree AND equal `expect` (0=false, 1=true).
 fn _check_match(pattern_raw: String, path: String, expect: Int) nothrow -> Int {
-	match _pattern(&pattern_raw) {
+	match _pattern(pattern_raw) {
 		core.Result::Err(_) => { return 1; },
 		core.Result::Ok(p) => {
 			val pat = move p;
-			val segs = router.split_path(&path);
+			val segs = router.split_path(path);
 			var got_old = 0;
-			if router.match_route(&pat, &segs) {
+			if router.match_route(pat, segs) {
 				got_old = 1;
 			}
 			var got_new = 0;
-			if router.match_route_path(&pat, &path) {
+			if router.match_route_path(pat, path) {
 				got_new = 1;
 			}
 			if got_old != got_new {
@@ -89,16 +89,16 @@ fn scenario_params() nothrow -> Int {
 
 // Compare extract_path_params vs extract_path_params_path on the same match.
 fn _check_extract(pattern_raw: String, path: String, name: String, want: String) nothrow -> Int {
-	match _pattern(&pattern_raw) {
+	match _pattern(pattern_raw) {
 		core.Result::Err(_) => { return 1; },
 		core.Result::Ok(p) => {
 			val pat = move p;
-			val segs = router.split_path(&path);
+			val segs = router.split_path(path);
 
 			var req_old = request.new_request("GET", "/x");
-			router.extract_path_params(&pat, &segs, &mut req_old);
+			router.extract_path_params(pat, segs, req_old);
 			var req_new = request.new_request("GET", "/x");
-			router.extract_path_params_path(&pat, &path, &mut req_new);
+			router.extract_path_params_path(pat, path, req_new);
 
 			if req_old.path_param_keys.len != req_new.path_param_keys.len {
 				thread.console_writeln("extract count disagreement: pattern=" + pattern_raw + " path=" + path);
@@ -106,12 +106,12 @@ fn _check_extract(pattern_raw: String, path: String, name: String, want: String)
 			}
 
 			var got_old = "";
-			match request.path_param(&req_old, &name) {
+			match request.path_param(req_old, name) {
 				core.Result::Err(_) => { return 3; },
 				core.Result::Ok(v) => { got_old = v; }
 			}
 			var got_new = "";
-			match request.path_param(&req_new, &name) {
+			match request.path_param(req_new, name) {
 				core.Result::Err(_) => { return 4; },
 				core.Result::Ok(v) => { got_new = v; }
 			}

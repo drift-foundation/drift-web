@@ -47,7 +47,7 @@ pub fn add_validation_error(ve: &mut ValidationErrors, field: String, tag: Strin
 }
 
 pub fn merge_validation_error(ve: &mut ValidationErrors, err: errors.RestError) nothrow -> Void {
-	match json.parse(&err.fields_json) {
+	match json.parse(err.fields_json) {
 		core.Result::Ok(node) => {
 			var it = node.entries();
 			while true {
@@ -77,7 +77,7 @@ pub fn validation_error(ve: ValidationErrors) nothrow -> errors.RestError {
 	var err = errors.rest_error(400, "request-invalid", "validation-failed", "input validation failed");
 	var i = 0;
 	while i < ve.field_keys.len {
-		errors.add_field(&mut err, ve.field_keys[i], ve.field_values[i]);
+		errors.add_field(err, ve.field_keys[i], ve.field_values[i]);
 		i = i + 1;
 	}
 	return move err;

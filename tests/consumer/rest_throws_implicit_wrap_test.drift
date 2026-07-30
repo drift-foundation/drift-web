@@ -58,7 +58,7 @@ implement AppTag {
 pub fn main() nothrow -> Int {
 	val timeout = conc.Duration(millis = 5000);
 	var b = rest.new_app_builder();
-	rest.bind(&mut b, "127.0.0.1", 0);
+	rest.bind(b, "127.0.0.1", 0);
 	match rest.build_app(move b) {
 		core.Result::Err(_) => { return 1; },
 		core.Result::Ok(a) => {
@@ -69,7 +69,7 @@ pub fn main() nothrow -> Int {
 			// resulting in E-AUTO-fc123347 / E-AUTO-d5fc8414.  Post-fix:
 			// lambda is implicitly wrapped via callback_throw2, params
 			// concretized from the candidate's CallbackThrow2 type args.
-			match rest.add_throws_route(&mut app, "GET", "/iw/ok", |req, ctx| => {
+			match rest.add_throws_route(app, "GET", "/iw/ok", |req, ctx| => {
 				return rest.json_response(200, "{\"iw\":\"ok\"}");
 			}) {
 				core.Result::Err(_) => { return 2; },
@@ -80,7 +80,7 @@ pub fn main() nothrow -> Int {
 			// throws-ness must NOT be the dispatch authority; the parameter
 			// type CallbackThrow2 is.  The lambda's own may-throw default
 			// composes correctly with the throws-variant wrap.
-			match rest.add_throws_route(&mut app, "POST", "/iw/bad", |req, ctx| => {
+			match rest.add_throws_route(app, "POST", "/iw/bad", |req, ctx| => {
 				return _throw_bad();
 			}) {
 				core.Result::Err(_) => { return 3; },
@@ -92,7 +92,7 @@ pub fn main() nothrow -> Int {
 			// shape, composing fix #1 (implicit throws-variant wrap) with
 			// fix #2 (share-capture).
 			val app_tag = conc.arc(AppTag(tag = 7));
-			match rest.add_throws_route(&mut app, "GET", "/iw/share", |req, ctx| captures(share app_tag) => {
+			match rest.add_throws_route(app, "GET", "/iw/share", |req, ctx| captures(share app_tag) => {
 				val a = app_tag.get();
 				return a.handle_ok(req, ctx);
 			}) {
@@ -102,10 +102,10 @@ pub fn main() nothrow -> Int {
 
 			// Site D — route-group throws route via add_route_group_throws_route +
 			// bare lambda. Same dispatch authority on the route-group surface.
-			match rest.add_route_group(&mut app, "/api") {
+			match rest.add_route_group(app, "/api") {
 				core.Result::Err(_) => { return 5; },
 				core.Result::Ok(rg) => {
-					match rest.add_route_group_throws_route(&mut app, &rg, "GET", "/iw/unauth", |req, ctx| => {
+					match rest.add_route_group_throws_route(app, rg, "GET", "/iw/unauth", |req, ctx| => {
 						return _throw_unauth();
 					}) {
 						core.Result::Err(_) => { return 6; },
@@ -118,25 +118,25 @@ pub fn main() nothrow -> Int {
 				core.Result::Err(_) => { return 7; },
 				core.Result::Ok(rs) => {
 					var running = move rs;
-					val port = rest.server_port(&running);
+					val port = rest.server_port(running);
 
 					// Site A: bare-lambda happy path → 200
-					val rc1 = _send_and_check(&running, port, "GET", "/iw/ok", 200, timeout);
-					if rc1 != 0 { val _ = rest.shutdown(&mut running); return 100 + rc1; }
+					val rc1 = _send_and_check(running, port, "GET", "/iw/ok", 200, timeout);
+					if rc1 != 0 { val _ = rest.shutdown(running); return 100 + rc1; }
 
 					// Site B: bare-lambda throws RestBadRequest → 400
-					val rc2 = _send_and_check(&running, port, "POST", "/iw/bad", 400, timeout);
-					if rc2 != 0 { val _ = rest.shutdown(&mut running); return 200 + rc2; }
+					val rc2 = _send_and_check(running, port, "POST", "/iw/bad", 400, timeout);
+					if rc2 != 0 { val _ = rest.shutdown(running); return 200 + rc2; }
 
 					// Site C: share-captured throwing-method-call lambda → 200
-					val rc3 = _send_and_check(&running, port, "GET", "/iw/share", 200, timeout);
-					if rc3 != 0 { val _ = rest.shutdown(&mut running); return 300 + rc3; }
+					val rc3 = _send_and_check(running, port, "GET", "/iw/share", 200, timeout);
+					if rc3 != 0 { val _ = rest.shutdown(running); return 300 + rc3; }
 
 					// Site D: group bare-lambda throws RestUnauthorized → 401
-					val rc4 = _send_and_check(&running, port, "GET", "/api/iw/unauth", 401, timeout);
-					if rc4 != 0 { val _ = rest.shutdown(&mut running); return 400 + rc4; }
+					val rc4 = _send_and_check(running, port, "GET", "/api/iw/unauth", 401, timeout);
+					if rc4 != 0 { val _ = rest.shutdown(running); return 400 + rc4; }
 
-					match rest.shutdown(&mut running) {
+					match rest.shutdown(running) {
 						core.Result::Err(_) => { return 99; },
 						core.Result::Ok(_) => {
 							console.println("consumer rest-throws-implicit-wrap: all 4 sites passed");
@@ -159,7 +159,7 @@ fn _send_and_check(running: &rest.RunningServer, port: Int, method: String, path
 	raw_req = raw_req + "\r\n";
 
 	var addr = net.socket_addr("127.0.0.1", port);
-	match net.connect(&addr, timeout) {
+	match net.connect(addr, timeout) {
 		core.Result::Err(_) => { return 1; },
 		core.Result::Ok(conn) => {
 			var stream = move conn;
@@ -167,10 +167,10 @@ fn _send_and_check(running: &rest.RunningServer, port: Int, method: String, path
 			var wbuf = io.buffer(bytes);
 			var i = 0;
 			while i < bytes {
-				io.buffer_write(&mut wbuf, i, core.string_byte_at(&raw_req, i));
+				io.buffer_write(&mut wbuf, i, core.string_byte_at(raw_req, i));
 				i = i + 1;
 			}
-			match stream.write(&wbuf, timeout) {
+			match stream.write(wbuf, timeout) {
 				core.Result::Err(_) => {
 					val _ = stream.close(timeout);
 					return 2;
@@ -181,7 +181,7 @@ fn _send_and_check(running: &rest.RunningServer, port: Int, method: String, path
 			var done = false;
 			while !done {
 				var rbuf = io.buffer(4096);
-				match stream.read(&mut rbuf, timeout) {
+				match stream.read(rbuf, timeout) {
 					core.Result::Err(_) => { done = true; },
 					core.Result::Ok(n) => {
 						if n == 0 { done = true; }

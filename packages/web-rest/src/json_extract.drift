@@ -14,12 +14,12 @@ export {
 
 fn _field_error(field: String, tag: String, message: String) nothrow -> errors.RestError {
 	var err = errors.rest_error(400, "request-invalid", tag, message);
-	errors.add_field(&mut err, field, tag);
+	errors.add_field(err, field, tag);
 	return move err;
 }
 
 pub fn require_json_string(node: &json.JsonNode, field: String) nothrow -> core.Result<String, errors.RestError> {
-	match node.get(&field) {
+	match node.get(field) {
 		Optional::None => {
 			return core.Result::Err(_field_error(field, "missing-field", "missing required field"));
 		},
@@ -37,7 +37,7 @@ pub fn require_json_string(node: &json.JsonNode, field: String) nothrow -> core.
 }
 
 pub fn require_json_int(node: &json.JsonNode, field: String) nothrow -> core.Result<Int, errors.RestError> {
-	match node.get(&field) {
+	match node.get(field) {
 		Optional::None => {
 			return core.Result::Err(_field_error(field, "missing-field", "missing required field"));
 		},
@@ -55,7 +55,7 @@ pub fn require_json_int(node: &json.JsonNode, field: String) nothrow -> core.Res
 }
 
 pub fn require_json_bool(node: &json.JsonNode, field: String) nothrow -> core.Result<Bool, errors.RestError> {
-	match node.get(&field) {
+	match node.get(field) {
 		Optional::None => {
 			return core.Result::Err(_field_error(field, "missing-field", "missing required field"));
 		},
@@ -73,7 +73,7 @@ pub fn require_json_bool(node: &json.JsonNode, field: String) nothrow -> core.Re
 }
 
 pub fn json_string(node: &json.JsonNode, field: String) nothrow -> Optional<String> {
-	match node.get(&field) {
+	match node.get(field) {
 		Optional::None => {
 			return Optional::None();
 		},
@@ -84,7 +84,7 @@ pub fn json_string(node: &json.JsonNode, field: String) nothrow -> Optional<Stri
 }
 
 pub fn json_int(node: &json.JsonNode, field: String) nothrow -> Optional<Int> {
-	match node.get(&field) {
+	match node.get(field) {
 		Optional::None => {
 			return Optional::None();
 		},
