@@ -3,3 +3,4 @@
 .codex-session
 .claude
 .codex
+__pycache__

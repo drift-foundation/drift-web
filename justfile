@@ -167,9 +167,13 @@ client-https-e2e: _require-env
     FLOCKER="${DRIFT_TOOLCHAIN_ROOT}/bin/flocker"
     JOBS="$(python3 "${DRIFT_TOOLCHAIN_ROOT}/lib/tools/drift_pytest_jobs.py" 2>/dev/null || echo 1)"
     WRAP=(); [[ -x "${FLOCKER}" ]] && WRAP=("${FLOCKER}" --key drift-jobs -j "${JOBS}" --)
+    # Dep derivation through the one site (tools/cert_deps.py): strict lane reads
+    # the committed lock; certify lane execs `drift lock emit --source-rebuild`.
+    # Shim stderr (certify evidence) flows to the gate log; set -e fails closed.
+    DEP_FLAGS="$(python3 tools/cert_deps.py --manifest drift/manifest.json --artifact web-client --lock drift/lock.json)"
     "${WRAP[@]}" "${DRIFTC}" --target-word-bits 64 \
       --package-root {{PKG_ROOT}} \
-      --dep "net-tls@$(jq -r '.artifacts["web-client"].resolved["net-tls"].version' drift/lock.json)" \
+      ${DEP_FLAGS} \
       --entry "web.client.tests.https.https_e2e_test::main" \
       packages/web-jwt/src/*.drift packages/web-rest/src/*.drift packages/web-client/src/*.drift \
       packages/web-client/tests/https/https_e2e_test.drift \

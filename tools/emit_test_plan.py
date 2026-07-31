@@ -28,6 +28,8 @@ import re
 import sys
 from pathlib import Path
 
+import cert_deps
+
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = ROOT / "drift" / "manifest.json"
 LOCK = ROOT / "drift" / "lock.json"
@@ -55,21 +57,31 @@ def resolve_artifact(artifact):
     target = arts.get(artifact)
     if not target:
         sys.exit(f"error: artifact {artifact!r} not in manifest")
-    resolved = {}
-    if LOCK.exists():
-        lock = json.loads(LOCK.read_text())
-        resolved = (lock.get("artifacts", {}).get(artifact, {}) or {}).get("resolved", {}) or {}
+    package_deps = target.get("package_deps", []) or []
+    co_names = [d["name"] for d in package_deps if d["name"] in arts]
+    # ONE derivation site (tools/cert_deps.py): strict lane reads the committed
+    # lock; certify lane (DRIFT_CERT_MODE=certify) execs the run toolchain's
+    # `drift lock emit --source-rebuild` — for every artifact, even ones with no
+    # external deps today, so the gate fails closed if a dep ever appears.
+    # Co-artifacts are excluded: their sources are compiled into the test binary.
+    resolved = cert_deps.resolved_versions(MANIFEST, artifact, LOCK, exclude=co_names)
+    certify = os.environ.get("DRIFT_CERT_MODE") == "certify"
     src_dirs, deps = set(), []
     for mod in target.get("modules", []):
         src_dirs.add(os.path.dirname(mod))
-    for dep in target.get("package_deps", []):
+    for dep in package_deps:
         name, ver = dep["name"], dep["version"]
         co = arts.get(name)
         if co:
             for mod in co.get("modules", []):
                 src_dirs.add(os.path.dirname(mod))
         else:
-            rv = resolved.get(name, {}).get("version") or ver
+            rv = resolved.get(name)
+            if not rv:
+                if certify:
+                    sys.exit(f"error: certify-lane resolution emitted no version for {name!r} "
+                             f"(artifact {artifact!r})")
+                rv = ver  # strict dev fallback: manifest range (lock-check guards staleness)
             deps.append(f"{name}@{rv}")
     return src_dirs, deps
 
@@ -211,17 +223,19 @@ CONSUMER_TESTS = [
 
 def emit_consumer(pkg_staging):
     man = json.loads(MANIFEST.read_text())
+    # Own artifacts are FIXTURE PINS: the packages under test, staged into
+    # pkg_staging by the harness at their manifest versions. Not upstream dep
+    # derivation — exempt from certify-lane lock-emit routing (044103Z §2).
     ver = {a["name"]: a["version"] for a in man.get("artifacts", [])}
-    if LOCK.exists():
-        lock = json.loads(LOCK.read_text())
-        nt = (lock.get("artifacts", {}).get("web-client", {}).get("resolved", {}) or {}).get("net-tls", {})
-        if nt.get("version"):
-            ver["net-tls"] = nt["version"]
+    # net-tls is a real upstream dep — derive it per lane through the one site.
+    ver.update(cert_deps.resolved_versions(MANIFEST, "web-client", LOCK, exclude=list(ver)))
     build, run = [], []
     for name, entry, src, ext, deps in CONSUMER_TESTS:
         pkg = ["--package-root", pkg_staging] + (["--package-root", PKG_ROOT] if ext else [])
         depflags = []
         for d in deps:
+            if d not in ver:
+                sys.exit(f"error: no resolved version for {d!r} (consumer test {name})")
             depflags += ["--dep", f"{d}@{ver[d]}"]
         out = f"{{work}}/{name}"
         build.append({"id": name, "out": out,
