@@ -384,3 +384,55 @@
   - `just test` — full suite green (unit/e2e plain + ASAN + memcheck; `client-https-e2e` against `net-tls@0.6.2`; `consumer-check` 30/30 against freshly published `.zdmp` 0.5.2/0.6.2/0.5.2)
   - `just stress` — all scenarios pass (REST concurrency, TLS contamination, pool-stale; + memcheck pass over the client scenarios)
   - `just perf-smoke` — informational; `drift_rest_ratio` 1.32/1.35 (two runs) missed its internal 1.40 gate, same signature as the 2026-06-26 environment-attributed miss (powersave governor on all cores, plus a long-running foreign process pinning one core at 100% — host not idle; Drift-side numbers quantized identical across runs, and above the 1.26 recorded then). `drift_raw_ratio` 0.94 and `drift_framework_ratio` 0.54 pass. Worth one re-run on a genuinely idle host before certification sign-off.
+
+## 2026-07-18
+
+- Perf-gate `framework_cost` threshold raised 1.92 → 2.11, accepting drift attributed to toolchain/host measurement conditions (interim; superseded by the full re-sample and tightening on 2026-07-26 below).
+
+## 2026-07-26
+
+- Investigated the 20260726-124202 cert-run perf failure on `drift-0.33.88+abi22` (`framework_cost` 2.13 > 2.11) and pinned attribution to the compiler, not drift-web:
+  - microbench decomposition showed `http.parse_request` +56% and route matching +73% under the ABI-22 RcBytes `String` representation, while byte-level scans got 6× faster
+  - root cause was found upstream (drift-lang `6921f01a`): a per-call `getenv("DRIFT_STR_TRACE")` in `drift_string_release`, fixed in `0.33.89` — String materialization returned to exact 0.33.87 parity
+  - findings shared with the compiler team as `work/string-lifecycle-cost-0.33.88/FINDINGS.md`
+- Realigned the `web.rest` string hot path to the new byte-scan idiom on `drift-0.33.89+abi22` (dual-track with the upstream fix, keeping the wins):
+  - `router.drift`: offset-based `match_route_path` / `extract_path_params_path` — no per-request segment allocations; exact `split_path` parity (including skipped empty segments); old API retained; new matcher ~10 ns/call vs 149 ns before
+  - `app.drift`: dispatch matches on `req.path` directly; param extraction uses a `mem.replace` path swap-out
+  - `http.drift`: removed a wasted per-header-value `_dup_string` copy; query params parsed straight from raw bytes (`_parse_query_bytes`), dead helpers removed
+  - added router parity coverage in `packages/web-rest/tests/unit/router_path_match_test.drift` (runs all lanes)
+- Bumped published versions: `web-rest@0.6.2` → `web-rest@0.6.3`; `web-client@0.5.2` → `web-client@0.5.3`. The web-client bump pins the pattern: web-jwt/web-rest sources compile INTO web-client, so web-client must bump whenever those sources change or consumer-check trips "same identity claim, different bytes". Claims re-minted, lock re-resolved.
+- Perf-gate thresholds fully re-sampled (`tools/perf_baseline_sample.sh`, 20 runs on staged 0.33.89 + realigned source; threshold = max × 1.15) and tightened: framework 2.11 → 1.95, rest 0.88 → 0.84, raw 1.37 → 1.22.
+- Validation under the staged toolchain `drift-0.33.89+abi22`:
+  - `just test` — full suite green (plain + ASAN + memcheck; https-e2e; consumer-check)
+  - `just stress` — all scenarios pass
+  - `just perf` — PASS: framework 1.61, health 185,185 rps (+26% over the failing 0.33.88 state; staged now faster than certified); informational `drift_rest_ratio` 1.48 ≥ 1.40 passed for the first time on record
+
+## 2026-07-30
+
+- Migrated to staged toolchain `drift-0.33.91+abi22` (reject-redundant-call-borrows):
+  - ~2,280 argument-borrow deletions across `src/`, tests, and examples — when a parameter is declared `&T`/`&mut T`, the call site now passes the value bare; migration was compiler-span-driven with sweeps iterated to convergence (0 mut-rvalue bindings, 0 mode-only overload conflicts, 0 workarounds)
+  - staged `net-tls@0.6.3`
+  - shipped docs migrated to the bare-call spelling; consumer floor `0.33.83+/ABI 21` → `0.33.91+/ABI 22` with the ABI-21-must-rebuild note (ABI 22 changed the `String` representation)
+  - examples fixed for pre-existing gaps (`pub fn main`, expression-form return, stale `utc_unix_millis` reference)
+  - review fixes: README dev setup now exports `DRIFT_TOOLCHAIN_ROOT`/`DRIFT_PKG_ROOT` (not `DRIFTC`), stale `&`-spelling comments in `router.drift` + `rest_or_throw_test`, `project-setup.md` `pub fn main`
+- Bumped published versions (patch): `web-jwt@0.5.2` → `0.5.3`, `web-rest@0.6.3` → `0.6.4`, `web-client@0.5.3` → `0.5.4`. Claims re-minted, lock re-resolved (`web-jwt@0.5.3`, `net-tls@0.6.3`).
+- Adopted certify-lane dependency derivation per build-orchestrator 043815Z: new `tools/cert_deps.py` shim (drift-workflows reference shape) — strict lane reads the committed lock, certify lane execs `drift lock emit --source-rebuild`.
+- Validation under the staged toolchain `drift-0.33.91+abi22`:
+  - `just test` — full suite green (plain + ASAN + memcheck; https-e2e; consumer 30/30)
+  - `just stress` — all scenarios pass
+  - `just perf` — PASS at parity with the 0.33.89 baselines (raw 1.00, rest 0.65, fw 1.61)
+  - `just trust-check` — green
+
+## 2026-08-05
+
+- Adopted staged toolchain `drift-0.35.0+abi22` (pre-cert; MariaDB is the release train's named initial adopter — drift-web adopted opportunistically):
+  - **zero source changes required** — the 0.35.0 lambda overhaul (unified lambda return typing, stored-capturing-lambda v1 contract requiring `core.callbackN(...)` for escaping captures, unqualified `Ok(...)` moving to ordinary `core.Result` variant resolution, divergent-body lowering) does not bite this codebase: stored captures already use the `callbackN` wrappers and Result construction is fully qualified throughout
+  - no `LANGUAGE_BUG` findings; full sweep (175 executor builds, stress/perf builds, inline https-e2e compile, all consumer programs) compiled clean on first pass
+- Lock re-resolved against the staged package root: `net-tls@0.6.3` → `net-tls@0.6.4`; lock `sha256` matches the 0.6.4 cert-claim canonical artifact hash; `just lock-check` (strict) up-to-date.
+- Bumped published versions (patch — compiler floor moved; published versions stay immutable): `web-jwt@0.5.3` → `0.5.4`, `web-rest@0.6.4` → `0.6.5`, `web-client@0.5.4` → `0.5.5`. Claims re-minted via `just reseal` (lock resolves `web-jwt@0.5.4`, `net-tls@0.6.4`); `drift trust check` green on all three.
+- Consumer-doc floor refresh: `README.md` and `docs/integration-guide.md` `0.33.91+` → `0.35.0+` (ABI 22 notes unchanged — still accurate).
+- Validation under the staged toolchain `drift-0.35.0+abi22`:
+  - `just test` — full suite green, run both pre- and post-reseal (unit/e2e 175/175 plain + ASAN + memcheck; `client-https-e2e` against `net-tls@0.6.4` both lanes; `consumer-check` 30/30 against freshly staged 0.5.4/0.6.5/0.5.5)
+  - `just stress` — all scenarios pass (REST concurrency, TLS contamination, pool-stale; + memcheck pass over the client scenarios)
+  - `just perf` — PASS: raw 1.00 (≤ 1.22), rest 0.68 (≤ 0.84), framework 1.69 (≤ 1.95); small framework drift vs the 0.33.91 parity numbers (1.61 → 1.69), well inside the gate
+- Side observation: standalone `just build <artifact>` fails dep resolution because the recipe passes no `--package-root` (gate paths do); pre-existing, not 0.35.0-specific.

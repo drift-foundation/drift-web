@@ -19,7 +19,7 @@ is independent and provides outbound HTTP/HTTPS via `net-tls`.
 
 ## Consumer prerequisites
 
-- Drift toolchain with `driftc` (driftc 0.33.91+ / runtime ABI 22 —
+- Drift toolchain with `driftc` (driftc 0.35.0+ / runtime ABI 22 —
   ABI 22 artifacts. ABI 22 changed the `String` representation, so
   ABI 21 objects and packages cannot be linked against these artifacts
   and must be rebuilt; compatibility applies only between pre-rule and

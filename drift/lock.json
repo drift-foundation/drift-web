@@ -4,10 +4,10 @@
     "web-client": {
       "resolved": {
         "net-tls": {
-          "version": "0.6.3",
-          "sha256": "c413c72d226eb94a0b668b7560457904d5883c4426cf5066a0c0e368d54609a5",
+          "version": "0.6.4",
+          "sha256": "310e83bd400c818a1bf9c3e641f6ecfee7fdc534e4409a22c87138c6a71c0624",
           "author_key": "ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0=",
-          "source_content_id": "sha256:a63196e098444adf4e823dff616c5f5cd9b9246a5efa18e96f3cad1cdc7b29f4",
+          "source_content_id": "sha256:77f86b3c309ee4da75b2761302cc4a19e8eb2417bfb0a4b143611f8fea6275cf",
           "source_attestation_key": "ed25519:6DSIXZVQiEPX1/4G95LcyZZRmuyqEeSTFiqQ4N+mjz0=",
           "dep_type": "direct"
         }
@@ -16,7 +16,7 @@
     "web-rest": {
       "resolved": {
         "web-jwt": {
-          "version": "0.5.3",
+          "version": "0.5.4",
           "sha256": "",
           "author_key": "",
           "source_content_id": "",
